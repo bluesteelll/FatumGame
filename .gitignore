@@ -1,0 +1,177 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# UNREAL ENGINE GITIGNORE - FatumGame
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ───────────────────────────────────────────────────────────────────────────────
+# BINARIES & BUILD OUTPUT
+# ───────────────────────────────────────────────────────────────────────────────
+
+# Binaries (built by engine)
+Binaries/
+**/Binaries/
+
+# Intermediate build files
+Intermediate/
+**/Intermediate/
+
+# Build output
+Build/
+!Build/*/
+Build/*/**
+!Build/*/PakBlacklist*.txt
+!Build/**/*.ico
+
+# ───────────────────────────────────────────────────────────────────────────────
+# SAVED DATA & CACHES
+# ───────────────────────────────────────────────────────────────────────────────
+
+# Editor saved data (autosaves, backups, logs, etc.)
+Saved/
+**/Saved/
+
+# Derived data cache
+DerivedDataCache/
+**/DerivedDataCache/
+
+# ───────────────────────────────────────────────────────────────────────────────
+# PROJECT FILES (auto-generated)
+# ───────────────────────────────────────────────────────────────────────────────
+
+# Visual Studio
+*.sln
+*.suo
+*.opensdf
+*.sdf
+*.VC.db
+*.VC.opendb
+.vs/
+
+# Visual Studio Code
+.vscode/
+
+# Xcode
+*.xcodeproj/
+*.xcworkspace/
+
+# JetBrains (Rider, CLion)
+.idea/
+*.user
+
+# Rider specific
+Plugins/Developer/RiderLink*/
+
+# ───────────────────────────────────────────────────────────────────────────────
+# COMPILED OBJECT FILES
+# ───────────────────────────────────────────────────────────────────────────────
+
+*.o
+*.obj
+*.slo
+*.lo
+*.pch
+*.gch
+
+# ───────────────────────────────────────────────────────────────────────────────
+# COMPILED LIBRARIES & EXECUTABLES
+# (these go to LFS if committed, but generally excluded)
+# ───────────────────────────────────────────────────────────────────────────────
+
+*.a
+*.lib
+*.so
+*.dylib
+*.dll
+*.exe
+*.app
+*.ipa
+*.lai
+*.la
+
+# ───────────────────────────────────────────────────────────────────────────────
+# UNREAL SPECIFIC
+# ───────────────────────────────────────────────────────────────────────────────
+
+# Built data for maps (regenerated)
+*_BuiltData.uasset
+
+# Shader compilation
+*.shaderbin
+
+# PDB files (debug symbols)
+*.pdb
+
+# ───────────────────────────────────────────────────────────────────────────────
+# SOURCE ART (keep originals elsewhere)
+# ───────────────────────────────────────────────────────────────────────────────
+
+SourceArt/**/*.png
+SourceArt/**/*.tga
+SourceArt/**/*.psd
+SourceArt/**/*.xcf
+
+# ───────────────────────────────────────────────────────────────────────────────
+# OPERATING SYSTEM
+# ───────────────────────────────────────────────────────────────────────────────
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Linux
+*~
+.directory
+
+# ───────────────────────────────────────────────────────────────────────────────
+# TEMPORARY & MISC
+# ───────────────────────────────────────────────────────────────────────────────
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.swp
+*~
+
+# Crash reports
+CrashReportClient/
+
+# Documentation build
+Documentation/html/
+Documentation/latex/
+
+# Package files
+*.zip
+*.rar
+*.7z
+*.tar.gz
+
+# ───────────────────────────────────────────────────────────────────────────────
+# PROJECT SPECIFIC EXCLUSIONS
+# ───────────────────────────────────────────────────────────────────────────────
+
+# Claude AI session files (not needed in repo)
+.claude/
+claude-memory*.txt
+*-claude*.txt
+
+# nul file (Windows artifact)
+nul
+
+# ───────────────────────────────────────────────────────────────────────────────
+# THIRD PARTY BINARIES (if checked in separately)
+# ───────────────────────────────────────────────────────────────────────────────
+
+# JoltPhysics build artifacts (if not using prebuilt)
+Plugins/Barrage/Source/JoltPhysics/Build/*
+!Plugins/Barrage/Source/JoltPhysics/Build/.gitignore

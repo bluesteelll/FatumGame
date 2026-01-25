@@ -1,0 +1,534 @@
+// Copyright 2025 Oversized Sun Inc. All Rights Reserved.
+
+#include "Systems/BarrageEntitySpawner.h"
+#include <atomic>
+#include "BarrageDispatch.h"
+#include "TransformDispatch.h"
+#include "FBarragePrimitive.h"
+#include "FBShapeParams.h"
+#include "Skeletonize.h"
+#include "ArtilleryBPLibs.h"
+#include "Systems/ArtilleryDispatch.h"
+#include "BasicTypes/BarrageEntityTags.h"
+#include "Components/StaticMeshComponent.h"
+#include "Components/InstancedStaticMeshComponent.h"
+#include "Engine/StaticMesh.h"
+#include "Materials/MaterialInterface.h"
+
+#include UE_INLINE_GENERATED_CPP_BY_NAME(BarrageEntitySpawner)
+
+namespace
+{
+	std::atomic<uint32> GEntityCounter{0};
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// UBarrageRenderManager
+// ═══════════════════════════════════════════════════════════════════════════
+
+UBarrageRenderManager* UBarrageRenderManager::Get(UWorld* World)
+{
+	return World ? World->GetSubsystem<UBarrageRenderManager>() : nullptr;
+}
+
+void UBarrageRenderManager::Initialize(FSubsystemCollectionBase& Collection)
+{
+	Super::Initialize(Collection);
+}
+
+void UBarrageRenderManager::Deinitialize()
+{
+	MeshGroups.Empty();
+	if (ManagerActor)
+	{
+		ManagerActor->Destroy();
+		ManagerActor = nullptr;
+	}
+	Super::Deinitialize();
+}
+
+TStatId UBarrageRenderManager::GetStatId() const
+{
+	RETURN_QUICK_DECLARE_CYCLE_STAT(UBarrageRenderManager, STATGROUP_Tickables);
+}
+
+UInstancedStaticMeshComponent* UBarrageRenderManager::GetOrCreateISM(UStaticMesh* InMesh, UMaterialInterface* InMaterial)
+{
+	if (!InMesh)
+	{
+		return nullptr;
+	}
+
+	// Check existing
+	FMeshGroup* Group = MeshGroups.Find(InMesh);
+	if (Group && Group->ISM)
+	{
+		return Group->ISM;
+	}
+
+	// Create manager actor if needed
+	if (!ManagerActor)
+	{
+		FActorSpawnParameters Params;
+		Params.Name = TEXT("BarrageRenderManager");
+		ManagerActor = GetWorld()->SpawnActor<AActor>(AActor::StaticClass(), FVector::ZeroVector, FRotator::ZeroRotator, Params);
+		ManagerActor->SetRootComponent(NewObject<USceneComponent>(ManagerActor, TEXT("Root")));
+		ManagerActor->GetRootComponent()->RegisterComponent();
+	}
+
+	// Create ISM
+	UInstancedStaticMeshComponent* ISM = NewObject<UInstancedStaticMeshComponent>(ManagerActor);
+	ISM->SetStaticMesh(InMesh);
+	ISM->SetMobility(EComponentMobility::Movable);
+	ISM->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	ISM->SetCastShadow(true);
+	ISM->SetupAttachment(ManagerActor->GetRootComponent());
+	ISM->RegisterComponent();
+
+	if (InMaterial)
+	{
+		ISM->SetMaterial(0, InMaterial);
+	}
+
+	// Store
+	FMeshGroup& NewGroup = MeshGroups.Add(InMesh);
+	NewGroup.ISM = ISM;
+
+	UE_LOG(LogTemp, Log, TEXT("UBarrageRenderManager: Created ISM for mesh %s"), *InMesh->GetName());
+
+	return ISM;
+}
+
+int32 UBarrageRenderManager::AddInstance(UStaticMesh* InMesh, UMaterialInterface* InMaterial, const FTransform& Transform, FSkeletonKey Key)
+{
+	UInstancedStaticMeshComponent* ISM = GetOrCreateISM(InMesh, InMaterial);
+	if (!ISM)
+	{
+		return INDEX_NONE;
+	}
+
+	FMeshGroup& Group = MeshGroups.FindChecked(InMesh);
+
+	// Add instance
+	int32 Index = ISM->AddInstance(Transform, true);
+
+	// Track
+	Group.KeyToIndex.Add(Key, Index);
+	if (Group.IndexToKey.Num() <= Index)
+	{
+		Group.IndexToKey.SetNum(Index + 1);
+	}
+	Group.IndexToKey[Index] = Key;
+
+	bHasEntities = true;
+
+	return Index;
+}
+
+void UBarrageRenderManager::RemoveInstance(FSkeletonKey Key)
+{
+	for (auto& Pair : MeshGroups)
+	{
+		FMeshGroup& Group = Pair.Value;
+
+		int32* IndexPtr = Group.KeyToIndex.Find(Key);
+		if (IndexPtr && *IndexPtr != INDEX_NONE)
+		{
+			int32 Index = *IndexPtr;
+
+			// Remove from ISM (this swaps with last!)
+			if (Group.ISM)
+			{
+				Group.ISM->RemoveInstance(Index);
+			}
+
+			// Update tracking for swapped instance
+			int32 LastIndex = Group.IndexToKey.Num() - 1;
+			if (Index != LastIndex && LastIndex >= 0)
+			{
+				FSkeletonKey SwappedKey = Group.IndexToKey[LastIndex];
+				Group.KeyToIndex[SwappedKey] = Index;
+				Group.IndexToKey[Index] = SwappedKey;
+			}
+
+			Group.KeyToIndex.Remove(Key);
+			Group.IndexToKey.SetNum(FMath::Max(0, Group.IndexToKey.Num() - 1));
+
+			break;
+		}
+	}
+
+	// Check if any entities left
+	bHasEntities = false;
+	for (auto& Pair : MeshGroups)
+	{
+		if (Pair.Value.KeyToIndex.Num() > 0)
+		{
+			bHasEntities = true;
+			break;
+		}
+	}
+}
+
+void UBarrageRenderManager::Tick(float DeltaTime)
+{
+	UpdateTransforms();
+}
+
+void UBarrageRenderManager::UpdateTransforms()
+{
+	UBarrageDispatch* Physics = UBarrageDispatch::SelfPtr;
+	if (!Physics)
+	{
+		return;
+	}
+
+	for (auto& Pair : MeshGroups)
+	{
+		FMeshGroup& Group = Pair.Value;
+		if (!Group.ISM || Group.KeyToIndex.Num() == 0)
+		{
+			continue;
+		}
+
+		bool bAnyUpdated = false;
+
+		for (auto& KeyIndex : Group.KeyToIndex)
+		{
+			FSkeletonKey Key = KeyIndex.Key;
+			int32 Index = KeyIndex.Value;
+
+			// Get position from Barrage
+			FBLet Body = Physics->GetShapeRef(Key);
+			if (FBarragePrimitive::IsNotNull(Body))
+			{
+				FVector3f Pos = FBarragePrimitive::GetPosition(Body);
+				FQuat4f Rot = FBarragePrimitive::OptimisticGetAbsoluteRotation(Body);
+
+				FTransform NewTransform;
+				NewTransform.SetLocation(FVector(Pos));
+				NewTransform.SetRotation(FQuat(Rot));
+
+				// Get current scale
+				FTransform CurrentTransform;
+				Group.ISM->GetInstanceTransform(Index, CurrentTransform, true);
+				NewTransform.SetScale3D(CurrentTransform.GetScale3D());
+
+				Group.ISM->UpdateInstanceTransform(Index, NewTransform, true, false, false);
+				bAnyUpdated = true;
+			}
+		}
+
+		if (bAnyUpdated)
+		{
+			Group.ISM->MarkRenderStateDirty();
+		}
+	}
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ABarrageEntitySpawner
+// ═══════════════════════════════════════════════════════════════════════════
+
+ABarrageEntitySpawner::ABarrageEntitySpawner()
+{
+	PrimaryActorTick.bCanEverTick = false;
+
+	RootComponent = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
+
+	PreviewMeshComponent = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("PreviewMesh"));
+	PreviewMeshComponent->SetupAttachment(RootComponent);
+	PreviewMeshComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	PreviewMeshComponent->SetCastShadow(false);
+
+#if WITH_EDITORONLY_DATA
+	PreviewMeshComponent->bIsEditorOnly = true;
+	PreviewMeshComponent->SetHiddenInGame(true);
+#endif
+
+	// Default cube
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> CubeMesh(TEXT("/Engine/BasicShapes/Cube"));
+	if (CubeMesh.Succeeded())
+	{
+		Mesh = CubeMesh.Object;
+	}
+}
+
+void ABarrageEntitySpawner::BeginPlay()
+{
+	Super::BeginPlay();
+
+	if (PreviewMeshComponent)
+	{
+		PreviewMeshComponent->SetVisibility(false);
+	}
+
+	EntityKey = DoSpawn();
+
+	if (bDestroyAfterSpawn && EntityKey.IsValid())
+	{
+		Destroy();
+	}
+}
+
+FSkeletonKey ABarrageEntitySpawner::DoSpawn()
+{
+	if (!Mesh)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("BarrageEntitySpawner [%s]: No mesh!"), *GetName());
+		return FSkeletonKey();
+	}
+
+	UWorld* World = GetWorld();
+	UBarrageDispatch* Physics = World->GetSubsystem<UBarrageDispatch>();
+	UBarrageRenderManager* Renderer = UBarrageRenderManager::Get(World);
+
+	if (!Physics)
+	{
+		UE_LOG(LogTemp, Error, TEXT("BarrageEntitySpawner: No UBarrageDispatch!"));
+		return FSkeletonKey();
+	}
+
+	// Generate key
+	const uint32 Id = ++GEntityCounter;
+	FSkeletonKey Key = FSkeletonKey(FORGE_SKELETON_KEY(Id, SKELLY::SFIX_BAR_PRIM));
+
+	// Calculate collider
+	FVector FinalColliderSize = ColliderSize;
+	if (bAutoCollider)
+	{
+		FBoxSphereBounds Bounds = Mesh->GetBounds();
+		FinalColliderSize = Bounds.BoxExtent * 2.0 * MeshScale;
+	}
+
+	// Create physics body
+	FVector Location = GetActorLocation();
+
+	FBBoxParams BoxParams = FBarrageBounder::GenerateBoxBounds(
+		Location,
+		FMath::Max(FinalColliderSize.X, 1.0),
+		FMath::Max(FinalColliderSize.Y, 1.0),
+		FMath::Max(FinalColliderSize.Z, 1.0),
+		FVector3d::ZeroVector,
+		FMassByCategory::MostEnemies
+	);
+
+	FBLet Body = Physics->CreatePrimitive(
+		BoxParams,
+		Key,
+		static_cast<uint16>(PhysicsLayer),
+		bIsSensor,
+		false,
+		bIsMovable
+	);
+
+	if (!FBarragePrimitive::IsNotNull(Body))
+	{
+		UE_LOG(LogTemp, Error, TEXT("BarrageEntitySpawner: Failed to create physics!"));
+		return FSkeletonKey();
+	}
+
+	// Configure physics
+	if (!InitialVelocity.IsNearlyZero())
+	{
+		FBarragePrimitive::SetVelocity(InitialVelocity, Body);
+	}
+	FBarragePrimitive::SetGravityFactor(GravityFactor, Body);
+
+	FQuat Rotation = GetActorQuat();
+	if (!Rotation.IsIdentity())
+	{
+		FBarragePrimitive::ApplyRotation(FQuat4d(Rotation), Body);
+	}
+
+	// Add render instance
+	if (Renderer)
+	{
+		FTransform RenderTransform = GetActorTransform();
+		RenderTransform.SetScale3D(MeshScale);
+		InstanceIndex = Renderer->AddInstance(Mesh, Material, RenderTransform, Key);
+	}
+
+	// Apply behavior tags
+	if (UArtilleryDispatch* Artillery = World->GetSubsystem<UArtilleryDispatch>())
+	{
+		// Must register tag container BEFORE adding tags
+		if (bDestructible || bDamagesPlayer || bReflective)
+		{
+			Artillery->GetOrRegisterConservedTags(Key);
+		}
+
+		if (bDestructible)
+		{
+			Artillery->AddTagToEntity(Key, TAG_Barrage_Destructible);
+			UE_LOG(LogTemp, Warning, TEXT("BarrageEntitySpawner: Added Destructible tag to Key=%llu"), static_cast<uint64>(Key));
+		}
+		if (bDamagesPlayer)
+		{
+			Artillery->AddTagToEntity(Key, TAG_Barrage_DamagesPlayer);
+		}
+		if (bReflective)
+		{
+			Artillery->AddTagToEntity(Key, TAG_Barrage_Reflective);
+		}
+	}
+	else
+	{
+		UE_LOG(LogTemp, Error, TEXT("BarrageEntitySpawner: No UArtilleryDispatch! Tags not applied!"));
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("BarrageEntitySpawner: Spawned %s Key=%llu at %s"), *GetName(), static_cast<uint64>(Key), *Location.ToString());
+
+	return Key;
+}
+
+FSkeletonKey ABarrageEntitySpawner::SpawnEntity(
+	UObject* WorldContextObject,
+	UStaticMesh* InMesh,
+	FTransform Transform,
+	FVector InMeshScale,
+	EPhysicsLayer InPhysicsLayer,
+	bool bInIsMovable,
+	FVector InVelocity,
+	float InGravity)
+{
+	if (!WorldContextObject || !InMesh)
+	{
+		return FSkeletonKey();
+	}
+
+	UWorld* World = WorldContextObject->GetWorld();
+	UBarrageDispatch* Physics = World->GetSubsystem<UBarrageDispatch>();
+	UBarrageRenderManager* Renderer = UBarrageRenderManager::Get(World);
+
+	if (!Physics)
+	{
+		return FSkeletonKey();
+	}
+
+	// Generate key
+	const uint32 Id = ++GEntityCounter;
+	FSkeletonKey Key = FSkeletonKey(FORGE_SKELETON_KEY(Id, SKELLY::SFIX_BAR_PRIM));
+
+	// Collider from mesh
+	FBoxSphereBounds Bounds = InMesh->GetBounds();
+	FVector ColliderSize = Bounds.BoxExtent * 2.0 * InMeshScale;
+
+	FVector Location = Transform.GetLocation();
+
+	FBBoxParams BoxParams = FBarrageBounder::GenerateBoxBounds(
+		Location,
+		FMath::Max(ColliderSize.X, 1.0),
+		FMath::Max(ColliderSize.Y, 1.0),
+		FMath::Max(ColliderSize.Z, 1.0),
+		FVector3d::ZeroVector,
+		FMassByCategory::MostEnemies
+	);
+
+	FBLet Body = Physics->CreatePrimitive(
+		BoxParams,
+		Key,
+		static_cast<uint16>(InPhysicsLayer),
+		false,
+		false,
+		bInIsMovable
+	);
+
+	if (!FBarragePrimitive::IsNotNull(Body))
+	{
+		return FSkeletonKey();
+	}
+
+	if (!InVelocity.IsNearlyZero())
+	{
+		FBarragePrimitive::SetVelocity(InVelocity, Body);
+	}
+	FBarragePrimitive::SetGravityFactor(InGravity, Body);
+
+	FQuat Rotation = Transform.GetRotation();
+	if (!Rotation.IsIdentity())
+	{
+		FBarragePrimitive::ApplyRotation(FQuat4d(Rotation), Body);
+	}
+
+	// Render
+	if (Renderer)
+	{
+		FTransform RenderTransform = Transform;
+		RenderTransform.SetScale3D(InMeshScale);
+		Renderer->AddInstance(InMesh, nullptr, RenderTransform, Key);
+	}
+
+	return Key;
+}
+
+void ABarrageEntitySpawner::DestroyEntity(FSkeletonKey InEntityKey)
+{
+	if (!InEntityKey.IsValid())
+	{
+		return;
+	}
+
+	// Remove from render manager
+	if (UBarrageDispatch::SelfPtr && UBarrageDispatch::SelfPtr->GetWorld())
+	{
+		if (UBarrageRenderManager* Renderer = UBarrageRenderManager::Get(UBarrageDispatch::SelfPtr->GetWorld()))
+		{
+			Renderer->RemoveInstance(InEntityKey);
+		}
+	}
+
+	// Get the physics primitive and destroy it
+	if (UBarrageDispatch::SelfPtr)
+	{
+		FBLet Prim = UBarrageDispatch::SelfPtr->GetShapeRef(InEntityKey);
+		if (FBarragePrimitive::IsNotNull(Prim))
+		{
+			// Wake up nearby sleeping bodies BEFORE destroying (per Jolt recommendation)
+			UBarrageDispatch::SelfPtr->ActivateBodiesAroundBody(Prim->KeyIntoBarrage, 0.1f);
+
+			// Destroy physics body
+			UBarrageDispatch::SelfPtr->SuggestTombstone(Prim);
+			UBarrageDispatch::SelfPtr->FinalizeReleasePrimitive(Prim->KeyIntoBarrage);
+		}
+	}
+}
+
+#if WITH_EDITOR
+
+void ABarrageEntitySpawner::OnConstruction(const FTransform& Transform)
+{
+	Super::OnConstruction(Transform);
+	UpdatePreview();
+}
+
+void ABarrageEntitySpawner::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
+{
+	Super::PostEditChangeProperty(PropertyChangedEvent);
+	UpdatePreview();
+}
+
+void ABarrageEntitySpawner::UpdatePreview()
+{
+	if (!PreviewMeshComponent)
+	{
+		return;
+	}
+
+	if (!bShowPreview || !Mesh)
+	{
+		PreviewMeshComponent->SetVisibility(false);
+		return;
+	}
+
+	PreviewMeshComponent->SetVisibility(true);
+	PreviewMeshComponent->SetStaticMesh(Mesh);
+	PreviewMeshComponent->SetRelativeScale3D(MeshScale);
+
+	if (Material)
+	{
+		PreviewMeshComponent->SetMaterial(0, Material);
+	}
+}
+
+#endif

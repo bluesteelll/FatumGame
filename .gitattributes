@@ -1,0 +1,127 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# GIT LFS CONFIGURATION - FatumGame
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ───────────────────────────────────────────────────────────────────────────────
+# UNREAL ENGINE ASSETS
+# ───────────────────────────────────────────────────────────────────────────────
+
+# UE Asset files (binary, can be large)
+*.uasset filter=lfs diff=lfs merge=lfs -text lockable
+*.umap filter=lfs diff=lfs merge=lfs -text lockable
+
+# UE Localization
+*.locres filter=lfs diff=lfs merge=lfs -text
+
+# ───────────────────────────────────────────────────────────────────────────────
+# 3D MODELS & MESHES
+# ───────────────────────────────────────────────────────────────────────────────
+
+*.fbx filter=lfs diff=lfs merge=lfs -text
+*.FBX filter=lfs diff=lfs merge=lfs -text
+*.obj filter=lfs diff=lfs merge=lfs -text
+*.OBJ filter=lfs diff=lfs merge=lfs -text
+*.3ds filter=lfs diff=lfs merge=lfs -text
+*.blend filter=lfs diff=lfs merge=lfs -text
+*.dae filter=lfs diff=lfs merge=lfs -text
+*.gltf filter=lfs diff=lfs merge=lfs -text
+*.glb filter=lfs diff=lfs merge=lfs -text
+
+# ───────────────────────────────────────────────────────────────────────────────
+# TEXTURES & IMAGES
+# ───────────────────────────────────────────────────────────────────────────────
+
+*.png filter=lfs diff=lfs merge=lfs -text
+*.PNG filter=lfs diff=lfs merge=lfs -text
+*.jpg filter=lfs diff=lfs merge=lfs -text
+*.jpeg filter=lfs diff=lfs merge=lfs -text
+*.tga filter=lfs diff=lfs merge=lfs -text
+*.TGA filter=lfs diff=lfs merge=lfs -text
+*.bmp filter=lfs diff=lfs merge=lfs -text
+*.tiff filter=lfs diff=lfs merge=lfs -text
+*.tif filter=lfs diff=lfs merge=lfs -text
+*.exr filter=lfs diff=lfs merge=lfs -text
+*.hdr filter=lfs diff=lfs merge=lfs -text
+*.dds filter=lfs diff=lfs merge=lfs -text
+*.psd filter=lfs diff=lfs merge=lfs -text
+*.xcf filter=lfs diff=lfs merge=lfs -text
+
+# ───────────────────────────────────────────────────────────────────────────────
+# AUDIO
+# ───────────────────────────────────────────────────────────────────────────────
+
+*.wav filter=lfs diff=lfs merge=lfs -text
+*.mp3 filter=lfs diff=lfs merge=lfs -text
+*.ogg filter=lfs diff=lfs merge=lfs -text
+*.flac filter=lfs diff=lfs merge=lfs -text
+*.aiff filter=lfs diff=lfs merge=lfs -text
+
+# ───────────────────────────────────────────────────────────────────────────────
+# VIDEO
+# ───────────────────────────────────────────────────────────────────────────────
+
+*.mp4 filter=lfs diff=lfs merge=lfs -text
+*.mov filter=lfs diff=lfs merge=lfs -text
+*.avi filter=lfs diff=lfs merge=lfs -text
+*.webm filter=lfs diff=lfs merge=lfs -text
+*.wmv filter=lfs diff=lfs merge=lfs -text
+
+# ───────────────────────────────────────────────────────────────────────────────
+# FONTS
+# ───────────────────────────────────────────────────────────────────────────────
+
+*.ttf filter=lfs diff=lfs merge=lfs -text
+*.otf filter=lfs diff=lfs merge=lfs -text
+*.woff filter=lfs diff=lfs merge=lfs -text
+*.woff2 filter=lfs diff=lfs merge=lfs -text
+
+# ───────────────────────────────────────────────────────────────────────────────
+# BINARIES & LIBRARIES (if committed)
+# ───────────────────────────────────────────────────────────────────────────────
+
+*.dll filter=lfs diff=lfs merge=lfs -text
+*.so filter=lfs diff=lfs merge=lfs -text
+*.dylib filter=lfs diff=lfs merge=lfs -text
+*.a filter=lfs diff=lfs merge=lfs -text
+*.lib filter=lfs diff=lfs merge=lfs -text
+*.exe filter=lfs diff=lfs merge=lfs -text
+
+# ───────────────────────────────────────────────────────────────────────────────
+# ARCHIVES
+# ───────────────────────────────────────────────────────────────────────────────
+
+*.zip filter=lfs diff=lfs merge=lfs -text
+*.rar filter=lfs diff=lfs merge=lfs -text
+*.7z filter=lfs diff=lfs merge=lfs -text
+*.pak filter=lfs diff=lfs merge=lfs -text
+
+# ───────────────────────────────────────────────────────────────────────────────
+# DOCUMENTS (optional large files)
+# ───────────────────────────────────────────────────────────────────────────────
+
+*.pdf filter=lfs diff=lfs merge=lfs -text
+
+# ───────────────────────────────────────────────────────────────────────────────
+# TEXT FILES - ensure LF line endings
+# ───────────────────────────────────────────────────────────────────────────────
+
+*.cs text eol=lf
+*.cpp text eol=lf
+*.h text eol=lf
+*.hpp text eol=lf
+*.c text eol=lf
+*.inl text eol=lf
+*.py text eol=lf
+*.sh text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.json text eol=lf
+*.xml text eol=lf
+*.ini text eol=lf
+*.cfg text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+
+# UE Config files
+*.uplugin text eol=lf
+*.uproject text eol=lf

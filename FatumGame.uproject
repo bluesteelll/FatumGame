@@ -1,0 +1,87 @@
+{
+	"FileVersion": 3,
+	"EngineAssociation": "5.7",
+	"Category": "",
+	"Description": "",
+	"Modules": [
+		{
+			"Name": "FatumGame",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	],
+	"Plugins": [
+		{
+			"Name": "Bridge",
+			"Enabled": false,
+			"SupportedTargetPlatforms": [
+				"Win64",
+				"Mac",
+				"Linux"
+			]
+		},
+		{
+			"Name": "ModelingToolsEditorMode",
+			"Enabled": true
+		},
+		{
+			"Name": "GameplayAbilities",
+			"Enabled": true
+		},
+		{
+			"Name": "Niagara",
+			"Enabled": true
+		},
+		{
+			"Name": "SkeletonKey",
+			"Enabled": true
+		},
+		{
+			"Name": "Cabling",
+			"Enabled": true
+		},
+		{
+			"Name": "Bristlecone",
+			"Enabled": true
+		},
+		{
+			"Name": "Barrage",
+			"Enabled": true
+		},
+		{
+			"Name": "BarrageTests",
+			"Enabled": true
+		},
+		{
+			"Name": "Locomo",
+			"Enabled": true
+		},
+		{
+			"Name": "Artillery",
+			"Enabled": true
+		},
+		{
+			"Name": "NiagaraUIRenderer",
+			"Enabled": true
+		},
+		{
+			"Name": "Thistle",
+			"Enabled": true
+		},
+		{
+			"Name": "Sunflower",
+			"Enabled": true
+		},
+		{
+			"Name": "CMakeTarget",
+			"Enabled": true
+		}
+	],
+	"TargetPlatforms": [
+		"Mac",
+		"Windows",
+		"Linux",
+		"LinuxArm64",
+		"HoloLens"
+	]
+}
