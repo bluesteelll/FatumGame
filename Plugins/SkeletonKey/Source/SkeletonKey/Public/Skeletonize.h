@@ -30,7 +30,8 @@ namespace SKELLY
 	//mass interop key. used internally at the moment
 	constexpr static uint64_t	SFIX_MASSIDP =  0xA000000000000000;
 	constexpr static uint64_t	SFIX_STELLAR =  0xB000000000000000;
-	constexpr static uint64_t	SFIX_UNUSEDC =  0xC000000000000000;
+	// Item keys - for world items, inventory items, loot drops, etc.
+	constexpr static uint64_t	SFIX_ITEM    =  0xC000000000000000;
 	constexpr static uint64_t	SFIX_UNUSEDD =  0xD000000000000000;
 	constexpr static uint64_t	SFIX_UNUSEDE =  0xE000000000000000;
 	constexpr static uint64_t	SFIX_SK_LORD =  0xF000000000000000;
@@ -40,6 +41,7 @@ namespace SKELLY
 	static inline uint64_t FORGE_SKELETON_KEY(uint64_t MY_HASH,uint64_t MY_MASK) {return (MY_HASH & SKELLY::SFIX_MASK_OUT) | MY_MASK;};
 	constexpr uint64_t BoneKey_Infix = SKELLY::SFIX_BONEKEY;
 	constexpr uint64_t GunInstance_Infix = SKELLY::SFIX_ART_1GUN;
+	constexpr uint64_t ItemKey_Infix = SKELLY::SFIX_ITEM;
 
 static inline uint64_t FORGE_DEPENDENT_SKELETON_KEY(uint64_t parent, uint32_t localunique,
                                                     uint64_t MY_MASK = SKELLY::SFIX_ART_FACT) //by default dependent keys are facts.

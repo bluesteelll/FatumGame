@@ -372,6 +372,90 @@ inline FSkeletonKey& FSkeletonKey::operator=(const FConstellationKey& rhs)
 	return *this;
 }
 
+// Item keys - for world items, inventory items, loot drops, etc.
+// Items are identified by this key type for O(1) type checking in collision dispatch
+// and item management systems.
+USTRUCT(BlueprintType)
+struct SKELETONKEY_API FItemKey
+{
+	GENERATED_BODY()
+public:
+	uint64_t Obj;
+
+	explicit FItemKey()
+	{
+		Obj = 0;
+	}
+
+	explicit FItemKey(uint64 ObjIn)
+	{
+		Obj = FORGE_SKELETON_KEY(ObjIn, ItemKey_Infix);
+	}
+
+	// Create from raw hash value (e.g., from counter or random)
+	explicit FItemKey(uint32 HashValue)
+	{
+		Obj = HashValue;
+		Obj <<= 32;
+		Obj |= HashValue;
+		Obj = FORGE_SKELETON_KEY(Obj, ItemKey_Infix);
+	}
+
+	static FItemKey Invalid()
+	{
+		return FItemKey();
+	}
+
+	bool IsValid() const
+	{
+		return Obj != 0 && IS_OF_SK_TYPE(Obj, ItemKey_Infix);
+	}
+
+	FSkeletonKey AsSkeletonKey() const
+	{
+		return FSkeletonKey(Obj);
+	}
+
+	operator uint64() const { return Obj; }
+	operator FSkeletonKey() const { return FSkeletonKey(Obj); }
+
+	friend uint32 GetTypeHash(const FItemKey& Other)
+	{
+		return FMMM::FastHash6432(Other.Obj);
+	}
+
+	FItemKey& operator=(const FItemKey& rhs)
+	{
+		if (this != &rhs)
+		{
+			Obj = FORGE_SKELETON_KEY(rhs.Obj, ItemKey_Infix);
+		}
+		return *this;
+	}
+
+	FItemKey& operator=(const uint64 rhs)
+	{
+		Obj = FORGE_SKELETON_KEY(rhs, ItemKey_Infix);
+		return *this;
+	}
+
+	// Cannot convert from ActorKey - items are a separate type
+	FItemKey& operator=(const ActorKey& rhs) = delete;
+
+	bool operator==(const FItemKey& Other) const { return Obj == Other.Obj; }
+	bool operator!=(const FItemKey& Other) const { return Obj != Other.Obj; }
+	bool operator<(const FItemKey& Other) const { return Obj < Other.Obj; }
+};
+
+template<>
+struct std::hash<FItemKey>
+{
+	std::size_t operator()(const FItemKey& other) const noexcept
+	{
+		return FMMM::FastHash64(other.Obj);
+	}
+};
+
 using TransformUpdatesForGameThread = TCircularQueue<TransformUpdate>;
 
 typedef TArray<ActorKey> ActorKeyArray;

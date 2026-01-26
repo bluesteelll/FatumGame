@@ -24,7 +24,8 @@ enum class EEntityType : uint8
 	Bone = 10,          // SFIX_BONEKEY (0x9)
 	MassEntity = 11,    // SFIX_MASSIDP (0xA)
 	Constellation = 12, // SFIX_STELLAR (0xB)
-	Lord = 13,          // SFIX_SK_LORD (0xF)
+	Item = 13,          // SFIX_ITEM (0xC) - world items, inventory, loot
+	Lord = 14,          // SFIX_SK_LORD (0xF)
 
 	NUM_TYPES
 };
@@ -46,7 +47,7 @@ namespace EntityTypeUtils
 		EEntityType::Bone,            // 0x9 - SFIX_BONEKEY
 		EEntityType::MassEntity,      // 0xA - SFIX_MASSIDP
 		EEntityType::Constellation,   // 0xB - SFIX_STELLAR
-		EEntityType::Unknown,         // 0xC - unused
+		EEntityType::Item,            // 0xC - SFIX_ITEM (world items, loot)
 		EEntityType::Unknown,         // 0xD - unused
 		EEntityType::Unknown,         // 0xE - unused
 		EEntityType::Component,       // 0xF - SFIX_ACT_COMP / SFIX_SK_LORD
@@ -71,4 +72,5 @@ namespace EntityTypeUtils
 	FORCEINLINE bool IsActor(uint64 Key) { return IsOfType(Key, EEntityType::Actor); }
 	FORCEINLINE bool IsPlayer(uint64 Key) { return IsOfType(Key, EEntityType::Player); }
 	FORCEINLINE bool IsGunInstance(uint64 Key) { return IsOfType(Key, EEntityType::GunInstance); }
+	FORCEINLINE bool IsItem(uint64 Key) { return IsOfType(Key, EEntityType::Item); }
 }

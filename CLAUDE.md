@@ -41,11 +41,13 @@ FatumGame/
 │   │   └── BarrageCollisionProcessors.*  # Collision system
 │   ├── FatumGame.Target.cs          # Game build target
 │   └── FatumGameEditor.Target.cs    # Editor build target
-├── Plugins/                         # Project plugins (13 total)
+├── Plugins/                         # Project plugins (14 total)
 │   ├── Artillery/                   # Weapons & abilities system
 │   ├── Barrage/                     # Jolt Physics integration
+│   ├── BarrageCollision/            # Collision dispatch system
 │   ├── Bristlecone/                 # Network protocol
 │   ├── Cabling/                     # Input/controls system
+│   ├── Enace/                       # Item management system (Entity Ace)
 │   ├── SkeletonKey/                 # Entity identity system
 │   ├── LocomoCore/                  # Locomotion math library
 │   ├── Phosphorus/                  # Event dispatch framework
@@ -91,6 +93,7 @@ FatumGame (Main Module)
 └── Phosphorus
 
 Optional:
+├── Enace (Gameplay Data) -> SkeletonKey, Barrage, ArtilleryRuntime
 ├── Thistle (AI) -> Artillery, MassGameplay, StateTree, SmartObjects
 ├── Sunflower (UI) -> SkeletonKey, Artillery, Thistle, MassAI
 └── MassCommunitySample -> MassGameplay, MassAI, MassCrowd
@@ -132,14 +135,53 @@ Optional:
 **Purpose:** 64-bit universal keys for all entities.
 
 **Features:**
-- Embeds entity type in nibble
-- Embeds parent reference in metadata bits
+- Embeds entity type in 4-bit nibble (bits 60-63)
+- 28 bits for metadata (bits 28-59)
+- 32 bits for hash (bits 0-27)
 - Cross-machine deterministic
-- Hash function optimization
+- O(1) type checking
+
+**Key Structure:**
+```
+[TTTT][MMMM MMMM MMMM MMMM MMMM MMMM MMMM][HHHH HHHH HHHH HHHH HHHH HHHH HHHH HHHH]
+ Type         Metadata (28 bits)                    Hash (32 bits)
+```
+
+**Type Nibbles (SFIX values):**
+| Nibble | Type | Description |
+|--------|------|-------------|
+| 0x0 | NONE | Invalid/unset |
+| 0x1 | ART_GUNS | Gun archetypes |
+| 0x2 | ART_1GUN | Gun instances |
+| 0x3 | GUN_SHOT | Projectiles |
+| 0x4 | BAR_PRIM | Barrage primitives |
+| 0x5 | ART_ACTS | Actors |
+| 0x6 | ART_FCMS | FCMs |
+| 0x7 | ART_FACT | Facts |
+| 0x8 | PLAYERID | Players |
+| 0x9 | BONEKEY | Bone keys |
+| 0xA | MASSIDP | Mass entities |
+| 0xB | STELLAR | Constellations |
+| 0xC | ITEM | Items (Enace) |
+| 0xD | (unused) | Reserved |
+| 0xE | (unused) | Reserved |
+| 0xF | SK_LORD | Lords/Components |
+
+**Key Types:**
+- `FSkeletonKey` - Base universal key
+- `ActorKey` - For actors (SFIX_ART_ACTS)
+- `FBoneKey` - For bone components (SFIX_BONEKEY)
+- `FItemKey` - For items (SFIX_ITEM)
+- `FGunInstanceKey` - For gun instances (SFIX_ART_1GUN)
+- `FProjectileInstanceKey` - For projectiles (SFIX_GUN_SHOT)
 
 ```cpp
 FSkeletonKey MyKey = KeyCarry->GetMyKey();
 bool valid = MyKey.IsValid();
+
+// O(1) type checking
+if (EntityTypeUtils::IsItem(Key)) { ... }
+if (EntityTypeUtils::IsProjectile(Key)) { ... }
 ```
 
 ### 4. Bristlecone (Networking)
@@ -149,6 +191,63 @@ bool valid = MyKey.IsValid();
 ### 5. Phosphorus (Event Dispatch)
 
 **Purpose:** Matrix-based event dispatch with tag hierarchy support.
+
+### 6. Enace (Gameplay Data Dispatch)
+
+**Purpose:** Thread-safe storage for structured gameplay data (items, health, damage, loot) indexed by SkeletonKey. Uses libcuckoo maps like TransformDispatch/BarrageDispatch.
+
+**Location:** `Plugins/Enace/`
+
+**Architecture:**
+```
+SkeletonKey → BarrageDispatch   (physics bodies)
+SkeletonKey → TransformDispatch (transforms)
+SkeletonKey → ArtilleryDispatch (tags, abilities)
+SkeletonKey → EnaceDispatch     (gameplay data)
+```
+
+**Key Classes:**
+- `UEnaceDispatch` - World subsystem for gameplay data (libcuckoo maps)
+- `UEnaceItemDefinition` - Data asset defining item types
+- `FEnaceItemData`, `FEnaceHealthData`, `FEnaceDamageData` - Data structs
+- `FItemKey` - SkeletonKey type for items (SFIX_ITEM = 0xC)
+
+**Thread Safety:** Uses libcuckoo concurrent hash maps. Safe to read/write from Artillery thread without locks.
+
+**Data Types:**
+```cpp
+FEnaceItemData   { Definition*, Count, DespawnTimer }
+FEnaceHealthData { CurrentHP, MaxHP, Armor }
+FEnaceDamageData { Damage, DamageType, bAreaDamage, AreaRadius }
+FEnaceLootData   { LootTable*, MinDrops, MaxDrops }
+```
+
+**Usage:**
+```cpp
+UEnaceDispatch* Enace = UEnaceDispatch::SelfPtr;
+
+// Spawn item (creates Barrage physics + registers data)
+FSkeletonKey Key = Enace->SpawnWorldItem(StoneDefinition, Location, 5);
+
+// Query in collision handler
+FEnaceItemData ItemData;
+if (Enace->TryGetItemData(Key, ItemData))
+{
+    // Pickup item
+    Inventory->Add(ItemData.Definition, ItemData.Count);
+    Enace->DestroyItem(Key);
+}
+
+// Health system
+Enace->RegisterHealth(EnemyKey, 100.f);
+bool bKilled = Enace->ApplyDamage(EnemyKey, 25.f);
+if (bKilled)
+{
+    Enace->SpawnLoot(EnemyKey, Location);
+}
+```
+
+**See Also:** `.claude/ENACE_IMPLEMENTATION_PLAN.md` for full implementation details.
 
 ---
 
@@ -337,6 +436,31 @@ p.Chaos.EnableAsyncInitBody=1
 
 ---
 
+## UE 5.7 API Notes
+
+### Mass ECS (Deprecated in 5.5+)
+MassEntity plugin is deprecated but still functional. Key API changes:
+
+```cpp
+// OLD (pre-5.5):
+virtual void ConfigureQueries() override;
+Query.ForEachEntityChunk(EntityManager, Context, [](FMassExecutionContext& Context) {...});
+
+// NEW (5.5+):
+virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
+Query.ForEachEntityChunk(Context, [](FMassExecutionContext& Context) {...});
+```
+
+### Barrage Types
+- `FBarrageKey` - Not a USTRUCT, cannot use with UPROPERTY
+- `FBLet` = `TSharedPtr<FBarragePrimitive>` - Physics body handle
+- Include `FBarragePrimitive.h` for FBLet, `FBarrageKey.h` for FBarrageKey
+
+### Physics Layers (EPhysicsLayer)
+Available values: `NON_MOVING`, `MOVING`, `HITBOX`, `PROJECTILE`, `ENEMYPROJECTILE`, `ENEMYHITBOX`, `ENEMY`, `CAST_QUERY`, `DEBRIS`
+
+---
+
 ## Build Requirements
 
 ### Visual Studio 2022
@@ -418,6 +542,54 @@ Processors->RegisterTagHandler(
 1. Inherit from `UArtilleryPerActorAbilityMinimum`
 2. Assign to `FArtilleryGun` phases (prefire/fire/postfire/cosmetic)
 3. Executes on Artillery thread (~120Hz)
+
+### Item Pickup in Collision Handler
+
+```cpp
+void HandleCollision(const FBarrageCollisionPayload& Payload)
+{
+    UEnaceDispatch* Enace = UEnaceDispatch::SelfPtr;
+    FSkeletonKey ItemKey = Payload.GetKeyA();
+    FSkeletonKey PlayerKey = Payload.GetKeyB();
+
+    // Check if this is an item (tag check is O(1))
+    FEnaceItemData ItemData;
+    if (Enace->TryGetItemData(ItemKey, ItemData))
+    {
+        // Get item definition
+        UEnaceItemDefinition* Def = ItemData.Definition;
+
+        if (Def->ItemId == "HealthPotion")
+        {
+            // Apply healing
+            Enace->Heal(PlayerKey, 50.f);
+        }
+        else
+        {
+            // Add to inventory
+            PlayerInventory->AddItem(Def, ItemData.Count);
+        }
+
+        // Destroy item (removes physics, render, and data)
+        Enace->DestroyItem(ItemKey);
+    }
+
+    // Damage handling
+    FEnaceDamageData DamageData;
+    FEnaceHealthData HealthData;
+    if (Enace->TryGetDamageData(Payload.GetKeyA(), DamageData) &&
+        Enace->TryGetHealthData(Payload.GetKeyB(), HealthData))
+    {
+        bool bKilled = Enace->ApplyDamage(Payload.GetKeyB(), DamageData.Damage);
+        if (bKilled)
+        {
+            // Spawn loot from killed entity
+            FVector Location = /* get from TransformDispatch */;
+            Enace->SpawnLoot(Payload.GetKeyB(), Location);
+        }
+    }
+}
+```
 
 ---
 
