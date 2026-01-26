@@ -1,6 +1,7 @@
 #include "BarrageDispatch.h"
 
 #include "BarrageContactEvent.h"
+#include "BarrageConstraintSystem.h"
 #include "IsolatedJoltIncludes.h"
 #include "FWorldSimOwner.h"
 #include "CoordinateUtils.h"
@@ -397,6 +398,115 @@ void UBarrageDispatch::ActivateBodiesAroundBody(FBarrageKey BodyKey, float Expan
 	{
 		JoltGameSim->ActivateBodiesAroundBody(BodyKey, ExpansionMeters);
 	}
+}
+
+// ============================================================
+// Constraint API Implementation
+// ============================================================
+
+FBarrageConstraintSystem* UBarrageDispatch::GetConstraintSystem()
+{
+	if (JoltGameSim && JoltGameSim->ConstraintSystem)
+	{
+		return JoltGameSim->ConstraintSystem.Get();
+	}
+	return nullptr;
+}
+
+const FBarrageConstraintSystem* UBarrageDispatch::GetConstraintSystem() const
+{
+	if (JoltGameSim && JoltGameSim->ConstraintSystem)
+	{
+		return JoltGameSim->ConstraintSystem.Get();
+	}
+	return nullptr;
+}
+
+FBarrageConstraintKey UBarrageDispatch::CreateFixedConstraint(FBarrageKey Body1, FBarrageKey Body2,
+															   float BreakForce, float BreakTorque)
+{
+	FBarrageConstraintSystem* System = GetConstraintSystem();
+	if (!System)
+	{
+		return FBarrageConstraintKey();
+	}
+
+	FBFixedConstraintParams Params;
+	Params.Body1 = Body1;
+	Params.Body2 = Body2;
+	Params.Space = EBConstraintSpace::WorldSpace;
+	Params.bAutoDetectAnchor = true; // Auto-detect from current positions
+	Params.BreakForce = BreakForce;
+	Params.BreakTorque = BreakTorque;
+
+	return System->CreateFixed(Params);
+}
+
+FBarrageConstraintKey UBarrageDispatch::CreateHingeConstraint(FBarrageKey Body1, FBarrageKey Body2,
+															   FVector WorldAnchor, FVector HingeAxis,
+															   float BreakForce)
+{
+	FBarrageConstraintSystem* System = GetConstraintSystem();
+	if (!System)
+	{
+		return FBarrageConstraintKey();
+	}
+
+	FBHingeConstraintParams Params;
+	Params.Body1 = Body1;
+	Params.Body2 = Body2;
+	Params.Space = EBConstraintSpace::WorldSpace;
+	Params.bAutoDetectAnchor = false;
+	Params.AnchorPoint1 = WorldAnchor;
+	Params.AnchorPoint2 = WorldAnchor;
+	Params.HingeAxis = HingeAxis;
+	Params.BreakForce = BreakForce;
+
+	return System->CreateHinge(Params);
+}
+
+FBarrageConstraintKey UBarrageDispatch::CreateDistanceConstraint(FBarrageKey Body1, FBarrageKey Body2,
+																  float MinDistance, float MaxDistance,
+																  float BreakForce)
+{
+	FBarrageConstraintSystem* System = GetConstraintSystem();
+	if (!System)
+	{
+		return FBarrageConstraintKey();
+	}
+
+	FBDistanceConstraintParams Params;
+	Params.Body1 = Body1;
+	Params.Body2 = Body2;
+	Params.Space = EBConstraintSpace::WorldSpace;
+	Params.bAutoDetectAnchor = true;
+	Params.MinDistance = MinDistance;
+	Params.MaxDistance = MaxDistance;
+	Params.BreakForce = BreakForce;
+
+	return System->CreateDistance(Params);
+}
+
+bool UBarrageDispatch::RemoveConstraint(FBarrageConstraintKey Key)
+{
+	FBarrageConstraintSystem* System = GetConstraintSystem();
+	if (!System)
+	{
+		return false;
+	}
+
+	return System->Remove(Key);
+}
+
+int32 UBarrageDispatch::ProcessBreakableConstraints()
+{
+	FBarrageConstraintSystem* System = GetConstraintSystem();
+	if (!System)
+	{
+		return 0;
+	}
+
+	return System->ProcessBreakableConstraints();
 }
 
 TStatId UBarrageDispatch::GetStatId() const

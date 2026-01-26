@@ -7,6 +7,7 @@
 #include "BarrageContactEvent.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "FBarrageKey.h"
+#include "FBConstraintParams.h"
 #include "Chaos/Particles.h"
 #include "CapsuleTypes.h"
 #include "FBarragePrimitive.h"
@@ -121,6 +122,73 @@ public:
 	// Wake up all bodies touching/near a specific body using its actual bounding box (PREFERRED)
 	// This is the PROPER way per Jolt documentation - more efficient than arbitrary area
 	void ActivateBodiesAroundBody(FBarrageKey BodyKey, float ExpansionMeters = 0.1f);
+
+	// ============================================================
+	// Constraint API - Create breakable connections between bodies
+	// ============================================================
+
+	/**
+	 * Get the constraint system for advanced constraint management.
+	 * @return Pointer to constraint system, or nullptr if not initialized
+	 */
+	class FBarrageConstraintSystem* GetConstraintSystem();
+	const class FBarrageConstraintSystem* GetConstraintSystem() const;
+
+	/**
+	 * Create a fixed (welded) constraint between two bodies.
+	 * Bodies will move as if welded together until the constraint breaks.
+	 *
+	 * @param Body1 First body key
+	 * @param Body2 Second body key (or invalid for world constraint)
+	 * @param BreakForce Force in Newtons that will break the constraint (0 = unbreakable)
+	 * @param BreakTorque Torque in Nm that will break the constraint (0 = unbreakable)
+	 * @return Constraint key for later management
+	 */
+	FBarrageConstraintKey CreateFixedConstraint(FBarrageKey Body1, FBarrageKey Body2,
+												 float BreakForce = 0.0f, float BreakTorque = 0.0f);
+
+	/**
+	 * Create a hinge constraint between two bodies.
+	 * Bodies can rotate around the specified axis.
+	 *
+	 * @param Body1 First body key
+	 * @param Body2 Second body key
+	 * @param WorldAnchor World position of the hinge point
+	 * @param HingeAxis Axis of rotation (world space)
+	 * @param BreakForce Force in Newtons that will break the constraint
+	 * @return Constraint key
+	 */
+	FBarrageConstraintKey CreateHingeConstraint(FBarrageKey Body1, FBarrageKey Body2,
+												 FVector WorldAnchor, FVector HingeAxis,
+												 float BreakForce = 0.0f);
+
+	/**
+	 * Create a distance constraint (rope/spring) between two bodies.
+	 *
+	 * @param Body1 First body key
+	 * @param Body2 Second body key
+	 * @param MinDistance Minimum distance (0 = no minimum)
+	 * @param MaxDistance Maximum distance (0 = auto-detect from current positions)
+	 * @param BreakForce Force that will break the rope
+	 * @return Constraint key
+	 */
+	FBarrageConstraintKey CreateDistanceConstraint(FBarrageKey Body1, FBarrageKey Body2,
+													float MinDistance = 0.0f, float MaxDistance = 0.0f,
+													float BreakForce = 0.0f);
+
+	/**
+	 * Remove a constraint.
+	 * @param Key The constraint to remove
+	 * @return True if found and removed
+	 */
+	bool RemoveConstraint(FBarrageConstraintKey Key);
+
+	/**
+	 * Process breakable constraints and break any that exceed their thresholds.
+	 * Call this once per physics tick if using breakable constraints.
+	 * @return Number of constraints that broke
+	 */
+	int32 ProcessBreakableConstraints();
 
 	//any non-zero value is the same, effectively, as a nullity for the purposes of any new operation.
 	//because we can't control certain aspects of timing and because we may need to roll back, we use tombstoning

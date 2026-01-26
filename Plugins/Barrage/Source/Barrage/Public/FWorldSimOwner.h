@@ -15,6 +15,7 @@
 //#include "Experimental/CollisionGroupUnaware_FleshBroadPhase.h"
 #include "BarrageContactListener.h"
 #include "IsolatedJoltIncludes.h"
+#include "BarrageConstraintSystem.h"
 
 // All Jolt symbols are in the JPH namespace
 
@@ -300,6 +301,16 @@ public:
 	//do not move this up. see C++ standard ~ 12.6.2
 	TSharedPtr<JPH::PhysicsSystem> physics_system;
 
+	// Constraint system for creating and managing physics constraints between bodies
+	TUniquePtr<FBarrageConstraintSystem> ConstraintSystem;
+
+	/**
+	 * Get the constraint system for creating breakable connections between bodies.
+	 * @return Reference to the constraint system
+	 */
+	FBarrageConstraintSystem& GetConstraints() { return *ConstraintSystem; }
+	const FBarrageConstraintSystem& GetConstraints() const { return *ConstraintSystem; }
+
 	FWorldSimOwner(float cDeltaTime, InitExitFunction JobThreadInitializer);
 	void SphereCast(
 		double Radius,
@@ -362,8 +373,19 @@ public:
 	//Generally, as we add and remove objects, we'll want to perform this, but we really don't want to run it every tick. We can either use trigger logic or a cadenced ticklite
 	bool OptimizeBroadPhase();
 
+	/**
+	 * Release a physics primitive and clean up all associated constraints.
+	 * Any constraints connected to this body will be automatically removed.
+	 */
 	void FinalizeReleasePrimitive(FBarrageKey BarrageKey)
 	{
+		// IMPORTANT: Remove all constraints connected to this body FIRST
+		// Otherwise Jolt will try to solve constraints for a deleted body
+		if (ConstraintSystem)
+		{
+			ConstraintSystem->RemoveAllForBody(BarrageKey);
+		}
+
 		//TODO return owned Joltstuff to pool or dealloc
 		JPH::BodyID result;
 		//as we add character handling, it'll be extremely difficult to do it here.

@@ -61,6 +61,8 @@ FWorldSimOwner::FWorldSimOwner(float cDeltaTime, InitExitFunction JobThreadIniti
 	// variant of this. We're going to use the locking version.
 	body_interface = &physics_system->GetBodyInterface();
 
+	// Initialize constraint system for managing physics constraints between bodies
+	ConstraintSystem = MakeUnique<FBarrageConstraintSystem>(this);
 
 	// Optional step: Before starting the physics simulation you can optimize the broad phase. This improves collision detection performance (it's pointless here because we only have 2 bodies).
 	// You should definitely not call this every frame or when e.g. streaming in a new level section as it is an expensive operation.
@@ -645,7 +647,14 @@ FWorldSimOwner::~FWorldSimOwner()
 	Factory::sInstance = nullptr;
 
 	//this is the canonical order.
-	//grab our hold open.		
+	// Clear constraints first, before physics system is destroyed
+	if (ConstraintSystem)
+	{
+		ConstraintSystem->Clear();
+		ConstraintSystem.Reset();
+	}
+
+	//grab our hold open.
 	TSharedPtr<JPH::PhysicsSystem> HoldOpen = physics_system;
 	physics_system.Reset(); //cast it into the fire.
 	CharacterToJoltMapping->Reset();//free characters so they don't double free inner shapes.

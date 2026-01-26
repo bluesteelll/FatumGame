@@ -76,6 +76,23 @@ public:
 	{
 		return FVector3f(In[0], In[2], In[1]); // this looks _wrong_.
 	}
+
+	// Convert a unit vector (direction) from UE to Jolt - no scale, just axis swap
+	static JPH::Vec3 ToJoltUnitVector(FVector3d In)
+	{
+		return JPH::Vec3(In.X, In.Z, In.Y); // Same axis swap as coordinates but no scale
+	}
+
+	static JPH::Vec3 ToJoltUnitVector(FVector3f In)
+	{
+		return JPH::Vec3(In.X, In.Z, In.Y);
+	}
+
+	// Convert from Jolt coordinates to UE double precision
+	static FVector3d FromJoltCoordinatesD(JPH::Vec3 In)
+	{
+		return FVector3d(In[0] * 100.0, In[2] * 100.0, In[1] * 100.0);
+	}
 	
 	static JPH::Quat ToJoltRotation(FQuat4d In)
 	{

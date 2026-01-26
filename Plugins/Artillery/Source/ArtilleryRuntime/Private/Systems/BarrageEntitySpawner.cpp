@@ -23,6 +23,161 @@ namespace
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// FBarrageSpawnUtils - Shared spawn logic
+// ═══════════════════════════════════════════════════════════════════════════
+
+FVector FBarrageSpawnUtils::CalculateColliderSize(UStaticMesh* Mesh, FVector Scale)
+{
+	if (!Mesh)
+	{
+		return FVector(100, 100, 100);
+	}
+
+	FBoxSphereBounds Bounds = Mesh->GetBounds();
+	// BoxExtent is half-size, multiply by 2 for full size, then apply scale
+	return Bounds.BoxExtent * 2.0 * Scale;
+}
+
+FVector FBarrageSpawnUtils::GetMeshPivotOffset(UStaticMesh* Mesh)
+{
+	if (!Mesh)
+	{
+		return FVector::ZeroVector;
+	}
+
+	// GetBounds().Origin = center of mesh geometry relative to mesh pivot
+	// This is the offset we need to account for when syncing physics (centered) with rendering (pivot-based)
+	return Mesh->GetBounds().Origin;
+}
+
+void FBarrageSpawnUtils::ApplyBehaviorTags(UArtilleryDispatch* Artillery, FSkeletonKey Key,
+										   bool bDestructible, bool bDamagesPlayer, bool bReflective)
+{
+	if (!Artillery || !Key.IsValid())
+	{
+		return;
+	}
+
+	// Must register tag container BEFORE adding tags
+	if (bDestructible || bDamagesPlayer || bReflective)
+	{
+		Artillery->GetOrRegisterConservedTags(Key);
+	}
+
+	if (bDestructible)
+	{
+		Artillery->AddTagToEntity(Key, TAG_Barrage_Destructible);
+	}
+	if (bDamagesPlayer)
+	{
+		Artillery->AddTagToEntity(Key, TAG_Barrage_DamagesPlayer);
+	}
+	if (bReflective)
+	{
+		Artillery->AddTagToEntity(Key, TAG_Barrage_Reflective);
+	}
+}
+
+FBarrageSpawnResult FBarrageSpawnUtils::SpawnEntity(UWorld* World, const FBarrageSpawnParams& Params)
+{
+	FBarrageSpawnResult Result;
+	Result.EntityKey = Params.EntityKey;
+
+	if (!World || !Params.Mesh || !Params.EntityKey.IsValid())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("FBarrageSpawnUtils::SpawnEntity - Invalid parameters"));
+		return Result;
+	}
+
+	UBarrageDispatch* Physics = World->GetSubsystem<UBarrageDispatch>();
+	UBarrageRenderManager* Renderer = UBarrageRenderManager::Get(World);
+	UArtilleryDispatch* Artillery = World->GetSubsystem<UArtilleryDispatch>();
+
+	if (!Physics)
+	{
+		UE_LOG(LogTemp, Error, TEXT("FBarrageSpawnUtils::SpawnEntity - No UBarrageDispatch!"));
+		return Result;
+	}
+
+	// Calculate collider size
+	FVector ColliderSize = Params.bAutoCollider
+		? CalculateColliderSize(Params.Mesh, Params.MeshScale)
+		: Params.ManualColliderSize;
+
+	// Ensure minimum size
+	ColliderSize.X = FMath::Max(ColliderSize.X, 1.0);
+	ColliderSize.Y = FMath::Max(ColliderSize.Y, 1.0);
+	ColliderSize.Z = FMath::Max(ColliderSize.Z, 1.0);
+
+	// Get pivot offset - this is the distance from mesh pivot to geometry center
+	// Physics body needs to be centered on the geometry, not on the pivot
+	FVector PivotOffset = GetMeshPivotOffset(Params.Mesh);
+	FVector ScaledPivotOffset = PivotOffset * Params.MeshScale;
+
+	// Calculate physics body position:
+	// - Start at requested location (where the mesh pivot should be)
+	// - Add rotated pivot offset to get to geometry center (where physics should be)
+	FVector Location = Params.WorldTransform.GetLocation();
+	FQuat Rotation = Params.WorldTransform.GetRotation();
+	FVector PhysicsLocation = Location + Rotation.RotateVector(ScaledPivotOffset);
+
+	// Create physics body at geometry center
+	FBBoxParams BoxParams = FBarrageBounder::GenerateBoxBounds(
+		PhysicsLocation,
+		ColliderSize.X,
+		ColliderSize.Y,
+		ColliderSize.Z,
+		FVector3d::ZeroVector,
+		FMassByCategory::MostEnemies
+	);
+
+	FBLet Body = Physics->CreatePrimitive(
+		BoxParams,
+		Params.EntityKey,
+		static_cast<uint16>(Params.PhysicsLayer),
+		Params.bIsSensor,
+		false, // not force dynamic
+		Params.bIsMovable
+	);
+
+	if (!FBarragePrimitive::IsNotNull(Body))
+	{
+		UE_LOG(LogTemp, Error, TEXT("FBarrageSpawnUtils::SpawnEntity - Failed to create physics body!"));
+		return Result;
+	}
+
+	Result.BarrageKey = Body->KeyIntoBarrage;
+	Result.bSuccess = true;
+
+	// Configure physics
+	if (!Params.InitialVelocity.IsNearlyZero())
+	{
+		FBarragePrimitive::SetVelocity(Params.InitialVelocity, Body);
+	}
+	FBarragePrimitive::SetGravityFactor(Params.GravityFactor, Body);
+
+	// Apply rotation (Rotation variable already defined above for pivot offset calculation)
+	if (!Rotation.IsIdentity())
+	{
+		FBarragePrimitive::ApplyRotation(FQuat4d(Rotation), Body);
+	}
+
+	// Apply behavior tags
+	ApplyBehaviorTags(Artillery, Params.EntityKey,
+					  Params.bDestructible, Params.bDamagesPlayer, Params.bReflective);
+
+	// Add render instance
+	if (Renderer)
+	{
+		FTransform RenderTransform = Params.WorldTransform;
+		RenderTransform.SetScale3D(Params.MeshScale);
+		Result.RenderInstanceIndex = Renderer->AddInstance(Params.Mesh, Params.Material, RenderTransform, Params.EntityKey);
+	}
+
+	return Result;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // UBarrageRenderManager
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -93,8 +248,11 @@ UInstancedStaticMeshComponent* UBarrageRenderManager::GetOrCreateISM(UStaticMesh
 	// Store
 	FMeshGroup& NewGroup = MeshGroups.Add(InMesh);
 	NewGroup.ISM = ISM;
+	// Store pivot offset for physics->render position conversion
+	NewGroup.PivotOffset = FBarrageSpawnUtils::GetMeshPivotOffset(InMesh);
 
-	UE_LOG(LogTemp, Log, TEXT("UBarrageRenderManager: Created ISM for mesh %s"), *InMesh->GetName());
+	UE_LOG(LogTemp, Log, TEXT("UBarrageRenderManager: Created ISM for mesh %s (PivotOffset: %s)"),
+		*InMesh->GetName(), *NewGroup.PivotOffset.ToString());
 
 	return ISM;
 }
@@ -198,21 +356,31 @@ void UBarrageRenderManager::UpdateTransforms()
 			FSkeletonKey Key = KeyIndex.Key;
 			int32 Index = KeyIndex.Value;
 
-			// Get position from Barrage
+			// Get position from Barrage (this is at geometry center)
 			FBLet Body = Physics->GetShapeRef(Key);
 			if (FBarragePrimitive::IsNotNull(Body))
 			{
 				FVector3f Pos = FBarragePrimitive::GetPosition(Body);
 				FQuat4f Rot = FBarragePrimitive::OptimisticGetAbsoluteRotation(Body);
 
-				FTransform NewTransform;
-				NewTransform.SetLocation(FVector(Pos));
-				NewTransform.SetRotation(FQuat(Rot));
+				FQuat Rotation(Rot);
+				FVector PhysicsPosition(Pos);
 
-				// Get current scale
+				// Get current scale from the instance
 				FTransform CurrentTransform;
 				Group.ISM->GetInstanceTransform(Index, CurrentTransform, true);
-				NewTransform.SetScale3D(CurrentTransform.GetScale3D());
+				FVector Scale = CurrentTransform.GetScale3D();
+
+				// Calculate render position:
+				// Physics is at geometry center, we need to render at pivot position
+				// RenderPos = PhysicsPos - Rotation.RotateVector(PivotOffset * Scale)
+				FVector ScaledPivotOffset = Group.PivotOffset * Scale;
+				FVector RenderPosition = PhysicsPosition - Rotation.RotateVector(ScaledPivotOffset);
+
+				FTransform NewTransform;
+				NewTransform.SetLocation(RenderPosition);
+				NewTransform.SetRotation(Rotation);
+				NewTransform.SetScale3D(Scale);
 
 				Group.ISM->UpdateInstanceTransform(Index, NewTransform, true, false, false);
 				bAnyUpdated = true;
@@ -279,107 +447,39 @@ FSkeletonKey ABarrageEntitySpawner::DoSpawn()
 		return FSkeletonKey();
 	}
 
-	UWorld* World = GetWorld();
-	UBarrageDispatch* Physics = World->GetSubsystem<UBarrageDispatch>();
-	UBarrageRenderManager* Renderer = UBarrageRenderManager::Get(World);
-
-	if (!Physics)
-	{
-		UE_LOG(LogTemp, Error, TEXT("BarrageEntitySpawner: No UBarrageDispatch!"));
-		return FSkeletonKey();
-	}
-
 	// Generate key
 	const uint32 Id = ++GEntityCounter;
 	FSkeletonKey Key = FSkeletonKey(FORGE_SKELETON_KEY(Id, SKELLY::SFIX_BAR_PRIM));
 
-	// Calculate collider
-	FVector FinalColliderSize = ColliderSize;
-	if (bAutoCollider)
+	// Fill spawn params
+	FBarrageSpawnParams Params;
+	Params.Mesh = Mesh;
+	Params.Material = Material;
+	Params.WorldTransform = GetActorTransform();
+	Params.EntityKey = Key;
+	Params.MeshScale = MeshScale;
+	Params.PhysicsLayer = PhysicsLayer;
+	Params.bAutoCollider = bAutoCollider;
+	Params.ManualColliderSize = ColliderSize;
+	Params.bIsMovable = bIsMovable;
+	Params.bIsSensor = bIsSensor;
+	Params.InitialVelocity = InitialVelocity;
+	Params.GravityFactor = GravityFactor;
+	Params.bDestructible = bDestructible;
+	Params.bDamagesPlayer = bDamagesPlayer;
+	Params.bReflective = bReflective;
+
+	// Use shared spawn logic
+	FBarrageSpawnResult Result = FBarrageSpawnUtils::SpawnEntity(GetWorld(), Params);
+
+	if (Result.bSuccess)
 	{
-		FBoxSphereBounds Bounds = Mesh->GetBounds();
-		FinalColliderSize = Bounds.BoxExtent * 2.0 * MeshScale;
+		InstanceIndex = Result.RenderInstanceIndex;
+		UE_LOG(LogTemp, Log, TEXT("BarrageEntitySpawner: Spawned %s Key=%llu at %s"),
+			*GetName(), static_cast<uint64>(Key), *GetActorLocation().ToString());
 	}
 
-	// Create physics body
-	FVector Location = GetActorLocation();
-
-	FBBoxParams BoxParams = FBarrageBounder::GenerateBoxBounds(
-		Location,
-		FMath::Max(FinalColliderSize.X, 1.0),
-		FMath::Max(FinalColliderSize.Y, 1.0),
-		FMath::Max(FinalColliderSize.Z, 1.0),
-		FVector3d::ZeroVector,
-		FMassByCategory::MostEnemies
-	);
-
-	FBLet Body = Physics->CreatePrimitive(
-		BoxParams,
-		Key,
-		static_cast<uint16>(PhysicsLayer),
-		bIsSensor,
-		false,
-		bIsMovable
-	);
-
-	if (!FBarragePrimitive::IsNotNull(Body))
-	{
-		UE_LOG(LogTemp, Error, TEXT("BarrageEntitySpawner: Failed to create physics!"));
-		return FSkeletonKey();
-	}
-
-	// Configure physics
-	if (!InitialVelocity.IsNearlyZero())
-	{
-		FBarragePrimitive::SetVelocity(InitialVelocity, Body);
-	}
-	FBarragePrimitive::SetGravityFactor(GravityFactor, Body);
-
-	FQuat Rotation = GetActorQuat();
-	if (!Rotation.IsIdentity())
-	{
-		FBarragePrimitive::ApplyRotation(FQuat4d(Rotation), Body);
-	}
-
-	// Add render instance
-	if (Renderer)
-	{
-		FTransform RenderTransform = GetActorTransform();
-		RenderTransform.SetScale3D(MeshScale);
-		InstanceIndex = Renderer->AddInstance(Mesh, Material, RenderTransform, Key);
-	}
-
-	// Apply behavior tags
-	if (UArtilleryDispatch* Artillery = World->GetSubsystem<UArtilleryDispatch>())
-	{
-		// Must register tag container BEFORE adding tags
-		if (bDestructible || bDamagesPlayer || bReflective)
-		{
-			Artillery->GetOrRegisterConservedTags(Key);
-		}
-
-		if (bDestructible)
-		{
-			Artillery->AddTagToEntity(Key, TAG_Barrage_Destructible);
-			UE_LOG(LogTemp, Warning, TEXT("BarrageEntitySpawner: Added Destructible tag to Key=%llu"), static_cast<uint64>(Key));
-		}
-		if (bDamagesPlayer)
-		{
-			Artillery->AddTagToEntity(Key, TAG_Barrage_DamagesPlayer);
-		}
-		if (bReflective)
-		{
-			Artillery->AddTagToEntity(Key, TAG_Barrage_Reflective);
-		}
-	}
-	else
-	{
-		UE_LOG(LogTemp, Error, TEXT("BarrageEntitySpawner: No UArtilleryDispatch! Tags not applied!"));
-	}
-
-	UE_LOG(LogTemp, Log, TEXT("BarrageEntitySpawner: Spawned %s Key=%llu at %s"), *GetName(), static_cast<uint64>(Key), *Location.ToString());
-
-	return Key;
+	return Result.bSuccess ? Key : FSkeletonKey();
 }
 
 FSkeletonKey ABarrageEntitySpawner::SpawnEntity(
@@ -398,10 +498,7 @@ FSkeletonKey ABarrageEntitySpawner::SpawnEntity(
 	}
 
 	UWorld* World = WorldContextObject->GetWorld();
-	UBarrageDispatch* Physics = World->GetSubsystem<UBarrageDispatch>();
-	UBarrageRenderManager* Renderer = UBarrageRenderManager::Get(World);
-
-	if (!Physics)
+	if (!World)
 	{
 		return FSkeletonKey();
 	}
@@ -410,56 +507,22 @@ FSkeletonKey ABarrageEntitySpawner::SpawnEntity(
 	const uint32 Id = ++GEntityCounter;
 	FSkeletonKey Key = FSkeletonKey(FORGE_SKELETON_KEY(Id, SKELLY::SFIX_BAR_PRIM));
 
-	// Collider from mesh
-	FBoxSphereBounds Bounds = InMesh->GetBounds();
-	FVector ColliderSize = Bounds.BoxExtent * 2.0 * InMeshScale;
+	// Fill spawn params
+	FBarrageSpawnParams Params;
+	Params.Mesh = InMesh;
+	Params.WorldTransform = Transform;
+	Params.EntityKey = Key;
+	Params.MeshScale = InMeshScale;
+	Params.PhysicsLayer = InPhysicsLayer;
+	Params.bAutoCollider = true;
+	Params.bIsMovable = bInIsMovable;
+	Params.InitialVelocity = InVelocity;
+	Params.GravityFactor = InGravity;
 
-	FVector Location = Transform.GetLocation();
+	// Use shared spawn logic
+	FBarrageSpawnResult Result = FBarrageSpawnUtils::SpawnEntity(World, Params);
 
-	FBBoxParams BoxParams = FBarrageBounder::GenerateBoxBounds(
-		Location,
-		FMath::Max(ColliderSize.X, 1.0),
-		FMath::Max(ColliderSize.Y, 1.0),
-		FMath::Max(ColliderSize.Z, 1.0),
-		FVector3d::ZeroVector,
-		FMassByCategory::MostEnemies
-	);
-
-	FBLet Body = Physics->CreatePrimitive(
-		BoxParams,
-		Key,
-		static_cast<uint16>(InPhysicsLayer),
-		false,
-		false,
-		bInIsMovable
-	);
-
-	if (!FBarragePrimitive::IsNotNull(Body))
-	{
-		return FSkeletonKey();
-	}
-
-	if (!InVelocity.IsNearlyZero())
-	{
-		FBarragePrimitive::SetVelocity(InVelocity, Body);
-	}
-	FBarragePrimitive::SetGravityFactor(InGravity, Body);
-
-	FQuat Rotation = Transform.GetRotation();
-	if (!Rotation.IsIdentity())
-	{
-		FBarragePrimitive::ApplyRotation(FQuat4d(Rotation), Body);
-	}
-
-	// Render
-	if (Renderer)
-	{
-		FTransform RenderTransform = Transform;
-		RenderTransform.SetScale3D(InMeshScale);
-		Renderer->AddInstance(InMesh, nullptr, RenderTransform, Key);
-	}
-
-	return Key;
+	return Result.bSuccess ? Key : FSkeletonKey();
 }
 
 void ABarrageEntitySpawner::DestroyEntity(FSkeletonKey InEntityKey)

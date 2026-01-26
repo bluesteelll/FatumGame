@@ -7,12 +7,87 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 #include "SkeletonTypes.h"
+#include "FBarrageKey.h"
 #include "EPhysicsLayer.h"
 #include "BarrageEntitySpawner.generated.h"
 
 class UInstancedStaticMeshComponent;
 class UStaticMesh;
 class UMaterialInterface;
+class UBarrageDispatch;
+class UArtilleryDispatch;
+
+/**
+ * Common spawn parameters for Barrage entities.
+ * Used by both BarrageEntitySpawner and ConstrainedGroupSpawner.
+ */
+struct ARTILLERYRUNTIME_API FBarrageSpawnParams
+{
+	// Required
+	UStaticMesh* Mesh = nullptr;
+	FTransform WorldTransform;
+	FSkeletonKey EntityKey;
+
+	// Rendering
+	UMaterialInterface* Material = nullptr;
+	FVector MeshScale = FVector::OneVector;
+
+	// Physics
+	EPhysicsLayer PhysicsLayer = EPhysicsLayer::MOVING;
+	bool bAutoCollider = true;
+	FVector ManualColliderSize = FVector(100, 100, 100);
+	bool bIsMovable = true;
+	bool bIsSensor = false;
+	FVector InitialVelocity = FVector::ZeroVector;
+	float GravityFactor = 1.0f;
+
+	// Behavior tags
+	bool bDestructible = false;
+	bool bDamagesPlayer = false;
+	bool bReflective = false;
+};
+
+/**
+ * Result of spawning a Barrage entity.
+ */
+struct ARTILLERYRUNTIME_API FBarrageSpawnResult
+{
+	FSkeletonKey EntityKey;
+	FBarrageKey BarrageKey;
+	int32 RenderInstanceIndex = INDEX_NONE;
+	bool bSuccess = false;
+};
+
+/**
+ * Utility class for spawning Barrage entities.
+ * Shared logic between BarrageEntitySpawner and ConstrainedGroupSpawner.
+ */
+class ARTILLERYRUNTIME_API FBarrageSpawnUtils
+{
+public:
+	/**
+	 * Spawn a physics entity with the given parameters.
+	 * This is the canonical spawn function - use this to ensure consistent behavior.
+	 */
+	static FBarrageSpawnResult SpawnEntity(UWorld* World, const FBarrageSpawnParams& Params);
+
+	/**
+	 * Calculate collider size from mesh bounds.
+	 */
+	static FVector CalculateColliderSize(UStaticMesh* Mesh, FVector Scale);
+
+	/**
+	 * Get mesh pivot offset (distance from pivot to geometry center).
+	 * Used to align physics (centered) with rendering (pivot-based).
+	 */
+	static FVector GetMeshPivotOffset(UStaticMesh* Mesh);
+
+	/**
+	 * Apply behavior tags to an entity.
+	 */
+	static void ApplyBehaviorTags(UArtilleryDispatch* Artillery, FSkeletonKey Key,
+								   bool bDestructible, bool bDamagesPlayer, bool bReflective);
+};
 
 /**
  * SIMPLE Barrage Entity Spawner - just drag, set mesh, play!
@@ -191,6 +266,10 @@ private:
 
 		TMap<FSkeletonKey, int32> KeyToIndex;
 		TArray<FSkeletonKey> IndexToKey; // For reverse lookup when removing
+
+		// Pivot offset: distance from mesh pivot to geometry center
+		// Used to convert physics position (at center) back to render position (at pivot)
+		FVector PivotOffset = FVector::ZeroVector;
 	};
 
 	UPROPERTY()
