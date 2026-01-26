@@ -27,7 +27,7 @@
  * 4. Call FireProjectile() to shoot
  */
 UCLASS(Blueprintable)
-class MASSSAMPLEPROJECT_API AArtilleryCharacter : public ACharacter, public IArtilleryLocomotionInterface
+class AArtilleryCharacter : public ACharacter, public IArtilleryLocomotionInterface
 {
 	GENERATED_BODY()
 

@@ -6,29 +6,28 @@ public class FatumGame : ModuleRules
 {
 	public FatumGame(ReadOnlyTargetRules Target) : base(Target)
 	{
-        PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
+		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 
 		PublicIncludePaths.AddRange(
-            new string[] {
-                "FatumGame"
-            }
-        );
+			new string[] {
+				"FatumGame"
+			}
+		);
+
 		PublicDependencyModuleNames.AddRange(
 			new string[] {
 				"Core",
 				"CoreUObject",
 				"Engine",
 				"InputCore",
-				// Artillery dependencies
+				// Artillery ecosystem
 				"ArtilleryRuntime",
 				"Barrage",
 				"SkeletonKey",
 				"Cabling",
-				// Collision system
-				"GameplayTags",
-				"Phosphorus"
+				// Collision system (includes Phosphorus)
+				"BarrageCollision",
 			}
 		);
-
 	}
 }
