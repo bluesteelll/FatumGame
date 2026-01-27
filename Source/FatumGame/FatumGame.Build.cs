@@ -27,6 +27,8 @@ public class FatumGame : ModuleRules
 				"Cabling",
 				// Collision system (includes Phosphorus)
 				"BarrageCollision",
+				// Gameplay data (items, inventory)
+				"Enace",
 			}
 		);
 	}

@@ -3,6 +3,7 @@
 #include "Tags/EnaceTags.h"
 
 UE_DEFINE_GAMEPLAY_TAG(TAG_Enace_Item, "Enace.Item");
+UE_DEFINE_GAMEPLAY_TAG(TAG_Enace_Container, "Enace.Container");
 UE_DEFINE_GAMEPLAY_TAG(TAG_Enace_Destructible, "Enace.Destructible");
 UE_DEFINE_GAMEPLAY_TAG(TAG_Enace_HasHealth, "Enace.HasHealth");
 UE_DEFINE_GAMEPLAY_TAG(TAG_Enace_HasLoot, "Enace.HasLoot");

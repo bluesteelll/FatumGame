@@ -7,6 +7,7 @@
 #include "SkeletonTypes.h"
 #include "ORDIN.h"
 #include "GameplayTagContainer.h"
+#include "Containers/EnaceContainerTypes.h"
 
 THIRD_PARTY_INCLUDES_START
 PRAGMA_PUSH_PLATFORM_DEFAULT_PACKING
@@ -111,6 +112,7 @@ typedef libcuckoo::cuckoohash_map<FSkeletonKey, FEnaceItemData> ItemDataMap;
 typedef libcuckoo::cuckoohash_map<FSkeletonKey, FEnaceHealthData> HealthDataMap;
 typedef libcuckoo::cuckoohash_map<FSkeletonKey, FEnaceDamageData> DamageDataMap;
 typedef libcuckoo::cuckoohash_map<FSkeletonKey, FEnaceLootData> LootDataMap;
+typedef libcuckoo::cuckoohash_map<FSkeletonKey, FEnaceContainerData> ContainerDataMap;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // ENACE DISPATCH
@@ -239,6 +241,171 @@ public:
 	void SpawnLoot(FSkeletonKey Key, FVector Location);
 
 	// ═══════════════════════════════════════════════════════════════
+	// CONTAINERS
+	// ═══════════════════════════════════════════════════════════════
+
+	/**
+	 * Create a new container.
+	 *
+	 * @param Definition Optional item definition (for container items like bags/chests)
+	 * @param SlotCount Number of slots (-1 for dynamic)
+	 * @param Owner Optional owner key (actor, item)
+	 * @return SkeletonKey for the container
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Enace|Containers")
+	FSkeletonKey CreateContainer(UEnaceItemDefinition* Definition, int32 SlotCount = 10, FSkeletonKey Owner = FSkeletonKey());
+
+	/**
+	 * Create a container from an item definition that has bIsContainer=true.
+	 * Uses ContainerCapacity from the definition.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Enace|Containers")
+	FSkeletonKey CreateContainerFromDefinition(UEnaceItemDefinition* Definition, FSkeletonKey Owner = FSkeletonKey());
+
+	/** Destroy a container and all its contents */
+	UFUNCTION(BlueprintCallable, Category = "Enace|Containers")
+	void DestroyContainer(FSkeletonKey ContainerKey);
+
+	/** Check if a key represents a container */
+	UFUNCTION(BlueprintPure, Category = "Enace|Containers")
+	bool IsContainer(FSkeletonKey Key) const;
+
+	/** Try to get container data */
+	UFUNCTION(BlueprintPure, Category = "Enace|Containers")
+	bool TryGetContainerData(FSkeletonKey Key, FEnaceContainerData& OutData) const;
+
+	/**
+	 * Find first world container (for testing).
+	 * Returns the key of the first container found in the world (not player inventories).
+	 */
+	UFUNCTION(BlueprintPure, Category = "Enace|Containers")
+	FSkeletonKey FindFirstWorldContainer() const;
+
+	/**
+	 * Get all world container keys.
+	 * Excludes containers owned by players (OwnerKey is set).
+	 */
+	UFUNCTION(BlueprintPure, Category = "Enace|Containers")
+	TArray<FSkeletonKey> GetAllWorldContainers() const;
+
+	// ─────────────────────────────────────────────────────────────────
+	// Container Slot Operations
+	// ─────────────────────────────────────────────────────────────────
+
+	/**
+	 * Add an item to a container (auto-finds best slot, handles stacking).
+	 *
+	 * @param ContainerKey Container to add to
+	 * @param Definition Item to add
+	 * @param Count Number of items
+	 * @return Result with success status, added count, and overflow
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Enace|Containers")
+	FEnaceAddItemResult AddItem(FSkeletonKey ContainerKey, UEnaceItemDefinition* Definition, int32 Count = 1);
+
+	/**
+	 * Add an item to a specific slot.
+	 * Handles stacking if slot has same item type.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Enace|Containers")
+	FEnaceAddItemResult AddItemToSlot(FSkeletonKey ContainerKey, int32 SlotIndex, UEnaceItemDefinition* Definition, int32 Count = 1);
+
+	/**
+	 * Remove items from a specific slot.
+	 *
+	 * @param ContainerKey Container to remove from
+	 * @param SlotIndex Slot index
+	 * @param Count Number to remove (-1 = all)
+	 * @param OutDefinition Receives the item definition
+	 * @param OutCount Receives actual count removed
+	 * @return True if items were removed
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Enace|Containers")
+	bool RemoveItem(FSkeletonKey ContainerKey, int32 SlotIndex, int32 Count, UEnaceItemDefinition*& OutDefinition, int32& OutCount);
+
+	/**
+	 * Move items between containers/slots.
+	 *
+	 * @param FromContainer Source container
+	 * @param FromSlot Source slot
+	 * @param ToContainer Destination container (can be same as source)
+	 * @param ToSlot Destination slot
+	 * @param Count Items to move (-1 = all)
+	 * @return Result with success status
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Enace|Containers")
+	FEnaceMoveItemResult MoveItem(FSkeletonKey FromContainer, int32 FromSlot, FSkeletonKey ToContainer, int32 ToSlot, int32 Count = -1);
+
+	/**
+	 * Swap two slots (same or different containers).
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Enace|Containers")
+	bool SwapSlots(FSkeletonKey ContainerA, int32 SlotA, FSkeletonKey ContainerB, int32 SlotB);
+
+	// ─────────────────────────────────────────────────────────────────
+	// Container Queries
+	// ─────────────────────────────────────────────────────────────────
+
+	/** Get a specific slot */
+	UFUNCTION(BlueprintPure, Category = "Enace|Containers")
+	bool TryGetSlot(FSkeletonKey ContainerKey, int32 SlotIndex, FEnaceContainerSlot& OutSlot) const;
+
+	/** Get number of slots in a container */
+	UFUNCTION(BlueprintPure, Category = "Enace|Containers")
+	int32 GetSlotCount(FSkeletonKey ContainerKey) const;
+
+	/** Get number of used (non-empty) slots */
+	UFUNCTION(BlueprintPure, Category = "Enace|Containers")
+	int32 GetUsedSlotCount(FSkeletonKey ContainerKey) const;
+
+	/** Find first empty slot (-1 if none or full) */
+	UFUNCTION(BlueprintPure, Category = "Enace|Containers")
+	int32 FindFirstEmptySlot(FSkeletonKey ContainerKey) const;
+
+	/** Find slot containing specific item type (-1 if not found) */
+	UFUNCTION(BlueprintPure, Category = "Enace|Containers")
+	int32 FindItemSlot(FSkeletonKey ContainerKey, UEnaceItemDefinition* Definition) const;
+
+	/** Get total count of a specific item across all slots */
+	UFUNCTION(BlueprintPure, Category = "Enace|Containers")
+	int32 GetItemCount(FSkeletonKey ContainerKey, UEnaceItemDefinition* Definition) const;
+
+	/** Check if container has at least N of an item */
+	UFUNCTION(BlueprintPure, Category = "Enace|Containers")
+	bool HasItem(FSkeletonKey ContainerKey, UEnaceItemDefinition* Definition, int32 MinCount = 1) const;
+
+	// ─────────────────────────────────────────────────────────────────
+	// Container Slot Configuration
+	// ─────────────────────────────────────────────────────────────────
+
+	/** Set slot type filter (restrict what items can go in slot) */
+	UFUNCTION(BlueprintCallable, Category = "Enace|Containers")
+	bool SetSlotTypeFilter(FSkeletonKey ContainerKey, int32 SlotIndex, FGameplayTag TypeFilter);
+
+	/** Lock/unlock a slot */
+	UFUNCTION(BlueprintCallable, Category = "Enace|Containers")
+	bool SetSlotLocked(FSkeletonKey ContainerKey, int32 SlotIndex, bool bLocked);
+
+	/** Add slots to a dynamic container */
+	UFUNCTION(BlueprintCallable, Category = "Enace|Containers")
+	bool AddSlots(FSkeletonKey ContainerKey, int32 Count);
+
+	/** Remove empty slots from end of container */
+	UFUNCTION(BlueprintCallable, Category = "Enace|Containers")
+	bool RemoveEmptySlots(FSkeletonKey ContainerKey, int32 Count);
+
+	// ─────────────────────────────────────────────────────────────────
+	// Container Events
+	// ─────────────────────────────────────────────────────────────────
+
+	/** Event fired when container contents change (game thread safe) */
+	UPROPERTY(BlueprintAssignable, Category = "Enace|Containers")
+	FOnEnaceContainerChanged OnContainerChanged;
+
+	/** Native delegate for C++ (game thread safe) */
+	FOnEnaceContainerChangedNative OnContainerChangedNative;
+
+	// ═══════════════════════════════════════════════════════════════
 	// CLEANUP
 	// ═══════════════════════════════════════════════════════════════
 
@@ -258,6 +425,7 @@ private:
 	TSharedPtr<HealthDataMap> Health;
 	TSharedPtr<DamageDataMap> Damage;
 	TSharedPtr<LootDataMap> Loot;
+	TSharedPtr<ContainerDataMap> Containers;
 
 	// Cached references
 	UBarrageDispatch* BarrageDispatch = nullptr;
@@ -266,4 +434,10 @@ private:
 	// Key generation
 	std::atomic<uint32> KeyCounter{1};
 	FSkeletonKey GenerateItemKey();
+	FSkeletonKey GenerateContainerKey();
+
+	// Internal helpers
+	void BroadcastContainerEvent(const FEnaceContainerEvent& Event);
+	bool ValidateSlotIndex(const FEnaceContainerData& Data, int32 SlotIndex) const;
+	bool CanPlaceInSlot(const FEnaceContainerSlot& Slot, const UEnaceItemDefinition* Definition, const FEnaceContainerData& ContainerData) const;
 };

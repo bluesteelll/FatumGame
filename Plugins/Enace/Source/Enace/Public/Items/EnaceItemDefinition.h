@@ -114,6 +114,29 @@ public:
 	float Friction = 0.5f;
 
 	// ═══════════════════════════════════════════════════════════════
+	// CONTAINER (for items that can hold other items)
+	// ═══════════════════════════════════════════════════════════════
+
+	/** Is this item a container (chest, bag, etc.)? */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Container")
+	bool bIsContainer = false;
+
+	/** Number of slots when used as container (0 = not a container) */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Container",
+		meta = (EditCondition = "bIsContainer", ClampMin = "0", ClampMax = "1000"))
+	int32 ContainerCapacity = 0;
+
+	/** Allow nested containers (bags inside this container) */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Container",
+		meta = (EditCondition = "bIsContainer"))
+	bool bAllowNestedContainers = true;
+
+	/** Default slot type filters (applied to all slots) */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Container",
+		meta = (EditCondition = "bIsContainer"))
+	FGameplayTagContainer DefaultSlotFilters;
+
+	// ═══════════════════════════════════════════════════════════════
 	// WORLD BEHAVIOR
 	// ═══════════════════════════════════════════════════════════════
 

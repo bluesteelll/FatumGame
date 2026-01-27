@@ -12,6 +12,9 @@
 #include "Items/EnaceItemTypes.h"
 #include "Items/EnaceItemDefinition.h"
 
+// Containers
+#include "Containers/EnaceContainerTypes.h"
+
 // Spawners
 #include "Spawners/EnaceItemSpawner.h"
 
