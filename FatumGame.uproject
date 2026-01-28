@@ -75,6 +75,18 @@
 		{
 			"Name": "CMakeTarget",
 			"Enabled": true
+		},
+		{
+			"Name": "UnrealFlecs",
+			"Enabled": true
+		},
+		{
+			"Name": "ModularGameplay",
+			"Enabled": true
+		},
+		{
+			"Name": "GameFeatures",
+			"Enabled": true
 		}
 	],
 	"TargetPlatforms": [

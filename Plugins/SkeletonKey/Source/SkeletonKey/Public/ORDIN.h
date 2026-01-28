@@ -58,6 +58,7 @@ namespace ORDIN
 		ProjectileSystem = ParticleSystem + ORDIN::Step,
 		UIECSSystem = ProjectileSystem + ORDIN::Step,
 		EventLogSystem = UIECSSystem + ORDIN::Step,
+		FlecsSystem = EventLogSystem + ORDIN::Step,
 		LastSuperstructureKey = ArtilleryOnline + LastSubstrateKey
 	};
 }

@@ -279,6 +279,10 @@ void FArtilleryBusyWorker::RunFrameProcessingLoop(bool missedPrior, uint64_t cur
 				{
 					EventLogSystemPointer->ArtilleryTick();
 				}
+				if (FlecsSystemPointer)
+				{
+					FlecsSystemPointer->ArtilleryTick();
+				}
 			}
 		}
 

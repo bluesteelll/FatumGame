@@ -6,7 +6,6 @@
 #include "Camera/CameraComponent.h"
 #include "FMasks.h"  // For Arty::Intents
 #include "Engine/Engine.h"  // For GEngine debug messages
-#include "EnaceDispatch.h"  // For inventory
 
 AArtilleryCharacter::AArtilleryCharacter(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
@@ -31,13 +30,6 @@ void AArtilleryCharacter::BeginPlay()
 	Super::BeginPlay();
 	bIsReady = true;
 
-	// Create player inventory container
-	if (UEnaceDispatch* Enace = UEnaceDispatch::Get(GetWorld()))
-	{
-		InventoryKey = Enace->CreateContainer(nullptr, InventorySlotCount, GetMyKey());
-		UE_LOG(LogTemp, Log, TEXT("AArtilleryCharacter: Created inventory with %d slots (Key: %llu)"),
-			InventorySlotCount, (uint64)InventoryKey);
-	}
 }
 
 void AArtilleryCharacter::Tick(float DeltaTime)
@@ -266,146 +258,3 @@ TArray<FSkeletonKey> AArtilleryCharacter::FireProjectileSpread(int32 Count, floa
 	);
 }
 
-// ═══════════════════════════════════════════════════════════════
-// Inventory (Enace Integration)
-// ═══════════════════════════════════════════════════════════════
-
-bool AArtilleryCharacter::AddItemToInventory(UEnaceItemDefinition* Definition, int32 Count)
-{
-	if (!Definition || Count <= 0)
-	{
-		return false;
-	}
-
-	UEnaceDispatch* Enace = UEnaceDispatch::Get(GetWorld());
-	if (!Enace || !InventoryKey.IsValid())
-	{
-		UE_LOG(LogTemp, Warning, TEXT("AddItemToInventory: Enace not available or inventory not created"));
-		return false;
-	}
-
-	FEnaceAddItemResult Result = Enace->AddItem(InventoryKey, Definition, Count);
-
-	if (Result.bSuccess)
-	{
-		if (GEngine)
-		{
-			GEngine->AddOnScreenDebugMessage(-1, 2.0f, FColor::Green,
-				FString::Printf(TEXT("Added %s x%d to inventory (slot %d)"),
-					*Definition->ItemId.ToString(),
-					Result.AddedCount,
-					Result.SlotIndex));
-		}
-
-		if (Result.OverflowCount > 0)
-		{
-			if (GEngine)
-			{
-				GEngine->AddOnScreenDebugMessage(-1, 2.0f, FColor::Yellow,
-					FString::Printf(TEXT("Overflow: %d items didn't fit"), Result.OverflowCount));
-			}
-		}
-	}
-	else
-	{
-		if (GEngine)
-		{
-			GEngine->AddOnScreenDebugMessage(-1, 2.0f, FColor::Red,
-				TEXT("Inventory full!"));
-		}
-	}
-
-	return Result.bSuccess;
-}
-
-bool AArtilleryCharacter::HasItemInInventory(UEnaceItemDefinition* Definition, int32 MinCount) const
-{
-	UEnaceDispatch* Enace = UEnaceDispatch::Get(GetWorld());
-	if (!Enace || !InventoryKey.IsValid())
-	{
-		return false;
-	}
-	return Enace->HasItem(InventoryKey, Definition, MinCount);
-}
-
-int32 AArtilleryCharacter::GetItemCountInInventory(UEnaceItemDefinition* Definition) const
-{
-	UEnaceDispatch* Enace = UEnaceDispatch::Get(GetWorld());
-	if (!Enace || !InventoryKey.IsValid())
-	{
-		return 0;
-	}
-	return Enace->GetItemCount(InventoryKey, Definition);
-}
-
-void AArtilleryCharacter::TestAddItem()
-{
-	if (!TestItemDefinition)
-	{
-		UE_LOG(LogTemp, Warning, TEXT("TestAddItem: TestItemDefinition is not set! Assign it in Blueprint."));
-		if (GEngine)
-		{
-			GEngine->AddOnScreenDebugMessage(-1, 3.0f, FColor::Red,
-				TEXT("TestItemDefinition not set! Assign in Blueprint."));
-		}
-		return;
-	}
-
-	AddItemToInventory(TestItemDefinition, 1);
-}
-
-void AArtilleryCharacter::TestAddItemToWorldChest()
-{
-	if (!TestItemDefinition)
-	{
-		UE_LOG(LogTemp, Warning, TEXT("TestAddItemToWorldChest: TestItemDefinition is not set!"));
-		if (GEngine)
-		{
-			GEngine->AddOnScreenDebugMessage(-1, 3.0f, FColor::Red,
-				TEXT("TestItemDefinition not set! Assign in Blueprint."));
-		}
-		return;
-	}
-
-	UEnaceDispatch* Enace = UEnaceDispatch::Get(GetWorld());
-	if (!Enace)
-	{
-		UE_LOG(LogTemp, Warning, TEXT("TestAddItemToWorldChest: EnaceDispatch not available"));
-		return;
-	}
-
-	// Find first world container (chest on scene)
-	FSkeletonKey ChestKey = Enace->FindFirstWorldContainer();
-	if (!ChestKey.IsValid())
-	{
-		UE_LOG(LogTemp, Warning, TEXT("TestAddItemToWorldChest: No world container found! Place a chest (item with bIsContainer=true) on the level."));
-		if (GEngine)
-		{
-			GEngine->AddOnScreenDebugMessage(-1, 3.0f, FColor::Red,
-				TEXT("No chest found on level!"));
-		}
-		return;
-	}
-
-	// Add item to chest
-	FEnaceAddItemResult Result = Enace->AddItem(ChestKey, TestItemDefinition, 1);
-
-	if (Result.bSuccess)
-	{
-		if (GEngine)
-		{
-			GEngine->AddOnScreenDebugMessage(-1, 2.0f, FColor::Green,
-				FString::Printf(TEXT("Added %s to chest (slot %d)"),
-					*TestItemDefinition->ItemId.ToString(),
-					Result.SlotIndex));
-		}
-	}
-	else
-	{
-		if (GEngine)
-		{
-			GEngine->AddOnScreenDebugMessage(-1, 2.0f, FColor::Red,
-				TEXT("Chest is full!"));
-		}
-	}
-}

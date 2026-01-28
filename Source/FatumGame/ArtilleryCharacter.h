@@ -10,7 +10,6 @@
 #include "PhysicsTypes/BarrageCharacterMovement.h"
 #include "Systems/ArtilleryBPLibs.h"
 #include "BasicTypes/ProjectileDefinition.h"
-#include "Items/EnaceItemDefinition.h"
 #include "ArtilleryCharacter.generated.h"
 
 /**
@@ -97,42 +96,6 @@ public:
 	/** Use standard UE camera control instead of Artillery system */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Artillery|Camera")
 	bool bUseStandardCameraControl = true;
-
-	// ═══════════════════════════════════════════════════════════════
-	// INVENTORY (Enace Integration)
-	// ═══════════════════════════════════════════════════════════════
-
-	/** Number of inventory slots */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Enace|Inventory")
-	int32 InventorySlotCount = 20;
-
-	/** Test item to add with RMB (set in Blueprint) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Enace|Inventory")
-	UEnaceItemDefinition* TestItemDefinition;
-
-	/** Key to the player's inventory container */
-	UPROPERTY(BlueprintReadOnly, Category = "Enace|Inventory")
-	FSkeletonKey InventoryKey;
-
-	/** Add item to inventory (returns true if at least one was added) */
-	UFUNCTION(BlueprintCallable, Category = "Enace|Inventory")
-	bool AddItemToInventory(UEnaceItemDefinition* Definition, int32 Count = 1);
-
-	/** Check if inventory has item */
-	UFUNCTION(BlueprintPure, Category = "Enace|Inventory")
-	bool HasItemInInventory(UEnaceItemDefinition* Definition, int32 MinCount = 1) const;
-
-	/** Get count of item in inventory */
-	UFUNCTION(BlueprintPure, Category = "Enace|Inventory")
-	int32 GetItemCountInInventory(UEnaceItemDefinition* Definition) const;
-
-	/** Test function: add TestItemDefinition to inventory */
-	UFUNCTION(BlueprintCallable, Category = "Enace|Inventory")
-	void TestAddItem();
-
-	/** Test function: add TestItemDefinition to first world container (chest) */
-	UFUNCTION(BlueprintCallable, Category = "Enace|Inventory")
-	void TestAddItemToWorldChest();
 
 	/** Add pitch input (look up/down) */
 	UFUNCTION(BlueprintCallable, Category = "Artillery|Camera")
