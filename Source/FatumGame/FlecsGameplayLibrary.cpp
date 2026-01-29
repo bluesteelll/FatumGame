@@ -3,7 +3,6 @@
 #include "FlecsGameplayLibrary.h"
 #include "FlecsArtillerySubsystem.h"
 #include "FlecsComponents.h"
-#include "Worlds/FlecsWorld.h"
 #include "Systems/BarrageEntitySpawner.h"
 #include "Engine/StaticMesh.h"
 
@@ -22,13 +21,13 @@ static UFlecsArtillerySubsystem* GetFlecsSubsystem(UObject* WorldContextObject)
 static flecs::entity GetFlecsEntityForKey(UFlecsArtillerySubsystem* Subsystem, FSkeletonKey BarrageKey)
 {
 	if (!Subsystem || !BarrageKey.IsValid()) return flecs::entity();
-	UFlecsWorld* FlecsWorld = Subsystem->GetFlecsWorld();
+	flecs::world* FlecsWorld = Subsystem->GetFlecsWorld();
 	if (!FlecsWorld) return flecs::entity();
 
 	uint64 EntityId = Subsystem->GetFlecsEntityForBarrageKey(BarrageKey);
 	if (EntityId == 0) return flecs::entity();
 
-	return FlecsWorld->World.entity(static_cast<flecs::entity_t>(EntityId));
+	return FlecsWorld->entity(static_cast<flecs::entity_t>(EntityId));
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -66,10 +65,10 @@ void UFlecsGameplayLibrary::SpawnWorldItem(
 	FSkeletonKey EntityKey = Result.EntityKey;
 	Subsystem->EnqueueCommand([Subsystem, EntityKey, ItemDefinition, Mesh, Count, DespawnTime]()
 	{
-		UFlecsWorld* FlecsWorld = Subsystem->GetFlecsWorld();
+		flecs::world* FlecsWorld = Subsystem->GetFlecsWorld();
 		if (!FlecsWorld) return;
 
-		flecs::entity Entity = FlecsWorld->World.entity()
+		flecs::entity Entity = FlecsWorld->entity()
 			.set<FItemData>({ ItemDefinition, Count, DespawnTime })
 			.set<FBarrageBody>({ EntityKey })
 			.set<FISMRender>({ Mesh, FVector::OneVector })
@@ -108,10 +107,10 @@ void UFlecsGameplayLibrary::SpawnDestructible(
 	FSkeletonKey EntityKey = Result.EntityKey;
 	Subsystem->EnqueueCommand([Subsystem, EntityKey, Mesh, MaxHP]()
 	{
-		UFlecsWorld* FlecsWorld = Subsystem->GetFlecsWorld();
+		flecs::world* FlecsWorld = Subsystem->GetFlecsWorld();
 		if (!FlecsWorld) return;
 
-		flecs::entity Entity = FlecsWorld->World.entity()
+		flecs::entity Entity = FlecsWorld->entity()
 			.set<FHealthData>({ MaxHP, MaxHP, 0.f })
 			.set<FBarrageBody>({ EntityKey })
 			.set<FISMRender>({ Mesh, FVector::OneVector })
@@ -151,10 +150,10 @@ void UFlecsGameplayLibrary::SpawnLootableDestructible(
 	FSkeletonKey EntityKey = Result.EntityKey;
 	Subsystem->EnqueueCommand([Subsystem, EntityKey, Mesh, MaxHP, MinDrops, MaxDrops]()
 	{
-		UFlecsWorld* FlecsWorld = Subsystem->GetFlecsWorld();
+		flecs::world* FlecsWorld = Subsystem->GetFlecsWorld();
 		if (!FlecsWorld) return;
 
-		flecs::entity Entity = FlecsWorld->World.entity()
+		flecs::entity Entity = FlecsWorld->entity()
 			.set<FHealthData>({ MaxHP, MaxHP, 0.f })
 			.set<FLootData>({ MinDrops, MaxDrops })
 			.set<FBarrageBody>({ EntityKey })

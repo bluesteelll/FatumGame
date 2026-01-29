@@ -25,8 +25,6 @@ public class FatumGame : ModuleRules
 				"Barrage",
 				"SkeletonKey",
 				"Cabling",
-				// Collision system (includes Phosphorus)
-				"BarrageCollision",
 				// ECS (Flecs integration)
 				"UnrealFlecs",
 				"FlecsLibrary",

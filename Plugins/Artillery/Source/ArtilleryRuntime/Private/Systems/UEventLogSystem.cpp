@@ -22,6 +22,19 @@ void UEventLogSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	SET_INITIALIZATION_ORDER_BY_ORDINATEKEY_AND_WORLD
 }
 
+void UEventLogSubsystem::Deinitialize()
+{
+	// CRITICAL: Clear pointer in Artillery FIRST to prevent busy worker calling ArtilleryTick on destroyed object
+	if (UArtilleryDispatch* ArtilleryDispatch = UArtilleryDispatch::SelfPtr)
+	{
+		ArtilleryDispatch->SetEventLogSystem(nullptr);
+	}
+	SelfPtr = nullptr;
+	MyDispatch = nullptr;
+	EventLog.Empty();
+	Super::Deinitialize();
+}
+
 void UEventLogSubsystem::ArtilleryTick()
 {
 	if (MyDispatch != nullptr)

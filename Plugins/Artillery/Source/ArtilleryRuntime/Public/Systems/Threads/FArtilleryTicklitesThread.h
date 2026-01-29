@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "HAL/Runnable.h"
 #include <Ticklite.h>
+#include <atomic>
 
 //this is a busy-style thread, which runs preset bodies of work in a specified order. Generally, the goal is that it never
 //actually sleeps. In fact, it only ever waits on the Artillery busy thread.
@@ -115,8 +116,9 @@ public:
 		return FBarragePrimitive::IsNotNull(temp) ? temp : nullptr;
 	}
 	
-	FArtilleryTicklitesWorker(): LocalNow(0), DispatchOwner(nullptr), running(false)
+	FArtilleryTicklitesWorker(): LocalNow(0), DispatchOwner(nullptr)
 	{
+		running.store(false, std::memory_order_relaxed);
 		QueuedAdds = MakeShareable(new TickliteRequests(8192));
 	}
 
@@ -193,7 +195,7 @@ public:
 	{
 		LocalNow = 0;
 		UE_LOG(LogTemp, Display, TEXT("Artillery: Booting SimTicklites thread."));
-		running = true;
+		running.store(true, std::memory_order_release);
 		return true;
 	}
 	
@@ -216,7 +218,7 @@ public:
 	{
 		StartTicklitesSim->Wait();
 		DispatchOwner->ThreadSetup();
-		while(running) {
+		while(running.load(std::memory_order_acquire)) {
 
 			for(TickliteGroup& Group : ExecutionGroups)
 			{
@@ -225,7 +227,7 @@ public:
 					CalcINE(Tickable);
 				}
 			}
-			
+
 			//if we have any ticklite requests, perform their calculations here and then
 			//add them.
 			//TODO: Reassess 12/10/24
@@ -242,8 +244,20 @@ public:
 				}
 				QueuedAdds->Dequeue();
 			}
-			
+
+			// SAFETY: Check running flag before waiting (may be set to false during shutdown)
+			if (!running.load(std::memory_order_acquire))
+			{
+				break;
+			}
+
 			StartTicklitesApply->Wait();
+
+			// SAFETY: Check running flag after wait (shutdown may have occurred while waiting)
+			if (!running.load(std::memory_order_acquire))
+			{
+				break;
+			}
 			StartTicklitesApply->Reset(); // we can run long on sim, not on apply.
 
 			for (auto& Group : ExecutionGroups)
@@ -278,7 +292,7 @@ public:
 	virtual void Exit() override
 	{
 		UE_LOG(LogTemp, Display, TEXT("Artillery: Exiting SimTicklites thread."));
-		running = false;
+		running.store(false, std::memory_order_release);
 		Cleanup();
 	}
 
@@ -297,8 +311,8 @@ public:
 private:
 	void Cleanup()
 	{
-		running = false;
+		running.store(false, std::memory_order_release);
 	}
-	
-	bool running;
+
+	std::atomic<bool> running;
 };

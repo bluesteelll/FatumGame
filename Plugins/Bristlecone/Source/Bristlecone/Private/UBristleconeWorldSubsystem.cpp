@@ -98,6 +98,7 @@ void UBristleconeWorldSubsystem::Initialize(FSubsystemCollectionBase& Collection
 
 void UBristleconeWorldSubsystem::OnWorldBeginPlay(UWorld& InWorld)
 {
+	Super::OnWorldBeginPlay(InWorld);
 	if ([[maybe_unused]] const UWorld* World = InWorld.GetWorld())
 	{
 	}

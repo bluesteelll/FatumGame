@@ -60,10 +60,6 @@
 		{
 			"Name": "Locomo",
 			"Enabled": true
-		},
-		{
-			"Name": "Phosphorus",
-			"Enabled": true
 		}
 	]
 }

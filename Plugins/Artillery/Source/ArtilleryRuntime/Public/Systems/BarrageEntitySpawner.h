@@ -77,12 +77,6 @@ public:
 	static FVector CalculateColliderSize(UStaticMesh* Mesh, FVector Scale);
 
 	/**
-	 * Get mesh pivot offset (distance from pivot to geometry center).
-	 * Used to align physics (centered) with rendering (pivot-based).
-	 */
-	static FVector GetMeshPivotOffset(UStaticMesh* Mesh);
-
-	/**
 	 * Apply behavior tags to an entity.
 	 */
 	static void ApplyBehaviorTags(UArtilleryDispatch* Artillery, FSkeletonKey Key,
@@ -267,8 +261,7 @@ private:
 		TMap<FSkeletonKey, int32> KeyToIndex;
 		TArray<FSkeletonKey> IndexToKey; // For reverse lookup when removing
 
-		// Pivot offset: distance from mesh pivot to geometry center
-		// Used to convert physics position (at center) back to render position (at pivot)
+		// Pivot offset to center mesh on physics body (same for all instances of this mesh)
 		FVector PivotOffset = FVector::ZeroVector;
 	};
 

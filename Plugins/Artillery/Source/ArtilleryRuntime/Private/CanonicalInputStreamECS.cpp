@@ -11,6 +11,7 @@ void UCanonicalInputStreamECS::Initialize(FSubsystemCollectionBase& Collection)
 
 void UCanonicalInputStreamECS::OnWorldBeginPlay(UWorld& InWorld)
 {
+	Super::OnWorldBeginPlay(InWorld);
 }
 
 void UCanonicalInputStreamECS::Deinitialize()

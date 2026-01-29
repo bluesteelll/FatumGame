@@ -11,6 +11,12 @@ FArtilleryBusyWorker::FArtilleryBusyWorker() : RequestorQueue_Abilities_TripleBu
 {
 	UE_LOG(LogTemp, Display, TEXT("Artillery:BusyWorker: Constructing Artillery"));
 	TagRollbackManagement = TSet<FConservedTags>();
+	ContingentInputECSLinkage = nullptr;
+	ContingentPhysicsLinkage = nullptr;
+	ParticleSystemPointer = nullptr;
+	ProjectileSystemPointer = nullptr;
+	EventLogSystemPointer = nullptr;
+	FlecsSystemPointer = nullptr;
 }
 
 FArtilleryBusyWorker::~FArtilleryBusyWorker()
@@ -20,9 +26,9 @@ FArtilleryBusyWorker::~FArtilleryBusyWorker()
 
 bool FArtilleryBusyWorker::Init()
 {
-	//you cannot reorder these. it is a magic ordering put in place for a hack. 
+	//you cannot reorder these. it is a magic ordering put in place for a hack.
 	UE_LOG(LogTemp, Display, TEXT("Artillery:BusyWorker: Initializing Artillery thread"));
-	running = true;
+	running.store(true, std::memory_order_seq_cst);
 	return true;
 }
 
@@ -216,18 +222,30 @@ void FArtilleryBusyWorker::ProcessRequestRouterBusyWorkerThread()
 void FArtilleryBusyWorker::RunFrameProcessingLoop(bool missedPrior, uint64_t currentIndexCabling, bool burstDropDetected, bool sent, uint32_t LastIncrementWindow, uint32_t lsbTime, const uint32_t SendHertzFactor, const uint32_t Period, const std::chrono::microseconds HalfStep, UArtilleryDispatch* ArtilleryDispatch)
 {
 	timeBeginPeriod(1);
-	
-	while (running)
+
+	while (running.load(std::memory_order_seq_cst))
 	{
+		// Early exit check - critical pointers may be cleared during shutdown
+		if (ContingentInputECSLinkage == nullptr || !running.load(std::memory_order_seq_cst))
+		{
+			break;
+		}
+
 		if (!sent &&
 			(
 				InputRingBuffer != nullptr && !InputRingBuffer.Get()->IsEmpty()
 				|| SeqNumber % SendHertzFactor <= SendHertzFactor / 2 //we no longer slide all the way to the end.
 				//Instead, we only slide to 1/2, so somewhat less latency than a curious version of 256hz.
-				//I resent it, but the beast of nonetime had to go. 
+				//I resent it, but the beast of nonetime had to go.
 			)
 		)
 		{
+			// Double-check pointers before heavy processing
+			if (ContingentInputECSLinkage == nullptr || !running.load(std::memory_order_seq_cst))
+			{
+				UE_LOG(LogTemp, Warning, TEXT("Artillery:BusyWorker: Exiting loop - pre-processing check"));
+				break;
+			}
 			CustomTimer<"BusyWorkerCoreLoop"> Time;
 			currentIndexCabling = CablingControlStream->highestInput;
 			PacketElement current = 0;
@@ -238,6 +256,12 @@ void FArtilleryBusyWorker::RunFrameProcessingLoop(bool missedPrior, uint64_t cur
 			* Ultimately, rollback can never solve everything. The windows just get too wide.
 			*/
 			sent = true;
+			// Check pointer before use - may be cleared during shutdown
+			if (ContingentInputECSLinkage == nullptr || !running.load(std::memory_order_seq_cst))
+			{
+				UE_LOG(LogTemp, Warning, TEXT("Artillery:BusyWorker: Exiting loop - post-sim check"));
+				break;
+			}
 			TickliteNow = ContingentInputECSLinkage->Now(); // this updates ONCE PER CYCLE. ONCE. THIS IS INTENDED.
 
 			ProcessRequestRouterBusyWorkerThread();
@@ -247,39 +271,71 @@ void FArtilleryBusyWorker::RunFrameProcessingLoop(bool missedPrior, uint64_t cur
 			{
 				if (TagSet)
 				{
-					TagSet->CacheLayer();	
+					TagSet->CacheLayer();
 				}
 			}
-			
+
+			// Check before RunLocomotions
+			if (!running.load(std::memory_order_seq_cst))
+			{
+				UE_LOG(LogTemp, Warning, TEXT("Artillery:BusyWorker: Exiting loop - before RunLocomotions"));
+				break;
+			}
+
 			ArtilleryDispatch->RunLocomotions();
+
 			//such a simple thing, after all this work.
-			if (ContingentPhysicsLinkage == nullptr) 
+			if (ContingentPhysicsLinkage == nullptr)
 			{
 				//TODO: do we need to trigger this here????
 				//StartTicklitesApply->Trigger();
 			}
 			else // yeah, I know it's optional, but stylistically, it's important.
 			{
+				// Check before physics
+				if (!running.load(std::memory_order_seq_cst))
+				{
+					UE_LOG(LogTemp, Warning, TEXT("Artillery:BusyWorker: Exiting loop - before physics"));
+					break;
+				}
+
 				ContingentPhysicsLinkage->StackUp();
 
 				StartTicklitesApply->Trigger();
 				StartRunAhead->Trigger();
+
+				// Check before StepWorld (expensive operation)
+				if (!running.load(std::memory_order_seq_cst))
+				{
+					UE_LOG(LogTemp, Warning, TEXT("Artillery:BusyWorker: Exiting loop - before StepWorld"));
+					break;
+				}
+
 				ContingentPhysicsLinkage->StepWorld(TickliteNow, SeqNumber);
+
+				// Check after StepWorld
+				if (!running.load(std::memory_order_seq_cst))
+				{
+					UE_LOG(LogTemp, Warning, TEXT("Artillery:BusyWorker: Exiting loop - after StepWorld"));
+					break;
+				}
+
 				// ReSharper disable once CppExpressionWithoutSideEffects (it has _ rather a lot _ of side-effects)
 				ContingentPhysicsLinkage->BroadcastContactEvents();
-				if (ParticleSystemPointer)
+
+				if (ParticleSystemPointer && running.load(std::memory_order_seq_cst))
 				{
 					ParticleSystemPointer->ArtilleryTick(); //currently a no-op.
 				}
-				if (ProjectileSystemPointer)
+				if (ProjectileSystemPointer && running.load(std::memory_order_seq_cst))
 				{
 					ProjectileSystemPointer->ArtilleryTick();
 				}
-				if (EventLogSystemPointer)
+				if (EventLogSystemPointer && running.load(std::memory_order_seq_cst))
 				{
 					EventLogSystemPointer->ArtilleryTick();
 				}
-				if (FlecsSystemPointer)
+				if (FlecsSystemPointer && running.load(std::memory_order_seq_cst))
 				{
 					FlecsSystemPointer->ArtilleryTick();
 				}
@@ -296,34 +352,54 @@ void FArtilleryBusyWorker::RunFrameProcessingLoop(bool missedPrior, uint64_t cur
 			if (SeqNumber % SendHertzFactor == 0)
 			{
 				sent = false;
-				
+
 			}
 			++SeqNumber;
 		}//because we would be pushing our luck w. the error bars on sleep in certain cases, we try to detect those so we can instead spin. Hence the modifier.
 		//this is saying if the current time + the sleep time + the margin for error is less than the target time, then we can sleep.
 		else if (lsbTime + (1.3 * (HalfStep).count()) <= (LastIncrementWindow + Period))
 		{
+			// Check before sleep
+			if (!running.load(std::memory_order_seq_cst))
+			{
+				UE_LOG(LogTemp, Warning, TEXT("Artillery:BusyWorker: Exiting loop - before sleep"));
+				break;
+			}
 			std::this_thread::sleep_for(HalfStep);
 			lsbTime = NarrowClock::getSlicedMicrosecondNow();
 		}
-		
+
+		// Check if we should exit - ContingentInputECSLinkage may be cleared during shutdown
+		if (!running.load(std::memory_order_seq_cst) || ContingentInputECSLinkage == nullptr)
+		{
+			break;
+		}
 		lsbTime = ContingentInputECSLinkage->Now();
 	}
+
 }
 
 uint32 FArtilleryBusyWorker::Run()
 {
-	UE_LOG(LogTemp, Display, TEXT("Artillery:BusyWorker: Running Artillery thread"));
+	UE_LOG(LogTemp, Warning, TEXT("Artillery:BusyWorker: Run() started, running=%d"), running.load(std::memory_order_seq_cst));
+
 	if (RequestorQueue_Abilities_TripleBuffer == nullptr)
 	{
+		UE_LOG(LogTemp, Error, TEXT("Artillery:BusyWorker: RequestorQueue_Abilities_TripleBuffer is null, aborting"));
 		return -1;
 	}
-	
+
+	if (ContingentInputECSLinkage == nullptr)
+	{
+		UE_LOG(LogTemp, Error, TEXT("Artillery:BusyWorker: ContingentInputECSLinkage is null at Run() start, aborting"));
+		return -2;
+	}
+
 	bool missedPrior = false;
 	uint64_t currentIndexCabling = 0;
 	bool burstDropDetected = false;
 	bool sent = false;
-	//TODO: remember why this needs to be an int. 
+	//TODO: remember why this needs to be an int.
 	//if you wanna use this for a really long lived session, you'll need to fix it. you know. one longer than 34 years.
 	SeqNumber = 0;
 	//Hi! Jake here! Reminding you that this will CYCLE
@@ -346,8 +422,24 @@ uint32 FArtilleryBusyWorker::Run()
 	//so we know it's live, but we don't take a ref to it until this point.
 	//we only use it for GrantFeed, but it's important that we start abiding by separation of concerns
 	//where we can, so we're trying to hide the barrage dependency here in a sense. We can't fully, but.
+
+	// Check again before accessing world
+	if (ContingentInputECSLinkage == nullptr)
+	{
+		UE_LOG(LogTemp, Error, TEXT("Artillery:BusyWorker: ContingentInputECSLinkage became null before ThreadSetup"));
+		return -3;
+	}
+
 	UArtilleryDispatch* ArtilleryDispatch = ContingentInputECSLinkage->GetWorld()->GetSubsystem<UArtilleryDispatch>();
+	if (ArtilleryDispatch == nullptr)
+	{
+		UE_LOG(LogTemp, Error, TEXT("Artillery:BusyWorker: ArtilleryDispatch is null, aborting"));
+		return -4;
+	}
+
 	ArtilleryDispatch->ThreadSetup();
+
+	UE_LOG(LogTemp, Warning, TEXT("Artillery:BusyWorker: Entering RunFrameProcessingLoop"));
 
 	//Run loop is in here.
 	RunFrameProcessingLoop(missedPrior, currentIndexCabling, burstDropDetected, sent, LastIncrementWindow, lsbTime,
@@ -355,23 +447,31 @@ uint32 FArtilleryBusyWorker::Run()
 
 	//just in case we end up unrolling or something weird.
 	timeEndPeriod(1);
-	UE_LOG(LogTemp, Display, TEXT("Artillery:BusyWorker: Run Ended."));
+	UE_LOG(LogTemp, Warning, TEXT("Artillery:BusyWorker: Run() ended normally, running=%d"), running.load(std::memory_order_seq_cst));
 	return 0;
 }
 
 void FArtilleryBusyWorker::Exit()
 {
-	UE_LOG(LogTemp, Display, TEXT("ARTILLERY OFFLINE."));
+	UE_LOG(LogTemp, Warning, TEXT("Artillery:BusyWorker: Exit() called, running=%d"), running.load(std::memory_order_seq_cst));
 	Cleanup();
+	UE_LOG(LogTemp, Warning, TEXT("ARTILLERY OFFLINE."));
 }
 
 void FArtilleryBusyWorker::Stop()
 {
-	UE_LOG(LogTemp, Display, TEXT("Artillery:BusyWorker: Stopping Artillery Busyworker thread."));
+	UE_LOG(LogTemp, Warning, TEXT("Artillery:BusyWorker: Stop() called on object at %p, running at %p, current running=%d"),
+		this, &running, running.load(std::memory_order_seq_cst));
 	Cleanup();
+	UE_LOG(LogTemp, Warning, TEXT("Artillery:BusyWorker: Stop() completed, running=%d"), running.load(std::memory_order_seq_cst));
 }
 
 void FArtilleryBusyWorker::Cleanup()
 {
-	running = false;
+	UE_LOG(LogTemp, Warning, TEXT("Artillery:BusyWorker: Cleanup() called at address %p, setting running=false (was %d)"),
+		&running, running.load(std::memory_order_seq_cst));
+	running.store(false, std::memory_order_seq_cst);
+	// Force memory synchronization
+	std::atomic_thread_fence(std::memory_order_seq_cst);
+	UE_LOG(LogTemp, Warning, TEXT("Artillery:BusyWorker: Cleanup() done, running is now %d"), running.load(std::memory_order_seq_cst));
 }

@@ -38,18 +38,6 @@ FVector FBarrageSpawnUtils::CalculateColliderSize(UStaticMesh* Mesh, FVector Sca
 	return Bounds.BoxExtent * 2.0 * Scale;
 }
 
-FVector FBarrageSpawnUtils::GetMeshPivotOffset(UStaticMesh* Mesh)
-{
-	if (!Mesh)
-	{
-		return FVector::ZeroVector;
-	}
-
-	// GetBounds().Origin = center of mesh geometry relative to mesh pivot
-	// This is the offset we need to account for when syncing physics (centered) with rendering (pivot-based)
-	return Mesh->GetBounds().Origin;
-}
-
 void FBarrageSpawnUtils::ApplyBehaviorTags(UArtilleryDispatch* Artillery, FSkeletonKey Key,
 										   bool bDestructible, bool bDamagesPlayer, bool bReflective)
 {
@@ -109,21 +97,13 @@ FBarrageSpawnResult FBarrageSpawnUtils::SpawnEntity(UWorld* World, const FBarrag
 	ColliderSize.Y = FMath::Max(ColliderSize.Y, 1.0);
 	ColliderSize.Z = FMath::Max(ColliderSize.Z, 1.0);
 
-	// Get pivot offset - this is the distance from mesh pivot to geometry center
-	// Physics body needs to be centered on the geometry, not on the pivot
-	FVector PivotOffset = GetMeshPivotOffset(Params.Mesh);
-	FVector ScaledPivotOffset = PivotOffset * Params.MeshScale;
-
-	// Calculate physics body position:
-	// - Start at requested location (where the mesh pivot should be)
-	// - Add rotated pivot offset to get to geometry center (where physics should be)
+	// Physics body position = actor position (no pivot offset - keeps physics and render aligned)
 	FVector Location = Params.WorldTransform.GetLocation();
 	FQuat Rotation = Params.WorldTransform.GetRotation();
-	FVector PhysicsLocation = Location + Rotation.RotateVector(ScaledPivotOffset);
 
-	// Create physics body at geometry center
+	// Create physics body at actor location
 	FBBoxParams BoxParams = FBarrageBounder::GenerateBoxBounds(
-		PhysicsLocation,
+		Location,
 		ColliderSize.X,
 		ColliderSize.Y,
 		ColliderSize.Z,
@@ -166,10 +146,12 @@ FBarrageSpawnResult FBarrageSpawnUtils::SpawnEntity(UWorld* World, const FBarrag
 	ApplyBehaviorTags(Artillery, Params.EntityKey,
 					  Params.bDestructible, Params.bDamagesPlayer, Params.bReflective);
 
-	// Add render instance
+	// Add render instance - AddInstance will apply pivot offset automatically
 	if (Renderer)
 	{
-		FTransform RenderTransform = Params.WorldTransform;
+		FTransform RenderTransform;
+		RenderTransform.SetLocation(Location);
+		RenderTransform.SetRotation(Rotation);
 		RenderTransform.SetScale3D(Params.MeshScale);
 		Result.RenderInstanceIndex = Renderer->AddInstance(Params.Mesh, Params.Material, RenderTransform, Params.EntityKey);
 	}
@@ -248,10 +230,12 @@ UInstancedStaticMeshComponent* UBarrageRenderManager::GetOrCreateISM(UStaticMesh
 	// Store
 	FMeshGroup& NewGroup = MeshGroups.Add(InMesh);
 	NewGroup.ISM = ISM;
-	// Store pivot offset for physics->render position conversion
-	NewGroup.PivotOffset = FBarrageSpawnUtils::GetMeshPivotOffset(InMesh);
 
-	UE_LOG(LogTemp, Log, TEXT("UBarrageRenderManager: Created ISM for mesh %s (PivotOffset: %s)"),
+	// Calculate pivot offset - this is the same for all instances of this mesh
+	FBoxSphereBounds Bounds = InMesh->GetBounds();
+	NewGroup.PivotOffset = -Bounds.Origin; // Will be scaled per-instance in UpdateTransforms
+
+	UE_LOG(LogTemp, Log, TEXT("UBarrageRenderManager: Created ISM for mesh %s, PivotOffset=%s"),
 		*InMesh->GetName(), *NewGroup.PivotOffset.ToString());
 
 	return ISM;
@@ -267,8 +251,15 @@ int32 UBarrageRenderManager::AddInstance(UStaticMesh* InMesh, UMaterialInterface
 
 	FMeshGroup& Group = MeshGroups.FindChecked(InMesh);
 
-	// Add instance
-	int32 Index = ISM->AddInstance(Transform, true);
+	// Apply pivot offset to center mesh on physics position
+	FVector ScaledPivotOffset = Group.PivotOffset * Transform.GetScale3D();
+	FVector RotatedPivotOffset = Transform.GetRotation().RotateVector(ScaledPivotOffset);
+
+	FTransform AdjustedTransform = Transform;
+	AdjustedTransform.SetLocation(Transform.GetLocation() + RotatedPivotOffset);
+
+	// Add instance with adjusted transform
+	int32 Index = ISM->AddInstance(AdjustedTransform, true);
 
 	// Track
 	Group.KeyToIndex.Add(Key, Index);
@@ -356,30 +347,26 @@ void UBarrageRenderManager::UpdateTransforms()
 			FSkeletonKey Key = KeyIndex.Key;
 			int32 Index = KeyIndex.Value;
 
-			// Get position from Barrage (this is at geometry center)
+			// Get position from Barrage
 			FBLet Body = Physics->GetShapeRef(Key);
 			if (FBarragePrimitive::IsNotNull(Body))
 			{
 				FVector3f Pos = FBarragePrimitive::GetPosition(Body);
 				FQuat4f Rot = FBarragePrimitive::OptimisticGetAbsoluteRotation(Body);
 
-				FQuat Rotation(Rot);
-				FVector PhysicsPosition(Pos);
-
 				// Get current scale from the instance
 				FTransform CurrentTransform;
 				Group.ISM->GetInstanceTransform(Index, CurrentTransform, true);
 				FVector Scale = CurrentTransform.GetScale3D();
 
-				// Calculate render position:
-				// Physics is at geometry center, we need to render at pivot position
-				// RenderPos = PhysicsPos - Rotation.RotateVector(PivotOffset * Scale)
+				// Apply pivot offset scaled and rotated
 				FVector ScaledPivotOffset = Group.PivotOffset * Scale;
-				FVector RenderPosition = PhysicsPosition - Rotation.RotateVector(ScaledPivotOffset);
+				FVector RotatedPivotOffset = FQuat(Rot).RotateVector(ScaledPivotOffset);
 
+				// Render position = physics position + pivot offset
 				FTransform NewTransform;
-				NewTransform.SetLocation(RenderPosition);
-				NewTransform.SetRotation(Rotation);
+				NewTransform.SetLocation(FVector(Pos) + RotatedPivotOffset);
+				NewTransform.SetRotation(FQuat(Rot));
 				NewTransform.SetScale3D(Scale);
 
 				Group.ISM->UpdateInstanceTransform(Index, NewTransform, true, false, false);
@@ -587,6 +574,12 @@ void ABarrageEntitySpawner::UpdatePreview()
 	PreviewMeshComponent->SetVisibility(true);
 	PreviewMeshComponent->SetStaticMesh(Mesh);
 	PreviewMeshComponent->SetRelativeScale3D(MeshScale);
+
+	// Compensate for mesh pivot offset - center the mesh on the actor
+	// Mesh bounds origin is relative to mesh pivot, so we need to offset by -Origin to center it
+	FBoxSphereBounds Bounds = Mesh->GetBounds();
+	FVector MeshPivotOffset = -Bounds.Origin * MeshScale; // Offset to center the mesh
+	PreviewMeshComponent->SetRelativeLocation(MeshPivotOffset);
 
 	if (Material)
 	{

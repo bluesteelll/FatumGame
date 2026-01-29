@@ -183,3 +183,42 @@ struct FTagHasLoot {};
 
 /** Entity is dead (pending cleanup) */
 struct FTagDead {};
+
+/** Entity is a projectile that deals damage on contact */
+struct FTagProjectile {};
+
+/** Entity is a character/player */
+struct FTagCharacter {};
+
+// ═══════════════════════════════════════════════════════════════
+// COLLISION COMPONENTS
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Collision event data. Created when two Flecs-tracked entities collide.
+ * Processed by collision systems, then removed.
+ */
+USTRUCT(BlueprintType)
+struct FFlecsCollisionEvent
+{
+	GENERATED_BODY()
+
+	/** SkeletonKey of the other entity in the collision */
+	UPROPERTY(BlueprintReadOnly, Category = "Collision")
+	FSkeletonKey OtherKey;
+
+	/** Flecs entity ID of the other entity (0 if not tracked by Flecs) */
+	uint64 OtherFlecsId = 0;
+
+	/** World-space contact point */
+	UPROPERTY(BlueprintReadOnly, Category = "Collision")
+	FVector ContactPoint = FVector::ZeroVector;
+
+	/** Is the other entity a projectile? */
+	UPROPERTY(BlueprintReadOnly, Category = "Collision")
+	bool bOtherIsProjectile = false;
+
+	/** Is the other entity static geometry? */
+	UPROPERTY(BlueprintReadOnly, Category = "Collision")
+	bool bOtherIsStatic = false;
+};

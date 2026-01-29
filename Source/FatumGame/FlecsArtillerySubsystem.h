@@ -8,10 +8,11 @@
 #include "ArtilleryActorControllerConcepts.h"
 #include "SkeletonTypes.h"
 #include "ORDIN.h"
+#include "flecs.h"
 #include "FlecsArtillerySubsystem.generated.h"
 
-class UFlecsWorld;
-class UFlecsWorldSubsystem;
+class UBarrageDispatch;
+struct BarrageContactEvent;
 
 /**
  * Bridge subsystem that runs the Flecs ECS world on the Artillery busy worker thread (~120Hz).
@@ -54,7 +55,7 @@ public:
 	// ═══════════════════════════════════════════════════════════════
 
 	/** Get the Flecs world. Only safe from Artillery thread. */
-	UFlecsWorld* GetFlecsWorld() const { return FlecsWorld; }
+	flecs::world* GetFlecsWorld() const { return FlecsWorld.Get(); }
 
 	/** Register a mapping from SkeletonKey to Flecs entity ID (for collision lookups). */
 	void RegisterBarrageEntity(FSkeletonKey BarrageKey, uint64 FlecsEntityId);
@@ -84,12 +85,21 @@ private:
 	/** Set up Flecs systems that run on the Artillery thread. */
 	void SetupFlecsSystems();
 
-	UPROPERTY()
-	TObjectPtr<UFlecsWorld> FlecsWorld;
+	/** Subscribe to Barrage collision events. */
+	void SubscribeToBarrageEvents();
+
+	/** Handle collision event from Barrage. Called on Artillery thread. */
+	void OnBarrageContact(const BarrageContactEvent& Event);
+
+	/** Direct flecs::world - no UFlecsWorld wrapper, no plugin tick functions, no worker threads. */
+	TUniquePtr<flecs::world> FlecsWorld;
 
 	/** MPSC command queue: game thread producers -> artillery thread consumer. */
 	TQueue<TFunction<void()>, EQueueMode::Mpsc> CommandQueue;
 
 	/** SkeletonKey.Obj -> flecs entity_t. Only accessed from Artillery thread. */
 	TMap<uint64, uint64> BarrageKeyIndex;
+
+	/** Delegate handle for Barrage contact events (for cleanup). */
+	FDelegateHandle ContactEventHandle;
 };

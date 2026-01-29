@@ -10,6 +10,7 @@
 
 #include "BarrageDispatch.h"
 #include "NeedA.h"
+#include <atomic>
 
 //this is a busy-style thread, which runs preset bodies of work in a specified order. Generally, the goal is that it never
 //actually sleeps. In fact, it yields rather than sleeps, in general operation.
@@ -70,7 +71,7 @@ class FArtilleryBusyWorker : public FRunnable {
 	
 private:
 	void Cleanup();
-	bool running;
+	std::atomic<bool> running;
 	//this needs to remain private and only be modified or used on this thread.
 	//if you want to add the ability to expose this off-thread, first, see if the ATA already present in ArtilleryDispatch is good enough.
 	//second, assess if you can use a shadow-copy-and-swap pattern identical to the one used for generating the quadtree we expose for radar.

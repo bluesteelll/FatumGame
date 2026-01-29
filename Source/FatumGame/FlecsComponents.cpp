@@ -29,6 +29,11 @@ REGISTER_FLECS_COMPONENT(FTagDestructible);
 REGISTER_FLECS_COMPONENT(FTagPickupable);
 REGISTER_FLECS_COMPONENT(FTagHasLoot);
 REGISTER_FLECS_COMPONENT(FTagDead);
+REGISTER_FLECS_COMPONENT(FTagProjectile);
+REGISTER_FLECS_COMPONENT(FTagCharacter);
+
+// Collision components
+REGISTER_FLECS_COMPONENT(FFlecsCollisionEvent);
 
 // ═══════════════════════════════════════════════════════════════
 // COMPONENT IMPLEMENTATIONS

@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include <thread>
+#include <atomic>
 
 #include "CoreMinimal.h"
 #include "HAL/Runnable.h"
@@ -71,37 +72,50 @@ public:
 	{
 		LocalNow = 0;
 		UE_LOG(LogTemp, Display, TEXT("Artillery: Booting StateTrees thread."));
-		running = true;
+		running.store(true, std::memory_order_release);
 		return true;
 	}
-	
+
 	virtual uint32 Run() override
 	{
 		int SeqNumber = 0;
 		DispatchOwner->ThreadSetup();
-		while(running) {
+		while(running.load(std::memory_order_acquire)) {
 			DispatchOwner->RunEnemySim(SeqNumber);
+
+			// SAFETY: Check running flag before waiting (may be set to false during shutdown)
+			if (!running.load(std::memory_order_acquire))
+			{
+				break;
+			}
+
 			RunAheadStateTrees->Wait();
+
+			// SAFETY: Check running flag after wait (shutdown may have occurred while waiting)
+			if (!running.load(std::memory_order_acquire))
+			{
+				break;
+			}
 			RunAheadStateTrees->Reset(); // we can run long on sim, not on apply.
-			
+
 			++SeqNumber;
-			
+
 			ProcessRequestRouterAIWorkerThread();
 		}
-	
+
 		return 0;
 	}
 
 	virtual void Exit() override
 	{
 		UE_LOG(LogTemp, Display, TEXT("Artillery: Exiting AI thread."));
-		running = false;
+		running.store(false, std::memory_order_release);
 		Cleanup();
 	}
 
 	virtual void Stop() override
 	{
-		running = false;
+		running.store(false, std::memory_order_release);
 		UE_LOG(LogTemp, Display, TEXT("Artillery:AIWorker: Stopping Artillery AI thread."));
 		Cleanup();
 	}
@@ -109,9 +123,9 @@ public:
 private:
 	void Cleanup()
 	{
-		running = false;
+		running.store(false, std::memory_order_release);
 	};
-	
-	bool running;
+
+	std::atomic<bool> running{false};
 };
 

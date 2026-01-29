@@ -104,6 +104,13 @@ void UArtilleryProjectileDispatch::OnWorldBeginPlay(UWorld& InWorld)
 
 void UArtilleryProjectileDispatch::Deinitialize()
 {
+	// CRITICAL: Clear pointer in Artillery FIRST to prevent busy worker calling ArtilleryTick on destroyed object
+	if (UArtilleryDispatch* ArtilleryDispatch = UArtilleryDispatch::SelfPtr)
+	{
+		ArtilleryDispatch->SetProjectileDispatch(nullptr);
+	}
+	SelfPtr = nullptr;
+
 	TSharedPtr<KeyToItemCuckooMap> HoldOpen = ProjectileKeyToMeshManagerMapping;
 	TSharedPtr<TMap<FString, TWeakObjectPtr<AInstancedMeshManager>>> HoldOpenManagers = MeshAssetToMeshManagerMapping;
 	ManagerKeyToMeshManagerMapping->Empty();

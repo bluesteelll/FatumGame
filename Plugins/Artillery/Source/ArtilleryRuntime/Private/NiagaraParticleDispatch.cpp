@@ -36,6 +36,13 @@ void UNiagaraParticleDispatch::OnWorldBeginPlay(UWorld& InWorld)
 
 void UNiagaraParticleDispatch::Deinitialize()
 {
+	// CRITICAL: Clear pointer in Artillery FIRST to prevent busy worker calling ArtilleryTick on destroyed object
+	if (UArtilleryDispatch* ArtilleryDispatch = UArtilleryDispatch::SelfPtr)
+	{
+		ArtilleryDispatch->SetParticleDispatch(nullptr);
+	}
+	SelfPtr = nullptr;
+
 	Super::Deinitialize();
 	NameToNiagaraSystemMapping->Empty();
 	ParticleIDToComponentMapping->Empty();

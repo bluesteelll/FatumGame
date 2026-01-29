@@ -93,7 +93,7 @@ public:
 	// CAMERA CONTROL (works with standard PlayerController)
 	// ═══════════════════════════════════════════════════════════════
 
-	/** Use standard UE camera control instead of Artillery system */
+	/** Use standard UE camera cв ontrol instead of Artillery system */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Artillery|Camera")
 	bool bUseStandardCameraControl = true;
 

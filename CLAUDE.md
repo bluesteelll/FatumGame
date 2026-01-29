@@ -1,5 +1,278 @@
 # FatumGame - Project Documentation
 
+---
+
+## CURRENT STATUS (January 2025)
+
+**Enace → Flecs Migration: COMPLETE**
+**Phosphorus/BarrageCollision → Flecs: COMPLETE**
+**Ensure Errors Fix: COMPLETE**
+
+### What Was Done:
+1. ✅ Deleted `Plugins/Enace/` entirely
+2. ✅ Created `UFlecsArtillerySubsystem` - bridge running Flecs on Artillery's 120Hz thread
+3. ✅ Created `FlecsComponents.h/cpp` - ECS components (FItemData, FHealthData, FBarrageBody, etc.)
+4. ✅ Created `FlecsGameplayLibrary.h/cpp` - Blueprint API for spawn/damage/heal
+5. ✅ Removed Enace references from `ArtilleryCharacter.h/cpp`
+6. ✅ Updated `FatumGame.Build.cs` with Flecs dependencies
+7. ✅ **Deleted `Plugins/Phosphorus/`** - replaced with Flecs collision handling
+8. ✅ **Deleted `Plugins/BarrageCollision/`** - replaced with Flecs collision handling
+9. ✅ Collision handling in `UFlecsArtillerySubsystem::OnBarrageContact()`
+10. ✅ Removed Phosphorus from `Artillery.uplugin` dependencies
+11. ✅ Removed Phosphorus from `ArtilleryRuntime.Build.cs`
+12. ✅ Removed BarrageCollision from `FatumGame.Build.cs`
+13. ✅ Added `RegisterComponentType<T>()` calls in `SetupFlecsSystems()` - **REQUIRED** before using components
+14. ✅ Created `DA_FlecsWorldSettings` Data Asset
+15. ✅ Created `FlecsTestMap`
+16. ✅ **Fixed Super::OnWorldBeginPlay() ensure errors** in 6 subsystem files (editor hang on PIE exit)
+
+### Fixed Subsystem Files (Super::OnWorldBeginPlay added):
+- `Plugins/Cabling/Source/Cabling/Private/UCablingWorldSubsystem.cpp`
+- `Plugins/Bristlecone/Source/Bristlecone/Private/UBristleconeWorldSubsystem.cpp`
+- `Plugins/Artillery/Source/ArtilleryRuntime/Private/ArtilleryDispatch.cpp`
+- `Plugins/Artillery/Source/ArtilleryRuntime/Private/CanonicalInputStreamECS.cpp`
+- `Plugins/Thistle/Source/ThistleRuntime/Private/ThistleDispatch.cpp`
+- `Plugins/sunflower/Source/SunflowerRuntime/Private/SunflowerDispatch.cpp`
+
+### What Needs To Be Done:
+1. ✅ ~~Set Project Settings → World Settings Class = `AFlecsWorldSettings`~~ (NO LONGER NEEDED - using direct flecs::world)
+2. ❌ **RECOMPILE AND TEST** - direct flecs::world should fix threading crash
+3. ✅ ~~Open FlecsTestMap → World Settings → Set Default World~~ (NO LONGER NEEDED)
+4. ❌ Create `BP_FlecsTestGameMode` with `ABarragePlayerController`
+5. ❌ Create `BP_FlecsTestCharacter` from `AArtilleryCharacter`
+6. ❌ Test that Flecs systems run on Artillery thread (check Output Log for "FlecsArtillerySubsystem: Online (direct flecs::world, no plugin tick functions)")
+
+### Key Files:
+- `Source/FatumGame/FlecsArtillerySubsystem.h/cpp` - Bridge subsystem + collision handling + component registration
+- `Source/FatumGame/FlecsComponents.h/cpp` - ECS components + tags (FTagProjectile, FTagCharacter, FFlecsCollisionEvent)
+- `Source/FatumGame/FlecsGameplayLibrary.h/cpp` - Blueprint API
+
+### Critical Implementation Details:
+
+**Component Registration (IMPORTANT):**
+Components MUST be registered in Flecs world before use. In `SetupFlecsSystems()`:
+```cpp
+// Using direct flecs::world API (NOT UFlecsWorld wrapper)
+World.component<FItemData>();
+World.component<FHealthData>();
+// ... all other components
+```
+
+**Collision Flow:**
+```
+Barrage → OnBarrageContactAddedDelegate → UFlecsArtillerySubsystem::OnBarrageContact()
+    → Get FBLet bodies → Extract KeyOutOfBarrage (FSkeletonKey)
+    → Lookup Flecs entity via BarrageKeyIndex
+    → Apply damage/destruction directly (runs on Artillery thread)
+```
+
+### Broken Assets (reference deleted Enace types):
+- `Content/BP_MyArtilleryCharacter.uasset` - has broken refs
+- `Content/DA_EnaceCont.uasset` - orphaned
+- `Content/DA_MyItemDef.uasset` - orphaned
+
+### Flecs World Setup Requirements:
+**NO LONGER NEEDED** - We now create a direct `flecs::world` in `FlecsArtillerySubsystem`, completely bypassing the UnrealFlecs plugin's `UFlecsWorldSubsystem`. This avoids all the plugin's tick functions and internal threading.
+
+~~1. Project Settings → Engine → General Settings → World Settings Class = `AFlecsWorldSettings`~~
+~~2. Map's World Settings → Default World = `DA_FlecsWorldSettings`~~
+~~3. DA_FlecsWorldSettings → Game Loops = empty~~
+~~4. Don't use task threads~~
+
+**Current approach:** Direct `flecs::world` created in `RegistrationImplementation()` with `set_threads(0)` for single-threaded Artillery execution.
+
+### Recent Crashes Fixed:
+1. `Assertion failed: World settings must be of type AFlecsWorldSettings` → Set World Settings Class in Project Settings
+2. `flecs::_::type_impl<FItemData>::id()` crash → Added `RegisterComponentType<T>()` calls before creating systems
+3. `OnWorldBeginPlay has not been called for subsystem X` ensure errors (editor hang on PIE exit) → Added `Super::OnWorldBeginPlay(InWorld);` to all subsystem OnWorldBeginPlay overrides
+4. **Editor hang on PIE exit (Artillery thread race condition)** → Multiple fixes required (see below)
+5. **"cannot begin frame while frame is already in progress" crash** → Switched to direct `flecs::world` (see below)
+6. **`EXCEPTION_ACCESS_VIOLATION` at `FArtilleryTicklitesThread.h:247`** → Added null-checks and atomic running flag (see below)
+
+### PIE Exit Hang Fix (Artillery Thread Race Condition)
+
+**Root Cause:** Artillery busy worker thread (~120Hz) holds raw `ITickHeavy*` pointers to subsystems and calls `ArtilleryTick()` on them. During PIE exit, subsystems are destroyed but the thread may still be running. Additionally, subsystem deinitialization order was incorrect - Cabling/Bristlecone were deinitializing before Artillery, leaving BusyWorker accessing freed memory.
+
+**Fix 1: Made `running` flag atomic in FArtilleryBusyWorker**
+```cpp
+// In FArtilleryBusyWorker.h:
+#include <atomic>
+// ...
+private:
+    std::atomic<bool> running;  // Was: bool running;
+```
+
+**Fix 2: Correct deinitialize order - Stop() FIRST, then wait, then clear pointers**
+```cpp
+// In ArtilleryDispatch.cpp Deinitialize():
+// 1. Signal thread to stop FIRST
+ArtilleryAsyncWorldSim.Stop();
+// 2. Trigger events so other threads wake up
+StartTicklitesSim->Trigger();
+// 3. Wait for thread to finish
+WorldSim_Thread->Kill(); WorldSim_Thread.Reset();
+// 4. NOW safe to clear pointers
+ArtilleryAsyncWorldSim.FlecsSystemPointer = nullptr;
+// ... etc
+```
+
+**Fix 3: Declare subsystem dependencies for correct deinitialize order**
+```cpp
+// In ArtilleryDispatch.cpp Initialize():
+void UArtilleryDispatch::Initialize(FSubsystemCollectionBase& Collection)
+{
+    // CRITICAL: These must be declared BEFORE Super::Initialize()!
+    // Ensures Artillery deinitializes BEFORE Cabling/Bristlecone
+    Collection.InitializeDependency<UTransformDispatch>();
+    Collection.InitializeDependency<UCablingWorldSubsystem>();
+    Collection.InitializeDependency<UBristleconeWorldSubsystem>();
+    Collection.InitializeDependency<UCanonicalInputStreamECS>();
+    Collection.InitializeDependency<UBarrageDispatch>();
+
+    Super::Initialize(Collection);
+    // ...
+}
+
+// Similarly in FlecsArtillerySubsystem.cpp Initialize():
+Collection.InitializeDependency<UArtilleryDispatch>();
+Collection.InitializeDependency<UBarrageDispatch>();
+```
+
+**Fix 4: Each subsystem clears its own pointer in Deinitialize()**
+```cpp
+void UFlecsArtillerySubsystem::Deinitialize()
+{
+    if (UArtilleryDispatch* ArtilleryDispatch = UArtilleryDispatch::SelfPtr)
+    {
+        ArtilleryDispatch->SetFlecsDispatch(nullptr);
+    }
+    // ... cleanup ...
+    Super::Deinitialize();
+}
+```
+
+**Files Modified:**
+- `Plugins/Artillery/Source/ArtilleryRuntime/Public/Systems/Threads/FArtilleryBusyWorker.h` - made `running` atomic
+- `Plugins/Artillery/Source/ArtilleryRuntime/Private/FArtilleryBusyWorker.cpp` - use atomic memory ordering
+- `Plugins/Artillery/Source/ArtilleryRuntime/Private/ArtilleryDispatch.cpp` - fixed deinit order + added InitializeDependency calls
+- `Source/FatumGame/FlecsArtillerySubsystem.cpp` - added InitializeDependency calls + clears SetFlecsDispatch(nullptr)
+- `Plugins/Artillery/.../NiagaraParticleDispatch.cpp` - clears SetParticleDispatch(nullptr)
+- `Plugins/Artillery/.../ArtilleryProjectileDispatch.cpp` - clears SetProjectileDispatch(nullptr)
+- `Plugins/Artillery/.../UEventLogSystem.cpp` - added Deinitialize() with SetEventLogSystem(nullptr)
+- `Plugins/Artillery/.../UEventLogSystem.h` - added Deinitialize() declaration
+
+### Ticklites/AI Thread Crash Fix (EXCEPTION_ACCESS_VIOLATION at line 247)
+
+**Root Cause:** The `FArtilleryTicklitesWorker` and `FStateTreesWorker` threads access `FSharedEventRef` members (`StartTicklitesApply`, `StartTicklitesSim`, `RunAheadStateTrees`) without null-checks. During shutdown, these events may become invalid while the thread is still running, causing `->Reset()` to dereference nullptr.
+
+**Fix 1: Made `running` flag atomic in both thread workers**
+```cpp
+// In FArtilleryTicklitesThread.h and FArtilleryStateTreesThread.h:
+#include <atomic>
+// ...
+private:
+    std::atomic<bool> running{false};  // Was: bool running;
+```
+
+**Fix 2: Added null-checks before using FSharedEventRef in Run() loop**
+```cpp
+// In FArtilleryTicklitesThread.h Run():
+while(running.load(std::memory_order_acquire)) {
+    // ... processing ...
+
+    // SAFETY: Check that event is still valid before waiting
+    if (!StartTicklitesApply.IsValid() || !running.load(std::memory_order_acquire))
+    {
+        break;
+    }
+
+    StartTicklitesApply->Wait();
+
+    // SAFETY: Check again after wait (shutdown may have occurred while waiting)
+    if (!StartTicklitesApply.IsValid() || !running.load(std::memory_order_acquire))
+    {
+        break;
+    }
+    StartTicklitesApply->Reset();
+    // ... apply logic ...
+}
+```
+
+**Fix 3: Use atomic memory ordering for all running flag accesses**
+```cpp
+// Store operations (in Init/Stop/Exit/Cleanup):
+running.store(true, std::memory_order_release);
+running.store(false, std::memory_order_release);
+
+// Load operations (in while loop conditions):
+while(running.load(std::memory_order_acquire)) { ... }
+```
+
+**Files Modified:**
+- `Plugins/Artillery/Source/ArtilleryRuntime/Public/Systems/Threads/FArtilleryTicklitesThread.h` - atomic running, null-checks
+- `Plugins/Artillery/Source/ArtilleryRuntime/Public/Systems/Threads/FArtilleryStateTreesThread.h` - atomic running, null-checks
+
+### IMPORTANT: Subsystem OnWorldBeginPlay Pattern
+All UWorldSubsystem-derived classes MUST call `Super::OnWorldBeginPlay(InWorld);` in their OnWorldBeginPlay override:
+```cpp
+void UMySubsystem::OnWorldBeginPlay(UWorld& InWorld)
+{
+    Super::OnWorldBeginPlay(InWorld);  // REQUIRED!
+    // Your code here...
+}
+```
+Missing this call causes ensure errors and editor hangs when exiting PIE.
+
+### Flecs "cannot begin frame while frame is already in progress" Fix
+
+**Root Cause:** The UnrealFlecs plugin (`Plugins/FlecsIntegration/`) has a `FFlecsWorldSettingsInfo` constructor that **automatically adds 5 tick functions** (MainLoop, PrePhysics, DuringPhysics, PostPhysics, PostUpdateWork). These tick functions call `World.progress()` on the game thread every frame. When our `ArtilleryTick()` also calls `World.progress()` on the Artillery thread, we get a race condition crash.
+
+Additionally, the plugin's `UFlecsWorldSubsystem::CreateWorld()` calls `SetThreads(NumberOfCores - 2)` which enables Flecs' internal worker threads, further complicating the threading model.
+
+**Solution: Create our own flecs::world directly, bypassing the plugin's UFlecsWorld wrapper**
+
+```cpp
+// FlecsArtillerySubsystem.h:
+#include "flecs.h"
+// ...
+TUniquePtr<flecs::world> FlecsWorld;  // Direct flecs::world, NOT UFlecsWorld*
+
+// FlecsArtillerySubsystem.cpp:
+bool UFlecsArtillerySubsystem::RegistrationImplementation()
+{
+    // Create our own flecs::world directly - no plugin tick functions, no worker threads
+    FlecsWorld = MakeUnique<flecs::world>();
+
+    // CRITICAL: Disable Flecs' internal threading - Artillery thread is our only executor
+    FlecsWorld->set_threads(0);
+
+    // Register components with direct flecs API
+    FlecsWorld->component<FItemData>();
+    FlecsWorld->component<FHealthData>();
+    // ... etc
+}
+
+void UFlecsArtillerySubsystem::ArtilleryTick()
+{
+    FlecsWorld->progress(1.0 / 120.0);  // Only caller of progress()
+}
+```
+
+**Key Changes:**
+- `FlecsArtillerySubsystem.h`: Changed `TObjectPtr<UFlecsWorld> FlecsWorld` to `TUniquePtr<flecs::world> FlecsWorld`
+- `FlecsArtillerySubsystem.h`: Added `#include "flecs.h"`
+- `FlecsArtillerySubsystem.cpp`: Removed `#include "Worlds/FlecsWorld.h"` and `#include "Worlds/FlecsWorldSubsystem.h"`
+- `FlecsArtillerySubsystem.cpp`: Create world with `MakeUnique<flecs::world>()`
+- `FlecsArtillerySubsystem.cpp`: Call `FlecsWorld->set_threads(0)` to disable internal threading
+- `FlecsArtillerySubsystem.cpp`: Use `World.component<T>()` instead of `RegisterComponentType<T>()`
+- `FlecsGameplayLibrary.cpp`: Changed `UFlecsWorld*` to `flecs::world*`
+
+**Result:** No more plugin tick functions, no internal worker threads, only Artillery thread calls `progress()`.
+
+**Note:** The `DA_FlecsWorldSettings` data asset and `AFlecsWorldSettings` world settings class are NO LONGER NEEDED. The plugin's world subsystem is completely bypassed.
+
+---
+
 ## Quick Reference
 
 | Property | Value |
@@ -38,19 +311,19 @@ FatumGame/
 ├── Source/                          # C++ source code
 │   ├── FatumGame/                   # Main game module
 │   │   ├── ArtilleryCharacter.*     # Base character class
-│   │   └── BarrageCollisionProcessors.*  # Collision system
+│   │   ├── FlecsArtillerySubsystem.*    # Flecs-Artillery bridge + collision handling
+│   │   ├── FlecsComponents.*        # ECS components and tags
+│   │   └── FlecsGameplayLibrary.*   # Blueprint API for Flecs
 │   ├── FatumGame.Target.cs          # Game build target
 │   └── FatumGameEditor.Target.cs    # Editor build target
-├── Plugins/                         # Project plugins (14 total)
+├── Plugins/                         # Project plugins
 │   ├── Artillery/                   # Weapons & abilities system
 │   ├── Barrage/                     # Jolt Physics integration
-│   ├── BarrageCollision/            # Collision dispatch system
 │   ├── Bristlecone/                 # Network protocol
 │   ├── Cabling/                     # Input/controls system
-│   ├── Enace/                       # Item management system (Entity Ace)
+│   ├── FlecsIntegration/            # Flecs ECS (UnrealFlecs, FlecsLibrary, SolidMacros)
 │   ├── SkeletonKey/                 # Entity identity system
 │   ├── LocomoCore/                  # Locomotion math library
-│   ├── Phosphorus/                  # Event dispatch framework
 │   ├── Thistle/                     # AI system
 │   ├── sunflower/                   # UI system
 │   ├── MassCommunitySample/         # Mass ECS sample
@@ -85,15 +358,20 @@ FatumGame (Main Module)
 │   ├── Niagara (Engine)
 │   ├── SkeletonKey -> GameplayAbilities
 │   ├── Barrage -> CMakeTarget, SkeletonKey, Locomo
-│   ├── Locomo -> SkeletonKey
-│   └── Phosphorus -> GameplayAbilities
+│   └── Locomo -> SkeletonKey
 ├── Barrage
 ├── SkeletonKey
 ├── Cabling
-└── Phosphorus
+├── UnrealFlecs (Flecs ECS)
+├── FlecsLibrary
+└── SolidMacros
+
+ECS Integration:
+├── UnrealFlecs -> FlecsLibrary, SolidMacros, GameplayTags
+├── FlecsLibrary (Flecs C++ wrapper)
+└── SolidMacros (utility macros)
 
 Optional:
-├── Enace (Gameplay Data) -> SkeletonKey, Barrage, ArtilleryRuntime
 ├── Thistle (AI) -> Artillery, MassGameplay, StateTree, SmartObjects
 ├── Sunflower (UI) -> SkeletonKey, Artillery, Thistle, MassAI
 └── MassCommunitySample -> MassGameplay, MassAI, MassCrowd
@@ -122,13 +400,14 @@ Optional:
 **Purpose:** High-performance physics via Jolt engine.
 
 **Key Classes:**
+- `UBarrageDispatch` - World subsystem managing Jolt physics
 - `UBarrageCharacterMovement` - Auto character movement (no BP code needed)
 - `BarrageEntitySpawner` - Drag-and-drop physics entity spawner
-- `UBarrageCollisionProcessors` - Dual-dispatch collision system
 
-**Collision Dispatch Methods:**
-1. **Entity Type Dispatch** - O(1) matrix lookup (fast, known cases)
-2. **Tag-Based Dispatch** - Phosphorus pattern (flexible, dynamic)
+**Collision Events:**
+- `OnBarrageContactAddedDelegate` - Fires when two bodies start touching
+- `OnBarrageContactRemovedDelegate` - Fires when contact ends
+- Events broadcast on Artillery thread (120Hz)
 
 ### 3. SkeletonKey (Entity Identity)
 
@@ -188,66 +467,74 @@ if (EntityTypeUtils::IsProjectile(Key)) { ... }
 
 **Purpose:** Deterministic UDP network protocol for rollback networking.
 
-### 5. Phosphorus (Event Dispatch)
+### 5. Flecs ECS (Replaced Enace + Phosphorus + BarrageCollision)
 
-**Purpose:** Matrix-based event dispatch with tag hierarchy support.
+**Purpose:** Single source of truth for ALL gameplay data. Runs on Artillery's 120Hz thread.
 
-### 6. Enace (Gameplay Data Dispatch)
+**Location:** `Source/FatumGame/` (FlecsArtillerySubsystem, FlecsComponents, FlecsGameplayLibrary)
 
-**Purpose:** Thread-safe storage for structured gameplay data (items, health, damage, loot) indexed by SkeletonKey. Uses libcuckoo maps like TransformDispatch/BarrageDispatch.
-
-**Location:** `Plugins/Enace/`
+**Plugin:** `Plugins/FlecsIntegration/` (Unreal-Flecs by Reddy-dev)
 
 **Architecture:**
 ```
-SkeletonKey → BarrageDispatch   (physics bodies)
-SkeletonKey → TransformDispatch (transforms)
-SkeletonKey → ArtilleryDispatch (tags, abilities)
-SkeletonKey → EnaceDispatch     (gameplay data)
+Flecs World        -> ALL gameplay data (items, health, damage, etc.)
+Barrage/Jolt       -> Physics simulation (unchanged)
+BarrageRenderManager -> ISM rendering (unchanged)
+Artillery          -> Orchestrator calling Flecs.Progress() at 120Hz
 ```
 
 **Key Classes:**
-- `UEnaceDispatch` - World subsystem for gameplay data (libcuckoo maps)
-- `UEnaceItemDefinition` - Data asset defining item types
-- `FEnaceItemData`, `FEnaceHealthData`, `FEnaceDamageData` - Data structs
-- `FItemKey` - SkeletonKey type for items (SFIX_ITEM = 0xC)
+- `UFlecsArtillerySubsystem` - Bridge running Flecs on Artillery thread
+- `UFlecsGameplayLibrary` - Blueprint function library for spawn/damage/heal
+- `FlecsComponents.h` - ECS component definitions
 
-**Thread Safety:** Uses libcuckoo concurrent hash maps. Safe to read/write from Artillery thread without locks.
-
-**Data Types:**
+**Components (in FlecsComponents.h):**
 ```cpp
-FEnaceItemData   { Definition*, Count, DespawnTimer }
-FEnaceHealthData { CurrentHP, MaxHP, Armor }
-FEnaceDamageData { Damage, DamageType, bAreaDamage, AreaRadius }
-FEnaceLootData   { LootTable*, MinDrops, MaxDrops }
+FItemData        { Definition*, Count, DespawnTimer }
+FHealthData      { CurrentHP, MaxHP, Armor }
+FDamageSource    { Damage, DamageType, bAreaDamage, AreaRadius }
+FLootData        { MinDrops, MaxDrops }
+FBarrageBody     { SkeletonKey }
+FISMRender       { Mesh*, Scale }
+FFlecsCollisionEvent { OtherKey, OtherFlecsId, ContactPoint, bOtherIsProjectile }
+// Tags: FTagItem, FTagPickupable, FTagDestructible, FTagHasLoot, FTagDead, FTagProjectile, FTagCharacter
 ```
 
-**Usage:**
+**Thread Safety:** Game thread enqueues commands via `EnqueueCommand()`, Artillery thread executes them before `World.progress()`.
+
+**Usage (Game Thread - Blueprint Safe):**
 ```cpp
-UEnaceDispatch* Enace = UEnaceDispatch::SelfPtr;
+// Spawn world item
+UFlecsGameplayLibrary::SpawnWorldItem(WorldContext, ItemDef, Mesh, Location, Count, DespawnTime);
 
-// Spawn item (creates Barrage physics + registers data)
-FSkeletonKey Key = Enace->SpawnWorldItem(StoneDefinition, Location, 5);
+// Apply damage
+UFlecsGameplayLibrary::ApplyDamageByBarrageKey(WorldContext, BarrageKey, Damage);
 
-// Query in collision handler
-FEnaceItemData ItemData;
-if (Enace->TryGetItemData(Key, ItemData))
-{
-    // Pickup item
-    Inventory->Add(ItemData.Definition, ItemData.Count);
-    Enace->DestroyItem(Key);
-}
-
-// Health system
-Enace->RegisterHealth(EnemyKey, 100.f);
-bool bKilled = Enace->ApplyDamage(EnemyKey, 25.f);
-if (bKilled)
-{
-    Enace->SpawnLoot(EnemyKey, Location);
-}
+// Heal
+UFlecsGameplayLibrary::HealEntityByBarrageKey(WorldContext, BarrageKey, Amount);
 ```
 
-**See Also:** `.claude/ENACE_IMPLEMENTATION_PLAN.md` for full implementation details.
+**Usage (Artillery Thread - Direct Flecs):**
+```cpp
+UFlecsArtillerySubsystem* Sub = UFlecsArtillerySubsystem::SelfPtr;
+flecs::entity Entity = GetFlecsEntityForKey(Sub, BarrageKey);
+
+FHealthData* Health = Entity.try_get_mut<FHealthData>();
+if (Health) Health->CurrentHP -= Damage;
+
+if (!Health->IsAlive()) Entity.add<FTagDead>();
+```
+
+**Flecs Systems (in FlecsArtillerySubsystem::SetupFlecsSystems):**
+- `ItemDespawnSystem` - Decrements timers, tags dead when expired
+- `DeathCheckSystem` - Tags entities with HP <= 0 as dead
+- `DeadEntityCleanupSystem` - Destroys dead entities, unregisters from Barrage
+
+**Collision Handling (in UFlecsArtillerySubsystem::OnBarrageContact):**
+- Subscribes to `UBarrageDispatch::OnBarrageContactAddedDelegate`
+- Automatically handles projectile damage (FDamageSource → FHealthData)
+- Destroys FTagDestructible entities when hit by projectiles
+- Runs directly on Artillery thread (no queueing needed)
 
 ---
 
@@ -310,44 +597,6 @@ float MovementSpeed = 1000.0f
 float AirControlMultiplier = 0.3f
 bool bEnableSprint
 float SprintSpeedMultiplier = 2.0f
-```
-
-### UBarrageCollisionSubsystem
-
-**Location:** `Plugins/BarrageCollision/Source/BarrageCollision/Public/BarrageCollisionSubsystem.h`
-
-World subsystem for collision handling. Integrates Barrage physics with Phosphorus event dispatch.
-
-```cpp
-// Get subsystem
-auto* Collision = UBarrageCollisionSubsystem::Get(GetWorld());
-
-// Entity Type Dispatch (O(1), fast)
-void RegisterTypeHandler(EEntityType A, EEntityType B, FBPCollisionHandler)
-void UnregisterTypeHandler(EEntityType A, EEntityType B)
-bool HasTypeHandler(EEntityType A, EEntityType B) const
-
-// Tag-Based Dispatch (flexible)
-void RegisterTag(FGameplayTag Tag, FGameplayTag Parent = FGameplayTag())
-void RegisterTagHandler(FGameplayTag A, FGameplayTag B, FBPCollisionHandler)
-
-// Native access (C++)
-FBarrageCollisionDispatcher& GetDispatcher()
-```
-
-**Collision Payload:**
-```cpp
-struct FBarrageCollisionPayload {
-    int64 EntityA, EntityB           // Skeleton keys
-    FVector ContactPoint             // World space
-    EEntityType TypeA, TypeB         // Fast dispatch
-    FGameplayTag TagA, TagB          // Tag dispatch
-
-    // Helpers
-    FSkeletonKey GetKeyA/B()
-    bool IsAOfType(EEntityType)
-    FSkeletonKey GetKeyOfTag(FGameplayTag)
-}
 ```
 
 ---
@@ -519,22 +768,41 @@ For in-depth documentation on specific systems, see:
 
 ### Adding Custom Collision Handling
 
+Collision handling is done directly in Flecs via `UFlecsArtillerySubsystem::OnBarrageContact()`.
+
+**Built-in behaviors (automatic):**
+- Projectiles with `FDamageSource` deal damage to entities with `FHealthData`
+- Entities with `FTagDestructible` are tagged `FTagDead` when hit by projectiles
+- Dead entities are cleaned up by `DeadEntityCleanupSystem`
+
+**Adding custom collision logic:**
 ```cpp
-// In your game code initialization
-UBarrageCollisionProcessors* Processors = GetWorld()->GetSubsystem<UBarrageCollisionProcessors>();
+// In UFlecsArtillerySubsystem::OnBarrageContact() add your custom handlers:
+void UFlecsArtillerySubsystem::OnBarrageContact(const BarrageContactEvent& Event)
+{
+    // ... existing code ...
 
-// Entity type dispatch (fast)
-Processors->RegisterTypeHandler(EEntityType::Projectile, EEntityType::Actor,
-    [](const FBarrageCollisionPayload& Payload) {
-        // Handle collision
-        return true; // Consume event
-    });
+    // Custom: Item pickup when player touches item
+    if (FlecsId1 != 0 && FlecsId2 != 0)
+    {
+        flecs::entity Entity1 = World.entity(FlecsId1);
+        flecs::entity Entity2 = World.entity(FlecsId2);
 
-// Tag-based dispatch (flexible)
-Processors->RegisterTagHandler(
-    FGameplayTag::RequestGameplayTag("Barrage.Projectile"),
-    FGameplayTag::RequestGameplayTag("Barrage.Destructible"),
-    MyBPCollisionHandler);
+        // Check if one is item and other is character
+        if (Entity1.has<FTagItem>() && Entity2.has<FTagCharacter>())
+        {
+            // Handle pickup
+            Entity1.add<FTagDead>();
+        }
+    }
+}
+```
+
+**From game thread (Blueprint-safe):**
+```cpp
+// Use UFlecsGameplayLibrary for thread-safe operations
+UFlecsGameplayLibrary::ApplyDamageByBarrageKey(World, TargetKey, 25.f);
+UFlecsGameplayLibrary::KillEntityByBarrageKey(World, EntityKey);
 ```
 
 ### Creating Custom Abilities
@@ -543,50 +811,39 @@ Processors->RegisterTagHandler(
 2. Assign to `FArtilleryGun` phases (prefire/fire/postfire/cosmetic)
 3. Executes on Artillery thread (~120Hz)
 
-### Item Pickup in Collision Handler
+### Item Pickup / Damage (Using Flecs)
 
+**Automatic collision handling** is built into `UFlecsArtillerySubsystem::OnBarrageContact()`:
+- Projectiles with `FDamageSource` automatically damage entities with `FHealthData`
+- Armor is respected: `EffectiveDamage = max(0, Damage - Armor)`
+- Projectiles are tagged `FTagDead` after hit (unless area damage)
+
+**From game thread (Blueprint-safe):**
 ```cpp
-void HandleCollision(const FBarrageCollisionPayload& Payload)
+// Apply damage via Flecs (thread-safe, enqueues to Artillery thread)
+UFlecsGameplayLibrary::ApplyDamageByBarrageKey(World, TargetKey, 25.f);
+
+// Kill entity directly
+UFlecsGameplayLibrary::KillEntityByBarrageKey(World, ItemKey);
+
+// Heal entity
+UFlecsGameplayLibrary::HealEntityByBarrageKey(World, TargetKey, 50.f);
+```
+
+**From Artillery thread (direct Flecs):**
+```cpp
+// In collision handler or Flecs system - no queue needed
+UFlecsArtillerySubsystem* Sub = UFlecsArtillerySubsystem::SelfPtr;
+uint64 FlecsId = Sub->GetFlecsEntityForBarrageKey(Key);
+flecs::entity Entity = Sub->GetFlecsWorld()->World.entity(FlecsId);
+
+FHealthData* Health = Entity.try_get_mut<FHealthData>();
+if (Health)
 {
-    UEnaceDispatch* Enace = UEnaceDispatch::SelfPtr;
-    FSkeletonKey ItemKey = Payload.GetKeyA();
-    FSkeletonKey PlayerKey = Payload.GetKeyB();
-
-    // Check if this is an item (tag check is O(1))
-    FEnaceItemData ItemData;
-    if (Enace->TryGetItemData(ItemKey, ItemData))
+    Health->CurrentHP -= Damage;
+    if (!Health->IsAlive())
     {
-        // Get item definition
-        UEnaceItemDefinition* Def = ItemData.Definition;
-
-        if (Def->ItemId == "HealthPotion")
-        {
-            // Apply healing
-            Enace->Heal(PlayerKey, 50.f);
-        }
-        else
-        {
-            // Add to inventory
-            PlayerInventory->AddItem(Def, ItemData.Count);
-        }
-
-        // Destroy item (removes physics, render, and data)
-        Enace->DestroyItem(ItemKey);
-    }
-
-    // Damage handling
-    FEnaceDamageData DamageData;
-    FEnaceHealthData HealthData;
-    if (Enace->TryGetDamageData(Payload.GetKeyA(), DamageData) &&
-        Enace->TryGetHealthData(Payload.GetKeyB(), HealthData))
-    {
-        bool bKilled = Enace->ApplyDamage(Payload.GetKeyB(), DamageData.Damage);
-        if (bKilled)
-        {
-            // Spawn loot from killed entity
-            FVector Location = /* get from TransformDispatch */;
-            Enace->SpawnLoot(Payload.GetKeyB(), Location);
-        }
+        Entity.add<FTagDead>(); // Cleanup system handles destruction
     }
 }
 ```

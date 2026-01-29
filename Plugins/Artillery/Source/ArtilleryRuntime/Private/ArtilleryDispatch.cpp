@@ -123,6 +123,20 @@ void UArtilleryDispatch::ThreadSetup()
 
 void UArtilleryDispatch::Initialize(FSubsystemCollectionBase& Collection)
 {
+	// CRITICAL: Declare dependencies BEFORE Super::Initialize() so Unreal knows the correct order.
+	// Artillery MUST deinitialize BEFORE these subsystems because the BusyWorker thread
+	// uses data from them. Without this, Cabling/Bristlecone may deinitialize first,
+	// leaving BusyWorker accessing freed memory and causing hangs on shutdown.
+	//
+	// InitializeDependency ensures:
+	// 1. Artillery initializes AFTER these dependencies
+	// 2. Artillery deinitializes BEFORE these dependencies
+	Collection.InitializeDependency<UTransformDispatch>();
+	Collection.InitializeDependency<UCablingWorldSubsystem>();
+	Collection.InitializeDependency<UBristleconeWorldSubsystem>();
+	Collection.InitializeDependency<UCanonicalInputStreamECS>();
+	Collection.InitializeDependency<UBarrageDispatch>();
+
 	Super::Initialize(Collection);
 	GetWorld()->GetSubsystem<UOrdinatePillar>()->REGISTERLORD(OrdinateSeqKey, this, this);
 }
@@ -134,6 +148,7 @@ void UArtilleryDispatch::PostInitialize()
 
 void UArtilleryDispatch::OnWorldBeginPlay(UWorld& InWorld)
 {
+	Super::OnWorldBeginPlay(InWorld);
 	if ([[maybe_unused]] const UWorld* World = InWorld.GetWorld())
 	{
 	}
@@ -141,43 +156,71 @@ void UArtilleryDispatch::OnWorldBeginPlay(UWorld& InWorld)
 
 void UArtilleryDispatch::Deinitialize()
 {
+	UE_LOG(LogTemp, Warning, TEXT("ArtilleryDispatch::Deinitialize: Starting deinit sequence"));
+
 	IsReady = false;
 	SelfPtr = nullptr;
 	if (__LIVE__)
 	{
 		___LIVING->IsReady = false;
 	}
+
+	// STEP 1: Signal the BusyWorker to stop FIRST (sets running=false)
+	// The thread will see this flag and exit its loop gracefully
+	UE_LOG(LogTemp, Warning, TEXT("ArtilleryDispatch::Deinitialize: Calling BusyWorker.Stop() FIRST"));
+	ArtilleryAsyncWorldSim.Stop();
+
+	// STEP 2: Trigger events so other threads can wake up and exit
+	UE_LOG(LogTemp, Warning, TEXT("ArtilleryDispatch::Deinitialize: Triggering events for other workers"));
 	StartTicklitesSim->Trigger();
+	StartTicklitesApply->Trigger();
+	StartRunAhead->Trigger();
+
+	// STEP 3: Stop other workers
 	ArtilleryAIWorker_LockstepToWorldSim.Stop();
 	ArtilleryTicklitesWorker_LockstepToWorldSim.Stop();
 	ArtilleryTicklitesWorker_LockstepToWorldSim.Exit();
 	ArtilleryAIWorker_LockstepToWorldSim.Exit();
-	StartTicklitesApply->Trigger();
-	StartRunAhead->Trigger();
-	//We have to wait on worldsim, but we actually can just hard kill ticklites.
+
+	// STEP 4: Wait for BusyWorker thread to actually finish
+	// This MUST happen BEFORE we clear pointers!
+	UE_LOG(LogTemp, Warning, TEXT("ArtilleryDispatch::Deinitialize: Waiting for BusyWorker thread to finish"));
+	if (WorldSim_Thread.IsValid())
+	{
+		WorldSim_Thread->Kill(); // jthread auto-joins when reset() is called inside Kill()
+		UE_LOG(LogTemp, Warning, TEXT("ArtilleryDispatch::Deinitialize: BusyWorker thread finished"));
+		WorldSim_Thread.Reset();
+	}
+
+	// STEP 5: NOW it's safe to clear pointers - thread is no longer running
+	UE_LOG(LogTemp, Warning, TEXT("ArtilleryDispatch::Deinitialize: Clearing BusyWorker pointers (thread is stopped)"));
+	ArtilleryAsyncWorldSim.FlecsSystemPointer = nullptr;
+	ArtilleryAsyncWorldSim.ProjectileSystemPointer = nullptr;
+	ArtilleryAsyncWorldSim.ParticleSystemPointer = nullptr;
+	ArtilleryAsyncWorldSim.EventLogSystemPointer = nullptr;
+	ArtilleryAsyncWorldSim.ContingentInputECSLinkage = nullptr;
+	ArtilleryAsyncWorldSim.ContingentPhysicsLinkage = nullptr;
+
+	UE_LOG(LogTemp, Warning, TEXT("ArtilleryDispatch::Deinitialize: Killing Ticklites thread"));
 
 	if (WorldSim_Ticklites_Thread.IsValid())
 	{
-		//otoh, we need to hard kill the ticklites, so far as I can tell, and keep rolling. This should actually generally
-		//not proc.
-		WorldSim_Ticklites_Thread->Kill(true);
+		WorldSim_Ticklites_Thread->Kill();
 		WorldSim_Ticklites_Thread.Reset();
 	}
+
+	UE_LOG(LogTemp, Warning, TEXT("ArtilleryDispatch::Deinitialize: Killing AI thread"));
+
 	if (WorldSim_AI_Thread.IsValid())
 	{
-		WorldSim_AI_Thread->Kill((true));
+		WorldSim_AI_Thread->Kill();
 		WorldSim_AI_Thread.Reset();
 	}
-	ArtilleryAsyncWorldSim.Stop();
+
+	UE_LOG(LogTemp, Warning, TEXT("ArtilleryDispatch::Deinitialize: Calling BusyWorker.Exit()"));
 	ArtilleryAsyncWorldSim.Exit();
 
-	//we save the world sim for last. this means we'll always have a thread to cycle the events, in case we miss our timing.
-	if (WorldSim_Thread.IsValid())
-	{
-		//if we don't wait, this will crash when ECS facts are referenced. That's just... uh... the facts.
-		WorldSim_Thread->Kill();
-		WorldSim_Thread.Reset();
-	}
+	UE_LOG(LogTemp, Warning, TEXT("ArtilleryDispatch::Deinitialize: Cleaning up data structures"));
 
 	GameplayTagContainerToDataMapping->Empty();
 	KeyToControlliteMapping->Empty();
@@ -185,7 +228,11 @@ void UArtilleryDispatch::Deinitialize()
 	GunByKey->Empty();
 	HoldOpen.Reset();
 
+	UE_LOG(LogTemp, Warning, TEXT("ArtilleryDispatch::Deinitialize: Calling Super::Deinitialize()"));
+
 	Super::Deinitialize();
+
+	UE_LOG(LogTemp, Warning, TEXT("ArtilleryDispatch::Deinitialize: COMPLETE"));
 }
 
 AttrMapPtr UArtilleryDispatch::GetAttribSetShadowByObjectKey(const FSkeletonKey& Target, ArtilleryTime Now) const
@@ -644,6 +691,8 @@ Attr3Ptr UArtilleryDispatch::GetVecAttr(const FSkeletonKey Owner, Attr3 Attrib) 
 
 UArtilleryDispatch::~UArtilleryDispatch()
 {
+	UE_LOG(LogTemp, Warning, TEXT("UArtilleryDispatch::~UArtilleryDispatch: Destructor called"));
+
 	TSharedPtr<AtomicTagArray> holdopen = GameplayTagContainerToDataMapping;
 	if (std::shared_ptr<WorldRecord> mandius = MyWorldState.lock()) //despair lol
 	{
@@ -655,27 +704,32 @@ UArtilleryDispatch::~UArtilleryDispatch()
 	//These should NEVER come up. Deinit always runs before decon, but just in case, we do want to handle it here.
 	if (WorldSim_Thread)
 	{
+		UE_LOG(LogTemp, Warning, TEXT("UArtilleryDispatch::~UArtilleryDispatch: Cleaning up WorldSim_Thread in destructor (should not happen)"));
 		ArtilleryAsyncWorldSim.Exit();
 		StartTicklitesSim->Trigger();
 		WorldSim_Thread->Kill();
 	}
 	if (WorldSim_Ticklites_Thread)
 	{
+		UE_LOG(LogTemp, Warning, TEXT("UArtilleryDispatch::~UArtilleryDispatch: Cleaning up Ticklites_Thread in destructor (should not happen)"));
 		ArtilleryTicklitesWorker_LockstepToWorldSim.Exit();
 		StartTicklitesApply->Trigger();
 		StartTicklitesSim->Trigger();
-		WorldSim_Thread->Kill();
+		WorldSim_Ticklites_Thread->Kill(); // FIX: was incorrectly killing WorldSim_Thread
 	}
 	if (WorldSim_AI_Thread)
 	{
+		UE_LOG(LogTemp, Warning, TEXT("UArtilleryDispatch::~UArtilleryDispatch: Cleaning up AI_Thread in destructor (should not happen)"));
 		ArtilleryAIWorker_LockstepToWorldSim.Exit();
 		StartTicklitesApply->Trigger();
 		StartTicklitesSim->Trigger();
-		WorldSim_AI_Thread->Kill(true);
+		WorldSim_AI_Thread->Kill();
 	}
 	WorldSim_Thread = nullptr;
 	WorldSim_AI_Thread = nullptr;
 	WorldSim_Ticklites_Thread = nullptr;
+
+	UE_LOG(LogTemp, Warning, TEXT("UArtilleryDispatch::~UArtilleryDispatch: Destructor complete"));
 }
 
 void UArtilleryDispatch::AddTagToEntity(const FSkeletonKey Owner, const FGameplayTag& TagToAdd) const

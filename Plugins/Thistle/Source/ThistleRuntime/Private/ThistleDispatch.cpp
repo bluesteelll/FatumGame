@@ -17,6 +17,7 @@ void UThistleDispatch::Initialize(FSubsystemCollectionBase& Collection)
 
 void UThistleDispatch::OnWorldBeginPlay(UWorld& InWorld)
 {
+	Super::OnWorldBeginPlay(InWorld);
 	if ([[maybe_unused]] const UWorld* World = InWorld.GetWorld()) {
 		UE_LOG(LogTemp, Warning, TEXT("ThistleDispatch:Subsystem: World beginning play"));
 	}
