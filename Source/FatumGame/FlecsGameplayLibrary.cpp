@@ -3,8 +3,14 @@
 #include "FlecsGameplayLibrary.h"
 #include "FlecsArtillerySubsystem.h"
 #include "FlecsComponents.h"
+#include "FlecsProjectileDefinition.h"
 #include "Systems/BarrageEntitySpawner.h"
+#include "BarrageDispatch.h"
+#include "FBarragePrimitive.h"
+#include "FBShapeParams.h"
+#include "Skeletonize.h"
 #include "Engine/StaticMesh.h"
+#include <atomic>
 
 // ═══════════════════════════════════════════════════════════════
 // HELPERS
@@ -21,13 +27,8 @@ static UFlecsArtillerySubsystem* GetFlecsSubsystem(UObject* WorldContextObject)
 static flecs::entity GetFlecsEntityForKey(UFlecsArtillerySubsystem* Subsystem, FSkeletonKey BarrageKey)
 {
 	if (!Subsystem || !BarrageKey.IsValid()) return flecs::entity();
-	flecs::world* FlecsWorld = Subsystem->GetFlecsWorld();
-	if (!FlecsWorld) return flecs::entity();
-
-	uint64 EntityId = Subsystem->GetFlecsEntityForBarrageKey(BarrageKey);
-	if (EntityId == 0) return flecs::entity();
-
-	return FlecsWorld->entity(static_cast<flecs::entity_t>(EntityId));
+	// Lock-free O(1) lookup via bidirectional binding (atomic in FBarragePrimitive)
+	return Subsystem->GetEntityForBarrageKey(BarrageKey);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -70,12 +71,12 @@ void UFlecsGameplayLibrary::SpawnWorldItem(
 
 		flecs::entity Entity = FlecsWorld->entity()
 			.set<FItemData>({ ItemDefinition, Count, DespawnTime })
-			.set<FBarrageBody>({ EntityKey })
 			.set<FISMRender>({ Mesh, FVector::OneVector })
 			.add<FTagItem>()
 			.add<FTagPickupable>();
 
-		Subsystem->RegisterBarrageEntity(EntityKey, Entity.id());
+		// Bidirectional binding: sets FBarrageBody + atomic in FBarragePrimitive
+		Subsystem->BindEntityToBarrage(Entity, EntityKey);
 	});
 }
 
@@ -112,11 +113,11 @@ void UFlecsGameplayLibrary::SpawnDestructible(
 
 		flecs::entity Entity = FlecsWorld->entity()
 			.set<FHealthData>({ MaxHP, MaxHP, 0.f })
-			.set<FBarrageBody>({ EntityKey })
 			.set<FISMRender>({ Mesh, FVector::OneVector })
 			.add<FTagDestructible>();
 
-		Subsystem->RegisterBarrageEntity(EntityKey, Entity.id());
+		// Bidirectional binding: sets FBarrageBody + atomic in FBarragePrimitive
+		Subsystem->BindEntityToBarrage(Entity, EntityKey);
 	});
 }
 
@@ -156,12 +157,12 @@ void UFlecsGameplayLibrary::SpawnLootableDestructible(
 		flecs::entity Entity = FlecsWorld->entity()
 			.set<FHealthData>({ MaxHP, MaxHP, 0.f })
 			.set<FLootData>({ MinDrops, MaxDrops })
-			.set<FBarrageBody>({ EntityKey })
 			.set<FISMRender>({ Mesh, FVector::OneVector })
 			.add<FTagDestructible>()
 			.add<FTagHasLoot>();
 
-		Subsystem->RegisterBarrageEntity(EntityKey, Entity.id());
+		// Bidirectional binding: sets FBarrageBody + atomic in FBarragePrimitive
+		Subsystem->BindEntityToBarrage(Entity, EntityKey);
 	});
 }
 
@@ -293,4 +294,255 @@ bool UFlecsGameplayLibrary::GetHealth_ArtilleryThread(UFlecsArtillerySubsystem* 
 	OutCurrentHP = Health->CurrentHP;
 	OutMaxHP = Health->MaxHP;
 	return true;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PROJECTILE SPAWNING
+// ═══════════════════════════════════════════════════════════════
+
+namespace
+{
+	std::atomic<uint32> GProjectileCounter{0};
+}
+
+FSkeletonKey UFlecsGameplayLibrary::SpawnProjectileFromDefinition(
+	UObject* WorldContextObject,
+	UFlecsProjectileDefinition* Definition,
+	FVector Location,
+	FVector Direction,
+	float SpeedOverride)
+{
+	if (!Definition || !Definition->Mesh)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("SpawnProjectileFromDefinition: Invalid definition or no mesh!"));
+		return FSkeletonKey();
+	}
+
+	float Speed = SpeedOverride > 0.f ? SpeedOverride : Definition->DefaultSpeed;
+
+	return SpawnProjectile(
+		WorldContextObject,
+		Definition->Mesh,
+		Location,
+		Direction,
+		Speed,
+		Definition->Damage,
+		Definition->GravityFactor,
+		Definition->LifetimeSeconds,
+		Definition->CollisionRadius,
+		Definition->VisualScale,
+		Definition->bIsBouncing,
+		Definition->Restitution,
+		Definition->Friction,
+		Definition->MaxBounces
+	);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// QUERY (game-thread) - CROSS-THREAD READ WARNING
+//
+// These functions read Flecs data from Game thread while Artillery
+// thread (~120Hz) may be modifying it. This is a KNOWN RACE CONDITION
+// with the following mitigations:
+//
+// 1. Data is POD (float, bool) - atomic on most architectures
+// 2. Worst case: stale data by 1-2 frames (8-16ms) - acceptable for UI
+// 3. Entity validity checked before access
+// 4. Subsystem deinitialize check prevents UAF
+//
+// For CRITICAL health checks (damage, death), use the _ArtilleryThread
+// variants via EnqueueCommand() instead.
+//
+// Future improvement: Add thread-safe health cache updated each tick.
+// ═══════════════════════════════════════════════════════════════
+
+float UFlecsGameplayLibrary::GetEntityHealth(UObject* WorldContextObject, FSkeletonKey BarrageKey)
+{
+	UFlecsArtillerySubsystem* Subsystem = GetFlecsSubsystem(WorldContextObject);
+	if (!Subsystem || !BarrageKey.IsValid()) return -1.f;
+
+	// Safety: Check if subsystem is deinitializing (Flecs world may be destroyed)
+	if (!Subsystem->GetFlecsWorld()) return -1.f;
+
+	float CurrentHP, MaxHP;
+	if (GetHealth_ArtilleryThread(Subsystem, BarrageKey, CurrentHP, MaxHP))
+	{
+		return CurrentHP;
+	}
+	return -1.f;
+}
+
+float UFlecsGameplayLibrary::GetEntityMaxHealth(UObject* WorldContextObject, FSkeletonKey BarrageKey)
+{
+	UFlecsArtillerySubsystem* Subsystem = GetFlecsSubsystem(WorldContextObject);
+	if (!Subsystem || !BarrageKey.IsValid()) return -1.f;
+
+	// Safety: Check if subsystem is deinitializing (Flecs world may be destroyed)
+	if (!Subsystem->GetFlecsWorld()) return -1.f;
+
+	float CurrentHP, MaxHP;
+	if (GetHealth_ArtilleryThread(Subsystem, BarrageKey, CurrentHP, MaxHP))
+	{
+		return MaxHP;
+	}
+	return -1.f;
+}
+
+bool UFlecsGameplayLibrary::IsEntityAlive(UObject* WorldContextObject, FSkeletonKey BarrageKey)
+{
+	UFlecsArtillerySubsystem* Subsystem = GetFlecsSubsystem(WorldContextObject);
+	if (!Subsystem || !BarrageKey.IsValid()) return false;
+
+	// Safety: Check if subsystem is deinitializing (Flecs world may be destroyed)
+	if (!Subsystem->GetFlecsWorld()) return false;
+
+	return IsAlive_ArtilleryThread(Subsystem, BarrageKey);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PROJECTILE SPAWNING
+// ═══════════════════════════════════════════════════════════════
+
+FSkeletonKey UFlecsGameplayLibrary::SpawnProjectile(
+	UObject* WorldContextObject,
+	UStaticMesh* Mesh,
+	FVector Location,
+	FVector Direction,
+	float Speed,
+	float Damage,
+	float GravityFactor,
+	float LifetimeSeconds,
+	float CollisionRadius,
+	float VisualScale,
+	bool bIsBouncing,
+	float Restitution,
+	float Friction,
+	int32 MaxBounces)
+{
+	if (!WorldContextObject || !Mesh)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("PROJ_DEBUG SpawnProjectile: Invalid parameters! Mesh=%p"), Mesh);
+		return FSkeletonKey();
+	}
+
+	UWorld* World = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::ReturnNull);
+	if (!World)
+	{
+		UE_LOG(LogTemp, Error, TEXT("PROJ_DEBUG SpawnProjectile: No World!"));
+		return FSkeletonKey();
+	}
+
+	UBarrageDispatch* Barrage = World->GetSubsystem<UBarrageDispatch>();
+	UBarrageRenderManager* Renderer = UBarrageRenderManager::Get(World);
+	UFlecsArtillerySubsystem* Subsystem = World->GetSubsystem<UFlecsArtillerySubsystem>();
+
+	if (!Barrage)
+	{
+		UE_LOG(LogTemp, Error, TEXT("PROJ_DEBUG SpawnProjectile: No UBarrageDispatch!"));
+		return FSkeletonKey();
+	}
+
+	// Generate unique key
+	const uint32 Id = ++GProjectileCounter;
+	FSkeletonKey EntityKey = FSkeletonKey(FORGE_SKELETON_KEY(Id, SKELLY::SFIX_GUN_SHOT));
+
+	UE_LOG(LogTemp, Log, TEXT("PROJ_DEBUG SpawnProjectile START: Key=%llu Counter=%u Loc=%s Bouncing=%d"),
+		static_cast<uint64>(EntityKey), Id, *Location.ToString(), bIsBouncing);
+
+	// Normalize direction
+	Direction.Normalize();
+	FVector Velocity = Direction * Speed;
+
+	// Create sphere physics body
+	FBSphereParams SphereParams = FBarrageBounder::GenerateSphereBounds(Location, CollisionRadius);
+
+	FBLet Body;
+	if (bIsBouncing)
+	{
+		// Bouncing projectile - uses PROJECTILE layer for proper collision detection
+		Body = Barrage->CreateBouncingSphere(
+			SphereParams,
+			EntityKey,
+			static_cast<uint16>(EPhysicsLayer::PROJECTILE),
+			Restitution,
+			Friction
+		);
+		UE_LOG(LogTemp, Log, TEXT("PROJ_DEBUG CreateBouncingSphere: Key=%llu Body=%p"),
+			static_cast<uint64>(EntityKey), Body.Get());
+	}
+	else
+	{
+		// Sensor projectile - destroyed on first hit
+		Body = Barrage->CreatePrimitive(
+			SphereParams,
+			EntityKey,
+			static_cast<uint16>(EPhysicsLayer::PROJECTILE),
+			true // IsSensor
+		);
+		UE_LOG(LogTemp, Log, TEXT("PROJ_DEBUG CreatePrimitive: Key=%llu Body=%p"),
+			static_cast<uint64>(EntityKey), Body.Get());
+	}
+
+	if (!FBarragePrimitive::IsNotNull(Body))
+	{
+		UE_LOG(LogTemp, Error, TEXT("PROJ_DEBUG SpawnProjectile: FAILED to create physics body! Key=%llu"),
+			static_cast<uint64>(EntityKey));
+		return FSkeletonKey();
+	}
+
+	// Set velocity and gravity
+	FBarragePrimitive::SetVelocity(Velocity, Body);
+	FBarragePrimitive::SetGravityFactor(GravityFactor, Body);
+
+	// Add ISM render instance
+	if (Renderer)
+	{
+		FTransform RenderTransform;
+		RenderTransform.SetLocation(Location);
+		RenderTransform.SetScale3D(FVector(VisualScale));
+		int32 ISMIndex = Renderer->AddInstance(Mesh, nullptr, RenderTransform, EntityKey);
+		UE_LOG(LogTemp, Log, TEXT("PROJ_DEBUG AddInstance: Key=%llu ISMIndex=%d"),
+			static_cast<uint64>(EntityKey), ISMIndex);
+	}
+	else
+	{
+		UE_LOG(LogTemp, Warning, TEXT("PROJ_DEBUG SpawnProjectile: No Renderer! Key=%llu"),
+			static_cast<uint64>(EntityKey));
+	}
+
+	// Create Flecs entity on Artillery thread
+	if (Subsystem)
+	{
+		Subsystem->EnqueueCommand([Subsystem, EntityKey, Mesh, Damage, LifetimeSeconds, VisualScale, MaxBounces]()
+		{
+			flecs::world* FlecsWorld = Subsystem->GetFlecsWorld();
+			if (!FlecsWorld)
+			{
+				UE_LOG(LogTemp, Error, TEXT("PROJ_DEBUG FlecsEntity: No FlecsWorld! Key=%llu"),
+					static_cast<uint64>(EntityKey));
+				return;
+			}
+
+			flecs::entity Entity = FlecsWorld->entity()
+				.set<FDamageSource>({ Damage, FGameplayTag(), false, 0.f })
+				.set<FProjectileData>({ LifetimeSeconds, MaxBounces, 0 })
+				.set<FISMRender>({ Mesh, FVector(VisualScale) })
+				.add<FTagProjectile>();
+
+			// Bidirectional binding: sets FBarrageBody + atomic in FBarragePrimitive
+			Subsystem->BindEntityToBarrage(Entity, EntityKey);
+			UE_LOG(LogTemp, Log, TEXT("PROJ_DEBUG FlecsEntity CREATED: Key=%llu FlecsId=%llu"),
+				static_cast<uint64>(EntityKey), Entity.id());
+		});
+	}
+	else
+	{
+		UE_LOG(LogTemp, Warning, TEXT("PROJ_DEBUG SpawnProjectile: No FlecsSubsystem! Key=%llu"),
+			static_cast<uint64>(EntityKey));
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("PROJ_DEBUG SpawnProjectile DONE: Key=%llu Vel=%s"),
+		static_cast<uint64>(EntityKey), *Velocity.ToString());
+
+	return EntityKey;
 }

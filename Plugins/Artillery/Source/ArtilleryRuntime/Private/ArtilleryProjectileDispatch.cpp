@@ -364,6 +364,7 @@ void UArtilleryProjectileDispatch::OnBarrageContactAdded(const BarrageContactEve
 					bool found = ProjectileToGunMapping->find(KeyIntoArtillery, GunKey);
 					if (found)
 					{
+						// This is an Artillery-registered projectile - handle collision and cleanup
 						TSharedPtr<FArtilleryGun> ProjectileGun = MyDispatch->GetPointerToGun(GunKey);
 						if (ProjectileGun && UBarrageDispatch::SelfPtr)
 						{
@@ -377,9 +378,12 @@ void UArtilleryProjectileDispatch::OnBarrageContactAdded(const BarrageContactEve
 								}
 							}
 						}
+						// Only tombstone Artillery-registered projectiles here.
+						// Non-Artillery projectiles (e.g., Flecs) handle their own cleanup.
+						UArtilleryLibrary::TombstonePrimitive(KeyIntoArtillery);
 					}
-					// This works though!
-					UArtilleryLibrary::TombstonePrimitive(KeyIntoArtillery);
+					// NOTE: Removed unconditional TombstonePrimitive call that was killing
+					// non-Artillery projectiles and causing ghost bullet ISM instances.
 				}
 			}
 		}

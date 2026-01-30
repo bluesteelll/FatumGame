@@ -271,6 +271,11 @@ private:
 	TMap<UStaticMesh*, FMeshGroup> MeshGroups;
 	bool bHasEntities = false;
 
+	/** Thread-safe queue for pending removals (Artillery thread -> Game thread) */
+	TQueue<FSkeletonKey, EQueueMode::Mpsc> PendingRemovals;
+
 	UInstancedStaticMeshComponent* GetOrCreateISM(UStaticMesh* InMesh, UMaterialInterface* InMaterial);
 	void UpdateTransforms();
+	void ProcessPendingRemovals();
+	void DoRemoveInstance(FSkeletonKey Key);
 };

@@ -12,6 +12,7 @@
 class UPrimaryDataAsset;
 class UStaticMesh;
 class UFlecsArtillerySubsystem;
+class UFlecsProjectileDefinition;
 
 /**
  * Blueprint-callable functions for Flecs ECS gameplay operations.
@@ -75,6 +76,49 @@ public:
 		EPhysicsLayer PhysicsLayer = EPhysicsLayer::MOVING
 	);
 
+	/**
+	 * Spawn a projectile from a FlecsProjectileDefinition data asset.
+	 * This is the preferred method - configure projectile in editor, spawn at runtime.
+	 *
+	 * @param Definition The projectile data asset (configure in Content Browser)
+	 * @param Location Spawn location (muzzle position)
+	 * @param Direction Direction to fire (will be normalized)
+	 * @param SpeedOverride Override speed from definition (0 = use definition)
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Flecs|Projectile", meta = (WorldContext = "WorldContextObject"))
+	static FSkeletonKey SpawnProjectileFromDefinition(
+		UObject* WorldContextObject,
+		UFlecsProjectileDefinition* Definition,
+		FVector Location,
+		FVector Direction,
+		float SpeedOverride = 0.f
+	);
+
+	/**
+	 * Spawn a physics projectile as a Flecs entity (manual parameters).
+	 * Use SpawnProjectileFromDefinition for data-driven approach.
+	 *
+	 * @param MaxBounces Max bounces before despawn. -1 = infinite (true bouncing projectile).
+	 *                   0+ = will be destroyed after hitting N+1 targets/surfaces.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Flecs|Projectile", meta = (WorldContext = "WorldContextObject"))
+	static FSkeletonKey SpawnProjectile(
+		UObject* WorldContextObject,
+		UStaticMesh* Mesh,
+		FVector Location,
+		FVector Direction,
+		float Speed = 5000.f,
+		float Damage = 25.f,
+		float GravityFactor = 0.3f,
+		float LifetimeSeconds = 10.f,
+		float CollisionRadius = 5.f,
+		float VisualScale = 1.f,
+		bool bIsBouncing = true,
+		float Restitution = 0.8f,
+		float Friction = 0.2f,
+		int32 MaxBounces = -1
+	);
+
 	// ═══════════════════════════════════════════════════════════════
 	// ENTITY LIFECYCLE (game-thread safe, enqueued to Artillery thread)
 	// ═══════════════════════════════════════════════════════════════
@@ -121,4 +165,33 @@ public:
 	/** Get entity health data. Returns false if entity has no FHealthData. Artillery thread only. */
 	static bool GetHealth_ArtilleryThread(UFlecsArtillerySubsystem* Subsystem, FSkeletonKey BarrageKey,
 		float& OutCurrentHP, float& OutMaxHP);
+
+	// ═══════════════════════════════════════════════════════════════
+	// QUERY (game-thread) - CROSS-THREAD READ
+	// These read from Flecs which runs on Artillery thread (~120Hz).
+	// Values may be stale by 1-2 frames. Safe for UI/cosmetics.
+	// For critical gameplay decisions, use _ArtilleryThread variants
+	// via EnqueueCommand().
+	// ═══════════════════════════════════════════════════════════════
+
+	/**
+	 * Get current health for an entity. Returns -1 if entity has no health.
+	 * WARNING: Cross-thread read - value may be stale by 1-2 frames.
+	 */
+	UFUNCTION(BlueprintPure, Category = "Flecs|Query", meta = (WorldContext = "WorldContextObject"))
+	static float GetEntityHealth(UObject* WorldContextObject, FSkeletonKey BarrageKey);
+
+	/**
+	 * Get max health for an entity. Returns -1 if entity has no health.
+	 * WARNING: Cross-thread read - value may be stale by 1-2 frames.
+	 */
+	UFUNCTION(BlueprintPure, Category = "Flecs|Query", meta = (WorldContext = "WorldContextObject"))
+	static float GetEntityMaxHealth(UObject* WorldContextObject, FSkeletonKey BarrageKey);
+
+	/**
+	 * Check if entity is alive (has health > 0).
+	 * WARNING: Cross-thread read - value may be stale by 1-2 frames.
+	 */
+	UFUNCTION(BlueprintPure, Category = "Flecs|Query", meta = (WorldContext = "WorldContextObject"))
+	static bool IsEntityAlive(UObject* WorldContextObject, FSkeletonKey BarrageKey);
 };

@@ -5,6 +5,7 @@
 #include "BarrageDispatch.h"
 #include "FBarragePrimitive.h"
 #include "FlecsComponents.h"
+#include "Systems/BarrageEntitySpawner.h"
 
 bool UFlecsArtillerySubsystem::RegistrationImplementation()
 {
@@ -22,6 +23,15 @@ bool UFlecsArtillerySubsystem::RegistrationImplementation()
 	// Setting threads to 0 means all systems run synchronously in progress().
 	FlecsWorld->set_threads(0);
 
+	// Cache subsystem pointers to avoid repeated SelfPtr lookups on hot paths.
+	CachedBarrageDispatch = UBarrageDispatch::SelfPtr;
+	CachedArtilleryDispatch = UArtilleryDispatch::SelfPtr;
+
+	if (!CachedBarrageDispatch)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("FlecsArtillerySubsystem: UBarrageDispatch not available during registration"));
+	}
+
 	// Create Flecs systems that run each tick on the Artillery thread.
 	SetupFlecsSystems();
 
@@ -29,10 +39,13 @@ bool UFlecsArtillerySubsystem::RegistrationImplementation()
 	SubscribeToBarrageEvents();
 
 	// Register ourselves with ArtilleryDispatch so the busy worker calls our ArtilleryTick.
-	UArtilleryDispatch::SelfPtr->SetFlecsDispatch(this);
+	if (CachedArtilleryDispatch)
+	{
+		CachedArtilleryDispatch->SetFlecsDispatch(this);
+	}
 	SelfPtr = this;
 
-	UE_LOG(LogTemp, Warning, TEXT("FlecsArtillerySubsystem: Online (direct flecs::world, no plugin tick functions)"));
+	UE_LOG(LogTemp, Warning, TEXT("FlecsArtillerySubsystem: Online (lock-free bidirectional binding, %d stages available)"), MaxStages);
 	return true;
 }
 
@@ -44,6 +57,7 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 	World.component<FItemData>();
 	World.component<FHealthData>();
 	World.component<FDamageSource>();
+	World.component<FProjectileData>();
 	World.component<FLootData>();
 	World.component<FBarrageBody>();
 	World.component<FISMRender>();
@@ -79,6 +93,73 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 		});
 
 	// ─────────────────────────────────────────────────────────
+	// PROJECTILE LIFETIME SYSTEM
+	// Projectiles with FProjectileData get their lifetime
+	// decremented. When it hits 0, the projectile is destroyed.
+	// Velocity check is DISABLED for true bouncing projectiles
+	// (MaxBounces == -1) - they only die by lifetime.
+	//
+	// NOTE: Captures 'this' to use CachedBarrageDispatch instead of
+	// unsafe UBarrageDispatch::SelfPtr access. The pointer is cached
+	// at registration time and cleared during Deinitialize().
+	// ─────────────────────────────────────────────────────────
+	World.system<FProjectileData, const FBarrageBody>("ProjectileLifetimeSystem")
+		.with<FTagProjectile>()
+		.without<FTagDead>()
+		.each([this](flecs::entity Entity, FProjectileData& Projectile, const FBarrageBody& Body)
+		{
+			constexpr float DeltaTime = 1.f / 120.f;
+			Projectile.LifetimeRemaining -= DeltaTime;
+			if (Projectile.LifetimeRemaining <= 0.f)
+			{
+				UE_LOG(LogTemp, Log, TEXT("PROJ_DEBUG Lifetime EXPIRED: Key=%llu FlecsId=%llu"),
+					static_cast<uint64>(Body.BarrageKey), Entity.id());
+				Entity.add<FTagDead>();
+				return;
+			}
+
+			// TRUE bouncing projectiles (MaxBounces == -1) never die by velocity check
+			// They only die by lifetime or MaxBounces limit (if set)
+			if (Projectile.MaxBounces == -1)
+			{
+				return;
+			}
+
+			// For non-bouncing or limited-bounce projectiles:
+			// Decrement grace period counter
+			if (Projectile.GraceFramesRemaining > 0)
+			{
+				Projectile.GraceFramesRemaining--;
+				return; // Skip velocity check during grace period
+			}
+
+			// Kill stopped projectiles (velocity < 50 units/sec)
+			// Use CachedBarrageDispatch (safe) instead of UBarrageDispatch::SelfPtr (race condition)
+			if (Body.IsValid() && CachedBarrageDispatch)
+			{
+				FBLet Prim = CachedBarrageDispatch->GetShapeRef(Body.BarrageKey);
+				if (FBarragePrimitive::IsNotNull(Prim))
+				{
+					FVector3f Velocity = FBarragePrimitive::GetVelocity(Prim);
+					constexpr float MinVelocitySq = 50.f * 50.f; // 50 units/sec minimum
+					if (Velocity.SizeSquared() < MinVelocitySq)
+					{
+						UE_LOG(LogTemp, Log, TEXT("PROJ_DEBUG VelocityCheck KILLED: Key=%llu FlecsId=%llu Vel=%.2f"),
+							static_cast<uint64>(Body.BarrageKey), Entity.id(), Velocity.Size());
+						Entity.add<FTagDead>();
+					}
+				}
+				else
+				{
+					// Physics body already gone! Mark dead to cleanup ISM.
+					UE_LOG(LogTemp, Warning, TEXT("PROJ_DEBUG PhysicsBody GONE early: Key=%llu FlecsId=%llu"),
+						static_cast<uint64>(Body.BarrageKey), Entity.id());
+					Entity.add<FTagDead>();
+				}
+			}
+		});
+
+	// ─────────────────────────────────────────────────────────
 	// DEATH CHECK SYSTEM
 	// Entities with FHealthData that have CurrentHP <= 0 are
 	// tagged FTagDead.
@@ -95,42 +176,117 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 
 	// ─────────────────────────────────────────────────────────
 	// DEAD ENTITY CLEANUP SYSTEM
-	// Entities tagged FTagDead with a FBarrageBody get their
-	// Barrage key unregistered, then the entity is destroyed.
-	// Runs after death check.
+	// Entities tagged FTagDead get fully cleaned up:
+	// 1. Remove ISM render instance
+	// 2. Unbind from Barrage (clears atomic in FBarragePrimitive)
+	// 3. Mark Barrage physics body for deferred destruction (tombstone)
+	// 4. Destroy Flecs entity
+	//
+	// NOTE: We only call SuggestTombstone(), NOT FinalizeReleasePrimitive().
+	// FinalizeReleasePrimitive is called automatically by ~FBarragePrimitive()
+	// when the tombstone expires and ref count reaches 0.
+	// Calling both causes double-free crash!
 	// ─────────────────────────────────────────────────────────
 	World.system<>("DeadEntityCleanupSystem")
 		.with<FTagDead>()
 		.each([this](flecs::entity Entity)
 		{
-			// Unregister from Barrage key index if this entity has a physics body
 			const FBarrageBody* Body = Entity.try_get<FBarrageBody>();
+			const bool bIsProjectile = Entity.has<FTagProjectile>();
+
+			UE_LOG(LogTemp, Log, TEXT("PROJ_DEBUG Cleanup START: FlecsId=%llu IsProj=%d HasBody=%d"),
+				Entity.id(), bIsProjectile, Body != nullptr);
+
 			if (Body && Body->IsValid())
 			{
-				UnregisterBarrageEntity(Body->BarrageKey);
+				FSkeletonKey Key = Body->BarrageKey;
+
+				UE_LOG(LogTemp, Log, TEXT("PROJ_DEBUG Cleanup ISM: Key=%llu FlecsId=%llu"),
+					static_cast<uint64>(Key), Entity.id());
+
+				// Remove ISM render instance (scheduled to game thread via render manager tick)
+				if (CachedBarrageDispatch && CachedBarrageDispatch->GetWorld())
+				{
+					if (UBarrageRenderManager* Renderer = UBarrageRenderManager::Get(CachedBarrageDispatch->GetWorld()))
+					{
+						Renderer->RemoveInstance(Key);
+					}
+				}
+
+				// Mark Barrage physics body for deferred destruction via tombstone
+				// DO NOT call FinalizeReleasePrimitive here - it will be called
+				// automatically by ~FBarragePrimitive() when tombstone expires
+				if (CachedBarrageDispatch)
+				{
+					FBLet Prim = CachedBarrageDispatch->GetShapeRef(Key);
+					bool bPrimValid = FBarragePrimitive::IsNotNull(Prim);
+
+					UE_LOG(LogTemp, Log, TEXT("PROJ_DEBUG Cleanup Physics: Key=%llu PrimValid=%d"),
+						static_cast<uint64>(Key), bPrimValid);
+
+					if (bPrimValid)
+					{
+						// Clear Flecs binding in FBarragePrimitive (reverse direction)
+						Prim->ClearFlecsEntity();
+						CachedBarrageDispatch->SuggestTombstone(Prim);
+					}
+				}
 			}
 
-			// Destroy the Flecs entity
+			// Destroy the Flecs entity (Flecs handles component cleanup automatically)
 			Entity.destruct();
+
+			UE_LOG(LogTemp, Log, TEXT("PROJ_DEBUG Cleanup DONE: FlecsId=%llu"), Entity.id());
 		});
 }
 
 void UFlecsArtillerySubsystem::ArtilleryTick()
 {
-	if (!FlecsWorld) return;
+	// CRITICAL: Check if deinitializing. If so, exit immediately without touching FlecsWorld.
+	// This prevents use-after-free when Game thread is destroying us.
+	if (bDeinitializing.load(std::memory_order_acquire))
+	{
+		return;
+	}
+
+	// Mark that we're inside ArtilleryTick. Deinitialize() will wait for this to become false.
+	bInArtilleryTick.store(true, std::memory_order_release);
+
+	// Double-check after setting flag (handles race where Deinitialize started between checks)
+	if (bDeinitializing.load(std::memory_order_acquire) || !FlecsWorld)
+	{
+		bInArtilleryTick.store(false, std::memory_order_release);
+		return;
+	}
 
 	// Drain the command queue. All mutations from the game thread are applied here,
 	// on the artillery thread, before Flecs systems run.
 	TFunction<void()> Command;
 	while (CommandQueue.Dequeue(Command))
 	{
+		// Check for deinit between commands (early exit if shutting down)
+		if (bDeinitializing.load(std::memory_order_acquire))
+		{
+			bInArtilleryTick.store(false, std::memory_order_release);
+			return;
+		}
 		Command();
+	}
+
+	// Final check before expensive progress() call
+	if (bDeinitializing.load(std::memory_order_acquire))
+	{
+		bInArtilleryTick.store(false, std::memory_order_release);
+		return;
 	}
 
 	// Progress the Flecs world. This runs all registered Flecs systems.
 	// Artillery busy worker runs at ~120Hz, so each tick is ~8.33ms.
 	constexpr double ArtilleryDeltaTime = 1.0 / 120.0;
 	FlecsWorld->progress(ArtilleryDeltaTime);
+
+	// Clear the in-tick flag
+	bInArtilleryTick.store(false, std::memory_order_release);
 }
 
 void UFlecsArtillerySubsystem::Initialize(FSubsystemCollectionBase& Collection)
@@ -159,28 +315,67 @@ void UFlecsArtillerySubsystem::Deinitialize()
 {
 	UE_LOG(LogTemp, Warning, TEXT("FlecsArtillerySubsystem: Deinitializing..."));
 
-	// CRITICAL: Clear our reference in Artillery FIRST, before destroying ourselves.
-	// The Artillery busy worker thread holds a raw pointer to us and calls ArtilleryTick().
-	// If we don't clear this, the thread will call ArtilleryTick() on a destroyed object.
-	if (UArtilleryDispatch* ArtilleryDispatch = UArtilleryDispatch::SelfPtr)
+	// ═══════════════════════════════════════════════════════════════
+	// STEP 1: Signal ArtilleryTick() to stop and exit early.
+	// This MUST happen BEFORE clearing FlecsDispatch pointer.
+	// ═══════════════════════════════════════════════════════════════
+	bDeinitializing.store(true, std::memory_order_release);
+
+	// ═══════════════════════════════════════════════════════════════
+	// STEP 2: Clear our reference in Artillery to prevent NEW calls.
+	// The Artillery busy worker checks this before calling ArtilleryTick().
+	// ═══════════════════════════════════════════════════════════════
+	if (CachedArtilleryDispatch)
 	{
-		ArtilleryDispatch->SetFlecsDispatch(nullptr);
+		CachedArtilleryDispatch->SetFlecsDispatch(nullptr);
 		UE_LOG(LogTemp, Warning, TEXT("FlecsArtillerySubsystem: Cleared FlecsDispatch pointer in Artillery"));
 	}
+
+	// ═══════════════════════════════════════════════════════════════
+	// STEP 3: Wait for any in-flight ArtilleryTick() to complete.
+	// This is the synchronization barrier that prevents use-after-free.
+	// Timeout after ~100ms (12 Artillery ticks at 120Hz) to prevent deadlock.
+	// ═══════════════════════════════════════════════════════════════
+	constexpr int32 MaxSpinIterations = 1000; // ~100ms with 0.1ms sleep
+	int32 SpinCount = 0;
+	while (bInArtilleryTick.load(std::memory_order_acquire))
+	{
+		if (++SpinCount > MaxSpinIterations)
+		{
+			UE_LOG(LogTemp, Error, TEXT("FlecsArtillerySubsystem: Timeout waiting for ArtilleryTick to exit! Potential crash risk."));
+			break;
+		}
+		FPlatformProcess::Sleep(0.0001f); // 0.1ms
+	}
+
+	if (SpinCount > 0)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("FlecsArtillerySubsystem: Waited %d iterations for ArtilleryTick to exit"), SpinCount);
+	}
+
+	// ═══════════════════════════════════════════════════════════════
+	// STEP 4: Safe cleanup - ArtilleryTick is guaranteed to not be running.
+	// ═══════════════════════════════════════════════════════════════
 
 	// Unsubscribe from Barrage events
 	if (ContactEventHandle.IsValid())
 	{
-		if (UBarrageDispatch* Barrage = UBarrageDispatch::SelfPtr)
+		if (CachedBarrageDispatch)
 		{
-			Barrage->OnBarrageContactAddedDelegate.Remove(ContactEventHandle);
+			CachedBarrageDispatch->OnBarrageContactAddedDelegate.Remove(ContactEventHandle);
 		}
 		ContactEventHandle.Reset();
 	}
 
+	// Clear cached pointers
+	CachedBarrageDispatch = nullptr;
+	CachedArtilleryDispatch = nullptr;
+
 	SelfPtr = nullptr;
+
+	// NOW safe to destroy FlecsWorld - Artillery thread is not accessing it
 	FlecsWorld.Reset();
-	BarrageKeyIndex.Empty();
+
 	Super::Deinitialize();
 }
 
@@ -203,105 +398,191 @@ void UFlecsArtillerySubsystem::SubscribeToBarrageEvents()
 void UFlecsArtillerySubsystem::OnBarrageContact(const BarrageContactEvent& Event)
 {
 	if (!FlecsWorld) return;
+	if (!CachedBarrageDispatch) return;
 
-	UBarrageDispatch* Barrage = UBarrageDispatch::SelfPtr;
-	if (!Barrage) return;
+	// Get physics bodies - O(1) lookup via libcuckoo
+	FBLet Body1 = CachedBarrageDispatch->GetShapeRef(Event.ContactEntity1.ContactKey);
+	FBLet Body2 = CachedBarrageDispatch->GetShapeRef(Event.ContactEntity2.ContactKey);
 
-	// Get physics bodies to extract SkeletonKeys
-	FBLet Body1 = Barrage->GetShapeRef(Event.ContactEntity1.ContactKey);
-	FBLet Body2 = Barrage->GetShapeRef(Event.ContactEntity2.ContactKey);
-
+	// Extract SkeletonKeys (forward binding: FBarragePrimitive → SkeletonKey)
 	FSkeletonKey Key1 = FBarragePrimitive::IsNotNull(Body1) ? Body1->KeyOutOfBarrage : FSkeletonKey();
 	FSkeletonKey Key2 = FBarragePrimitive::IsNotNull(Body2) ? Body2->KeyOutOfBarrage : FSkeletonKey();
 
 	// Skip if both keys are invalid
 	if (!Key1.IsValid() && !Key2.IsValid()) return;
 
-	// Get Flecs entities
-	uint64 FlecsId1 = Key1.IsValid() ? GetFlecsEntityForBarrageKey(Key1) : 0;
-	uint64 FlecsId2 = Key2.IsValid() ? GetFlecsEntityForBarrageKey(Key2) : 0;
-
-	// Skip if neither entity is tracked by Flecs
-	if (FlecsId1 == 0 && FlecsId2 == 0) return;
+	// Get Flecs entities via LOCK-FREE atomic read from FBarragePrimitive - O(1)
+	// Returns 0 if entity is not tracked by Flecs (e.g. Artillery projectiles)
+	uint64 FlecsId1 = FBarragePrimitive::IsNotNull(Body1) ? Body1->GetFlecsEntity() : 0;
+	uint64 FlecsId2 = FBarragePrimitive::IsNotNull(Body2) ? Body2->GetFlecsEntity() : 0;
 
 	flecs::world& World = *FlecsWorld;
 
 	// ─────────────────────────────────────────────────────────
-	// PROJECTILE DAMAGE HANDLING
-	// If one entity is a projectile with FDamageSource and the other has FHealthData,
-	// apply damage directly.
+	// ARTILLERY PROJECTILE DAMAGE HANDLING
+	// Artillery projectiles (spawned via UArtilleryLibrary) are NOT in Flecs.
+	// We detect them via bIsProjectile flag and apply default damage to Flecs targets.
 	// ─────────────────────────────────────────────────────────
-	auto TryApplyProjectileDamage = [&](uint64 ProjectileId, uint64 TargetId, bool bProjectileIsEntity1)
+	constexpr float DefaultProjectileDamage = 25.f;
+
+	// Helper: Apply damage from ANY projectile (Artillery or Flecs) to a Flecs target
+	auto TryApplyDamageToFlecsTarget = [&](uint64 TargetFlecsId, uint64 ProjectileFlecsId, float Damage) -> bool
 	{
-		if (ProjectileId == 0 || TargetId == 0) return false;
+		if (TargetFlecsId == 0) return false;
 
-		flecs::entity Projectile = World.entity(ProjectileId);
-		flecs::entity Target = World.entity(TargetId);
+		flecs::entity Target = World.entity(TargetFlecsId);
+		if (!Target.is_valid()) return false;
 
-		if (!Projectile.is_valid() || !Target.is_valid()) return false;
-
-		const FDamageSource* Damage = Projectile.try_get<FDamageSource>();
 		FHealthData* Health = Target.try_get_mut<FHealthData>();
-
-		if (Damage && Health)
+		if (Health)
 		{
-			// Apply damage (respecting armor)
-			float EffectiveDamage = FMath::Max(0.f, Damage->Damage - Health->Armor);
-			Health->CurrentHP -= EffectiveDamage;
-
-			// Kill projectile after hit (unless it's area damage, handle separately)
-			if (!Damage->bAreaDamage)
+			// If projectile IS in Flecs, use its FDamageSource
+			if (ProjectileFlecsId != 0)
 			{
-				Projectile.add<FTagDead>();
+				flecs::entity Projectile = World.entity(ProjectileFlecsId);
+				if (Projectile.is_valid())
+				{
+					const FDamageSource* DamageSource = Projectile.try_get<FDamageSource>();
+					if (DamageSource)
+					{
+						Damage = DamageSource->Damage;
+
+						// Kill projectile after hit ONLY if it's not a bouncing projectile
+						// Bouncing projectiles (MaxBounces == -1) should continue bouncing
+						const FProjectileData* ProjData = Projectile.try_get<FProjectileData>();
+						bool bIsBouncing = ProjData && ProjData->MaxBounces == -1;
+
+						if (!DamageSource->bAreaDamage && !bIsBouncing)
+						{
+							const FBarrageBody* ProjBody = Projectile.try_get<FBarrageBody>();
+							UE_LOG(LogTemp, Log, TEXT("PROJ_DEBUG HitEntity KILLED: Key=%llu FlecsId=%llu IsArea=%d IsBouncing=%d"),
+								ProjBody ? static_cast<uint64>(ProjBody->BarrageKey) : 0, ProjectileFlecsId, DamageSource->bAreaDamage, bIsBouncing);
+							Projectile.add<FTagDead>();
+						}
+					}
+				}
 			}
 
+			// Apply damage (respecting armor)
+			float EffectiveDamage = FMath::Max(0.f, Damage - Health->Armor);
+			Health->CurrentHP -= EffectiveDamage;
+
+			UE_LOG(LogTemp, Log, TEXT("FlecsCollision: Projectile hit! Damage=%.1f, HP=%.1f/%.1f"),
+				EffectiveDamage, Health->CurrentHP, Health->MaxHP);
 			return true;
 		}
+
+		// No health? Check if destructible
+		if (Target.has<FTagDestructible>())
+		{
+			Target.add<FTagDead>();
+			UE_LOG(LogTemp, Log, TEXT("FlecsCollision: Destructible destroyed by projectile"));
+			return true;
+		}
+
 		return false;
 	};
 
-	// Check if entity 1 is a projectile hitting entity 2
-	if (Event.ContactEntity1.bIsProjectile && FlecsId1 != 0)
+	// Entity 1 is projectile, Entity 2 is target
+	if (Event.ContactEntity1.bIsProjectile && FlecsId2 != 0)
 	{
-		TryApplyProjectileDamage(FlecsId1, FlecsId2, true);
+		TryApplyDamageToFlecsTarget(FlecsId2, FlecsId1, DefaultProjectileDamage);
 	}
-	// Check if entity 2 is a projectile hitting entity 1
-	else if (Event.ContactEntity2.bIsProjectile && FlecsId2 != 0)
+	// Entity 2 is projectile, Entity 1 is target
+	else if (Event.ContactEntity2.bIsProjectile && FlecsId1 != 0)
 	{
-		TryApplyProjectileDamage(FlecsId2, FlecsId1, false);
+		TryApplyDamageToFlecsTarget(FlecsId1, FlecsId2, DefaultProjectileDamage);
 	}
 
 	// ─────────────────────────────────────────────────────────
-	// DESTRUCTIBLE HANDLING
-	// If one entity has FTagDestructible and was hit by a projectile, tag it dead.
+	// BOUNCE GRACE PERIOD RESET
+	// When a Flecs projectile collides with anything (wall, floor, etc.),
+	// reset its grace period so velocity check doesn't kill it mid-bounce.
 	// ─────────────────────────────────────────────────────────
-	auto TryDestroyDestructible = [&](uint64 DestructibleId, bool bHitByProjectile)
+	auto ResetGracePeriodIfProjectile = [&](uint64 FlecsId)
 	{
-		if (DestructibleId == 0 || !bHitByProjectile) return;
-
-		flecs::entity Entity = World.entity(DestructibleId);
+		if (FlecsId == 0) return;
+		flecs::entity Entity = World.entity(FlecsId);
 		if (!Entity.is_valid()) return;
 
-		if (Entity.has<FTagDestructible>())
+		FProjectileData* Projectile = Entity.try_get_mut<FProjectileData>();
+		if (Projectile)
 		{
-			// If no health component, just destroy immediately
-			if (!Entity.has<FHealthData>())
+			// Reset grace period on any collision (bounce)
+			Projectile->GraceFramesRemaining = FProjectileData::GracePeriodFrames;
+			Projectile->BounceCount++;
+
+			const FBarrageBody* Body = Entity.try_get<FBarrageBody>();
+			FSkeletonKey Key = Body ? Body->BarrageKey : FSkeletonKey();
+
+			UE_LOG(LogTemp, Log, TEXT("PROJ_DEBUG Bounce: Key=%llu FlecsId=%llu Count=%d/%d"),
+				static_cast<uint64>(Key), FlecsId, Projectile->BounceCount, Projectile->MaxBounces);
+
+			// Check max bounces limit
+			if (Projectile->MaxBounces >= 0 && Projectile->BounceCount > Projectile->MaxBounces)
 			{
+				UE_LOG(LogTemp, Log, TEXT("PROJ_DEBUG MaxBounces EXCEEDED: Key=%llu FlecsId=%llu"),
+					static_cast<uint64>(Key), FlecsId);
 				Entity.add<FTagDead>();
 			}
-			// If has health, damage system will handle death
 		}
 	};
 
-	// Entity 1 hit by projectile (entity 2)
-	if (Event.ContactEntity2.bIsProjectile && FlecsId1 != 0)
+	// Reset grace period for any Flecs projectile that collided
+	if (FlecsId1 != 0)
 	{
-		TryDestroyDestructible(FlecsId1, true);
+		flecs::entity E1 = World.entity(FlecsId1);
+		if (E1.is_valid() && E1.has<FTagProjectile>())
+		{
+			ResetGracePeriodIfProjectile(FlecsId1);
+		}
 	}
-	// Entity 2 hit by projectile (entity 1)
-	if (Event.ContactEntity1.bIsProjectile && FlecsId2 != 0)
+	if (FlecsId2 != 0)
 	{
-		TryDestroyDestructible(FlecsId2, true);
+		flecs::entity E2 = World.entity(FlecsId2);
+		if (E2.is_valid() && E2.has<FTagProjectile>())
+		{
+			ResetGracePeriodIfProjectile(FlecsId2);
+		}
+	}
+
+	// ─────────────────────────────────────────────────────────
+	// FLECS-TO-FLECS COLLISION (both entities in Flecs)
+	// Handle cases like Flecs projectile hitting Flecs target
+	// ─────────────────────────────────────────────────────────
+	if (FlecsId1 != 0 && FlecsId2 != 0)
+	{
+		flecs::entity Entity1 = World.entity(FlecsId1);
+		flecs::entity Entity2 = World.entity(FlecsId2);
+
+		if (Entity1.is_valid() && Entity2.is_valid())
+		{
+			// Check if Entity1 has FDamageSource (it's a Flecs projectile)
+			const FDamageSource* Damage1 = Entity1.try_get<FDamageSource>();
+			if (Damage1)
+			{
+				FHealthData* Health2 = Entity2.try_get_mut<FHealthData>();
+				if (Health2)
+				{
+					float EffectiveDamage = FMath::Max(0.f, Damage1->Damage - Health2->Armor);
+					Health2->CurrentHP -= EffectiveDamage;
+					if (!Damage1->bAreaDamage) Entity1.add<FTagDead>();
+				}
+			}
+
+			// Check if Entity2 has FDamageSource (it's a Flecs projectile)
+			const FDamageSource* Damage2 = Entity2.try_get<FDamageSource>();
+			if (Damage2)
+			{
+				FHealthData* Health1 = Entity1.try_get_mut<FHealthData>();
+				if (Health1)
+				{
+					float EffectiveDamage = FMath::Max(0.f, Damage2->Damage - Health1->Armor);
+					Health1->CurrentHP -= EffectiveDamage;
+					if (!Damage2->bAreaDamage) Entity2.add<FTagDead>();
+				}
+			}
+		}
 	}
 }
 
@@ -310,23 +591,148 @@ void UFlecsArtillerySubsystem::EnqueueCommand(TFunction<void()>&& Command)
 	CommandQueue.Enqueue(MoveTemp(Command));
 }
 
+// ═══════════════════════════════════════════════════════════════
+// BIDIRECTIONAL BINDING API (Lock-Free)
+// ═══════════════════════════════════════════════════════════════
+
+flecs::world UFlecsArtillerySubsystem::GetStage(int32 ThreadIndex) const
+{
+	check(FlecsWorld);
+	// For now, always return main world (stage 0).
+	// Future: create and return thread-specific stages for parallel collision processing.
+	// Stages buffer commands and merge atomically during world.progress().
+	return FlecsWorld->get_stage(FMath::Clamp(ThreadIndex, 0, MaxStages - 1));
+}
+
+void UFlecsArtillerySubsystem::BindEntityToBarrage(flecs::entity Entity, FSkeletonKey BarrageKey)
+{
+	if (!Entity.is_valid() || !BarrageKey.IsValid()) return;
+
+	// Forward binding: set FBarrageBody component on Flecs entity
+	Entity.set<FBarrageBody>({ BarrageKey });
+
+	// Reverse binding: store Flecs entity ID in FBarragePrimitive (atomic)
+	if (CachedBarrageDispatch)
+	{
+		FBLet Prim = CachedBarrageDispatch->GetShapeRef(BarrageKey);
+		if (FBarragePrimitive::IsNotNull(Prim))
+		{
+			Prim->SetFlecsEntity(Entity.id());
+		}
+	}
+}
+
+void UFlecsArtillerySubsystem::UnbindEntityFromBarrage(flecs::entity Entity)
+{
+	if (!Entity.is_valid()) return;
+
+	// Get BarrageKey from forward binding before removing it
+	const FBarrageBody* Body = Entity.try_get<FBarrageBody>();
+	if (Body && Body->IsValid())
+	{
+		FSkeletonKey Key = Body->BarrageKey;
+
+		// Clear reverse binding (atomic in FBarragePrimitive)
+		if (CachedBarrageDispatch)
+		{
+			FBLet Prim = CachedBarrageDispatch->GetShapeRef(Key);
+			if (FBarragePrimitive::IsNotNull(Prim))
+			{
+				Prim->ClearFlecsEntity();
+			}
+		}
+	}
+
+	// Clear forward binding by removing component
+	Entity.remove<FBarrageBody>();
+}
+
+flecs::entity UFlecsArtillerySubsystem::GetEntityForBarrageKey(FSkeletonKey BarrageKey) const
+{
+	if (!FlecsWorld || !BarrageKey.IsValid()) return flecs::entity();
+
+	// Lock-free O(1) lookup: libcuckoo → FBLet → atomic load
+	if (CachedBarrageDispatch)
+	{
+		FBLet Prim = CachedBarrageDispatch->GetShapeRef(BarrageKey);
+		if (FBarragePrimitive::IsNotNull(Prim))
+		{
+			uint64 FlecsId = Prim->GetFlecsEntity();
+			if (FlecsId != 0)
+			{
+				return FlecsWorld->entity(FlecsId);
+			}
+		}
+	}
+	return flecs::entity();
+}
+
+FSkeletonKey UFlecsArtillerySubsystem::GetBarrageKeyForEntity(flecs::entity Entity) const
+{
+	if (!Entity.is_valid()) return FSkeletonKey();
+
+	// O(1) lookup via Flecs sparse set
+	const FBarrageBody* Body = Entity.try_get<FBarrageBody>();
+	return Body ? Body->BarrageKey : FSkeletonKey();
+}
+
+bool UFlecsArtillerySubsystem::HasEntityForBarrageKey(FSkeletonKey BarrageKey) const
+{
+	if (!BarrageKey.IsValid()) return false;
+
+	// Lock-free O(1) check: libcuckoo → FBLet → atomic load
+	if (CachedBarrageDispatch)
+	{
+		FBLet Prim = CachedBarrageDispatch->GetShapeRef(BarrageKey);
+		if (FBarragePrimitive::IsNotNull(Prim))
+		{
+			return Prim->HasFlecsEntity();
+		}
+	}
+	return false;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// DEPRECATED API (backward compatibility during migration)
+// ═══════════════════════════════════════════════════════════════
+
 void UFlecsArtillerySubsystem::RegisterBarrageEntity(FSkeletonKey BarrageKey, uint64 FlecsEntityId)
 {
-	BarrageKeyIndex.Add(BarrageKey.Obj, FlecsEntityId);
+	// Deprecated: Use BindEntityToBarrage instead.
+	// This only sets the reverse binding - callers should already have set FBarrageBody.
+	if (CachedBarrageDispatch && BarrageKey.IsValid())
+	{
+		FBLet Prim = CachedBarrageDispatch->GetShapeRef(BarrageKey);
+		if (FBarragePrimitive::IsNotNull(Prim))
+		{
+			Prim->SetFlecsEntity(FlecsEntityId);
+		}
+	}
 }
 
 void UFlecsArtillerySubsystem::UnregisterBarrageEntity(FSkeletonKey BarrageKey)
 {
-	BarrageKeyIndex.Remove(BarrageKey.Obj);
+	// Deprecated: Use UnbindEntityFromBarrage instead.
+	// This only clears the reverse binding.
+	if (CachedBarrageDispatch && BarrageKey.IsValid())
+	{
+		FBLet Prim = CachedBarrageDispatch->GetShapeRef(BarrageKey);
+		if (FBarragePrimitive::IsNotNull(Prim))
+		{
+			Prim->ClearFlecsEntity();
+		}
+	}
 }
 
 uint64 UFlecsArtillerySubsystem::GetFlecsEntityForBarrageKey(FSkeletonKey BarrageKey) const
 {
-	const uint64* Found = BarrageKeyIndex.Find(BarrageKey.Obj);
-	return Found ? *Found : 0;
+	// Deprecated: Use GetEntityForBarrageKey instead.
+	flecs::entity Entity = GetEntityForBarrageKey(BarrageKey);
+	return Entity.is_valid() ? Entity.id() : 0;
 }
 
 bool UFlecsArtillerySubsystem::HasFlecsEntityForBarrageKey(FSkeletonKey BarrageKey) const
 {
-	return BarrageKeyIndex.Contains(BarrageKey.Obj);
+	// Deprecated: Use HasEntityForBarrageKey instead.
+	return HasEntityForBarrageKey(BarrageKey);
 }

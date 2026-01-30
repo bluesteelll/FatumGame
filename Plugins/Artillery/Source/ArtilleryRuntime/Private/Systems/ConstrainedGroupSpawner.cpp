@@ -443,8 +443,11 @@ void AConstrainedGroupSpawner::CleanupPart(int32 PartIndex)
 		if (FBarragePrimitive::IsNotNull(Prim))
 		{
 			UBarrageDispatch::SelfPtr->ActivateBodiesAroundBody(Prim->KeyIntoBarrage, 0.1f);
+			// Mark physics body for deferred destruction via tombstone.
+			// DO NOT call FinalizeReleasePrimitive() - it is called automatically
+			// by ~FBarragePrimitive() when tombstone expires and ref count reaches 0.
+			// Calling both causes double-free crash!
 			UBarrageDispatch::SelfPtr->SuggestTombstone(Prim);
-			UBarrageDispatch::SelfPtr->FinalizeReleasePrimitive(Prim->KeyIntoBarrage);
 		}
 	}
 

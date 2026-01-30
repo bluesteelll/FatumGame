@@ -20,6 +20,7 @@ public class FatumGame : ModuleRules
 				"CoreUObject",
 				"Engine",
 				"InputCore",
+				"EnhancedInput",
 				// Artillery ecosystem
 				"ArtilleryRuntime",
 				"Barrage",

@@ -6,6 +6,7 @@
 #include "FBarrageKey.h"
 #include "FBPhysicsInputTypes.h"
 #include "IsolatedJoltIncludes.h"
+#include <atomic>
 
 //don't use this, it's just here for speedy access from the barrage primitive destructor until we refactor.
 
@@ -61,6 +62,27 @@ public:
 	// and the implementation will change as those come online in artillery.
 	uint32 tombstone = 0; //4b
 	FBShape Me; //4b
+
+	// ═══════════════════════════════════════════════════════════════
+	// FLECS ENTITY BINDING (lock-free, for multi-threaded collision processing)
+	// Stores Flecs entity ID for reverse lookup: BarrageKey → FlecsEntity
+	// Forward lookup (FlecsEntity → BarrageKey) uses Flecs FBarrageBinding component
+	// ═══════════════════════════════════════════════════════════════
+private:
+	std::atomic<uint64> FlecsEntityId{0};
+
+public:
+	/** Set the Flecs entity ID bound to this primitive. Thread-safe. */
+	void SetFlecsEntity(uint64 Id) { FlecsEntityId.store(Id, std::memory_order_release); }
+
+	/** Get the Flecs entity ID bound to this primitive. Thread-safe. Returns 0 if not bound. */
+	uint64 GetFlecsEntity() const { return FlecsEntityId.load(std::memory_order_acquire); }
+
+	/** Clear the Flecs entity binding. Thread-safe. */
+	void ClearFlecsEntity() { FlecsEntityId.store(0, std::memory_order_release); }
+
+	/** Check if this primitive has a Flecs entity bound. Thread-safe. */
+	bool HasFlecsEntity() const { return FlecsEntityId.load(std::memory_order_acquire) != 0; }
 
 	FBarragePrimitive(FBarrageKey Into, FSkeletonKey OutOf)
 	{

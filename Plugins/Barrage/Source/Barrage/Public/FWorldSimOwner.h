@@ -376,25 +376,41 @@ public:
 	/**
 	 * Release a physics primitive and clean up all associated constraints.
 	 * Any constraints connected to this body will be automatically removed.
+	 *
+	 * Thread-safe: Can be called multiple times for the same key (idempotent).
+	 * Second+ calls will be no-ops.
 	 */
 	void FinalizeReleasePrimitive(FBarrageKey BarrageKey)
 	{
-		// IMPORTANT: Remove all constraints connected to this body FIRST
-		// Otherwise Jolt will try to solve constraints for a deleted body
-		if (ConstraintSystem)
+		// Early out if body_interface is invalid (shutdown scenario)
+		if (!body_interface)
 		{
-			ConstraintSystem->RemoveAllForBody(BarrageKey);
+			return;
 		}
 
-		//TODO return owned Joltstuff to pool or dealloc
-		JPH::BodyID result;
-		//as we add character handling, it'll be extremely difficult to do it here.
-		if (BarrageToJoltMapping->find(BarrageKey, result) && !result.IsInvalid())
+		// Use erase_fn for atomic find-and-remove to prevent race conditions.
+		// This ensures that only ONE thread can successfully remove a given key.
+		JPH::BodyID BodyToDestroy;
+		bool bFoundAndErased = BarrageToJoltMapping->erase_fn(BarrageKey,
+			[&BodyToDestroy](JPH::BodyID& Value) -> bool
+			{
+				BodyToDestroy = Value;
+				return true; // Return true to erase the entry
+			});
+
+		if (bFoundAndErased && !BodyToDestroy.IsInvalid())
 		{
-			body_interface->RemoveBody(result);
-			body_interface->DestroyBody(result);
+			// Remove constraints BEFORE destroying body
+			if (ConstraintSystem)
+			{
+				ConstraintSystem->RemoveAllForBody(BarrageKey);
+			}
+
+			// Now safe to destroy - we're the only thread that got this BodyID
+			body_interface->RemoveBody(BodyToDestroy);
+			body_interface->DestroyBody(BodyToDestroy);
 		}
-		BarrageToJoltMapping->erase(BarrageKey);
+		// If !bFoundAndErased, another thread already removed this key - that's fine (idempotent)
 	}
 
 	// Wake up all sleeping bodies in a given area - useful when removing support from stacked objects

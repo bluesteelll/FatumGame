@@ -74,6 +74,35 @@ struct FDamageSource
 	float AreaRadius = 0.f;
 };
 
+/** Projectile data. Entities with this are projectiles that auto-despawn. */
+USTRUCT(BlueprintType)
+struct FProjectileData
+{
+	GENERATED_BODY()
+
+	/** Remaining lifetime in seconds. When <= 0, projectile is destroyed. */
+	UPROPERTY(BlueprintReadWrite, Category = "Projectile")
+	float LifetimeRemaining = 10.f;
+
+	/** Max bounces before destruction (-1 = infinite) */
+	UPROPERTY(BlueprintReadWrite, Category = "Projectile")
+	int32 MaxBounces = -1;
+
+	/** Current bounce count */
+	UPROPERTY(BlueprintReadWrite, Category = "Projectile")
+	int32 BounceCount = 0;
+
+	/**
+	 * Grace period frames remaining. While > 0, velocity check is skipped.
+	 * This prevents killing projectiles that momentarily slow down during bounce.
+	 * Reset to GracePeriodFrames after each bounce collision.
+	 */
+	int32 GraceFramesRemaining = 30; // ~0.25 sec at 120Hz
+
+	/** Number of frames to wait before checking velocity (grace period after spawn/bounce) */
+	static constexpr int32 GracePeriodFrames = 30;
+};
+
 /** Loot drop data. When an entity with this and FHealthData dies, loot spawns. */
 USTRUCT(BlueprintType)
 struct FLootData
@@ -88,10 +117,30 @@ struct FLootData
 };
 
 // ═══════════════════════════════════════════════════════════════
-// PHYSICS BRIDGE COMPONENTS
+// PHYSICS BRIDGE COMPONENTS (Bidirectional Lock-Free Binding)
+// ═══════════════════════════════════════════════════════════════
+//
+// BIDIRECTIONAL BINDING ARCHITECTURE:
+// ────────────────────────────────────────────────────────────────
+// Forward lookup (Entity → BarrageKey):
+//   - Flecs sparse set: entity.get<FBarrageBody>().BarrageKey  [O(1)]
+//
+// Reverse lookup (BarrageKey → Entity):
+//   - libcuckoo map: KeyToFBLet[BarrageKey] → FBLet            [O(1)]
+//   - atomic load:   FBLet->GetFlecsEntity()                   [O(1)]
+//
+// Both directions are lock-free and thread-safe for collision processing.
 // ═══════════════════════════════════════════════════════════════
 
-/** Links a Flecs entity to its Barrage (Jolt) physics body via SkeletonKey. */
+/**
+ * Forward binding: Flecs Entity → Barrage physics body.
+ * Part of bidirectional lock-free binding system.
+ *
+ * Usage:
+ *   FSkeletonKey Key = entity.get<FBarrageBody>()->BarrageKey;
+ *
+ * Reverse binding (BarrageKey → Entity) is via FBarragePrimitive::GetFlecsEntity()
+ */
 USTRUCT(BlueprintType)
 struct FBarrageBody
 {

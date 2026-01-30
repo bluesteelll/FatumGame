@@ -246,10 +246,19 @@ int32 UBarrageRenderManager::AddInstance(UStaticMesh* InMesh, UMaterialInterface
 	UInstancedStaticMeshComponent* ISM = GetOrCreateISM(InMesh, InMaterial);
 	if (!ISM)
 	{
+		UE_LOG(LogTemp, Error, TEXT("ISM_DEBUG AddInstance FAILED: No ISM for mesh, Key=%llu"), static_cast<uint64>(Key));
 		return INDEX_NONE;
 	}
 
 	FMeshGroup& Group = MeshGroups.FindChecked(InMesh);
+
+	// SAFETY: Check if this key already exists to prevent orphaned instances
+	if (Group.KeyToIndex.Contains(Key))
+	{
+		UE_LOG(LogTemp, Error, TEXT("ISM_DEBUG AddInstance DUPLICATE: Key=%llu already at Index=%d, TotalInstances=%d"),
+			static_cast<uint64>(Key), Group.KeyToIndex[Key], Group.KeyToIndex.Num());
+		return Group.KeyToIndex[Key];
+	}
 
 	// Apply pivot offset to center mesh on physics position
 	FVector ScaledPivotOffset = Group.PivotOffset * Transform.GetScale3D();
@@ -271,11 +280,23 @@ int32 UBarrageRenderManager::AddInstance(UStaticMesh* InMesh, UMaterialInterface
 
 	bHasEntities = true;
 
+	UE_LOG(LogTemp, Log, TEXT("ISM_DEBUG AddInstance OK: Key=%llu Index=%d Pos=%s TotalInstances=%d"),
+		static_cast<uint64>(Key), Index, *Transform.GetLocation().ToString(), Group.KeyToIndex.Num());
+
 	return Index;
 }
 
 void UBarrageRenderManager::RemoveInstance(FSkeletonKey Key)
 {
+	// Thread-safe: enqueue for processing on Game thread
+	UE_LOG(LogTemp, Log, TEXT("ISM_DEBUG RemoveInstance ENQUEUE: Key=%llu"), static_cast<uint64>(Key));
+	PendingRemovals.Enqueue(Key);
+}
+
+void UBarrageRenderManager::DoRemoveInstance(FSkeletonKey Key)
+{
+	UE_LOG(LogTemp, Log, TEXT("ISM_DEBUG DoRemoveInstance START: Key=%llu"), static_cast<uint64>(Key));
+
 	for (auto& Pair : MeshGroups)
 	{
 		FMeshGroup& Group = Pair.Value;
@@ -319,6 +340,15 @@ void UBarrageRenderManager::RemoveInstance(FSkeletonKey Key)
 	}
 }
 
+void UBarrageRenderManager::ProcessPendingRemovals()
+{
+	FSkeletonKey Key;
+	while (PendingRemovals.Dequeue(Key))
+	{
+		DoRemoveInstance(Key);
+	}
+}
+
 void UBarrageRenderManager::Tick(float DeltaTime)
 {
 	UpdateTransforms();
@@ -326,6 +356,9 @@ void UBarrageRenderManager::Tick(float DeltaTime)
 
 void UBarrageRenderManager::UpdateTransforms()
 {
+	// Process pending removals FIRST (thread-safe dequeue from Artillery thread)
+	ProcessPendingRemovals();
+
 	UBarrageDispatch* Physics = UBarrageDispatch::SelfPtr;
 	if (!Physics)
 	{
@@ -341,6 +374,9 @@ void UBarrageRenderManager::UpdateTransforms()
 		}
 
 		bool bAnyUpdated = false;
+
+		// Collect keys to remove (can't modify map while iterating)
+		TArray<FSkeletonKey> KeysToRemove;
 
 		for (auto& KeyIndex : Group.KeyToIndex)
 		{
@@ -369,9 +405,29 @@ void UBarrageRenderManager::UpdateTransforms()
 				NewTransform.SetRotation(FQuat(Rot));
 				NewTransform.SetScale3D(Scale);
 
-				Group.ISM->UpdateInstanceTransform(Index, NewTransform, true, false, false);
+				// bTeleport=true is important for physics-synced objects to prevent rendering interpolation artifacts
+				Group.ISM->UpdateInstanceTransform(Index, NewTransform, true, false, true);
 				bAnyUpdated = true;
 			}
+			else
+			{
+				// SAFETY NET: Body is gone (destroyed/tombstoned) but ISM instance still exists.
+				// This should NOT happen if all destruction paths call RemoveInstance() before SuggestTombstone().
+				// Log a warning to help identify code paths that skip ISM cleanup.
+				UE_LOG(LogTemp, Warning, TEXT("ISM_ORPHAN: Key=%llu has ISM but physics body is gone! "
+					"Check if destruction path calls RemoveInstance() before SuggestTombstone()."),
+					static_cast<uint64>(Key));
+				KeysToRemove.Add(Key);
+			}
+		}
+
+		// SAFETY NET: Remove orphaned instances detected above.
+		// If this code runs frequently, there's a bug in some destruction path.
+		// Check the ISM_ORPHAN warnings in the log to identify which code paths
+		// are calling SuggestTombstone() without RemoveInstance().
+		for (const FSkeletonKey& Key : KeysToRemove)
+		{
+			PendingRemovals.Enqueue(Key);
 		}
 
 		if (bAnyUpdated)
@@ -537,9 +593,11 @@ void ABarrageEntitySpawner::DestroyEntity(FSkeletonKey InEntityKey)
 			// Wake up nearby sleeping bodies BEFORE destroying (per Jolt recommendation)
 			UBarrageDispatch::SelfPtr->ActivateBodiesAroundBody(Prim->KeyIntoBarrage, 0.1f);
 
-			// Destroy physics body
+			// Mark physics body for deferred destruction via tombstone.
+			// DO NOT call FinalizeReleasePrimitive() - it is called automatically
+			// by ~FBarragePrimitive() when tombstone expires and ref count reaches 0.
+			// Calling both causes double-free crash!
 			UBarrageDispatch::SelfPtr->SuggestTombstone(Prim);
-			UBarrageDispatch::SelfPtr->FinalizeReleasePrimitive(Prim->KeyIntoBarrage);
 		}
 	}
 }

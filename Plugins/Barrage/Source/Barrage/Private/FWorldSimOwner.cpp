@@ -298,7 +298,7 @@ FBarrageKey FWorldSimOwner::CreatePrimitive(FBBoxParams& ToCreate, uint16 Layer,
 	box_body_settings.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
 	box_body_settings.mIsSensor = IsSensor;
 	box_body_settings.mMotionQuality = MotionQuality;
-	box_body_settings.mRestitution = 0.0;
+	box_body_settings.mRestitution = 0.3f; // Allow some bounce for projectiles
 
 	if (MovementType == EMotionType::Dynamic && (Layer == Layers::MOVING || Layer == Layers::ENEMY))
 	{
@@ -565,7 +565,7 @@ FBLet FWorldSimOwner::LoadComplexStaticMesh(FBTransform& MeshTransform,
 		creation_settings.mObjectLayer = Layer;
 		creation_settings.mFriction = 0.5f;
 		creation_settings.mOverrideMassProperties = EOverrideMassProperties::MassAndInertiaProvided;
-		creation_settings.mRestitution = 0;
+		creation_settings.mRestitution = 0.3f; // Allow some bounce for projectiles
 		creation_settings.mMassPropertiesOverride.SetMassAndInertiaOfSolidBox(shape->GetLocalBounds().GetExtent() * 2, 1);
 		creation_settings.mMassPropertiesOverride.mMass = EBWeightClasses::HugeEnemy;
 		creation_settings.mMotionQuality = MotionQuality;
@@ -643,21 +643,37 @@ FBarrageKey FWorldSimOwner::GenerateBarrageKeyFromBodyId(const uint32 RawIndexAn
 
 FWorldSimOwner::~FWorldSimOwner()
 {
-	UnregisterTypes();
-	Factory::sInstance = nullptr;
+	// CRITICAL: Destroy characters FIRST, before UnregisterTypes() clears the Jolt Factory.
+	// CharacterVirtual::~CharacterVirtual() needs the physics system and factory to be fully functional
+	// to properly clean up inner bodies.
+	//
+	// Order matters:
+	// 1. Characters need physics_system alive to destroy inner bodies
+	// 2. Characters may use Factory for shape operations
+	// 3. Only after all characters are gone can we safely unregister types
 
-	//this is the canonical order.
-	// Clear constraints first, before physics system is destroyed
+	// Keep physics system alive during character cleanup
+	TSharedPtr<JPH::PhysicsSystem> HoldOpen = physics_system;
+
+	// Clear characters while physics is still fully operational
+	if (CharacterToJoltMapping)
+	{
+		CharacterToJoltMapping->Reset();
+	}
+
+	// Clear constraints before physics system is destroyed
 	if (ConstraintSystem)
 	{
 		ConstraintSystem->Clear();
 		ConstraintSystem.Reset();
 	}
 
-	//grab our hold open.
-	TSharedPtr<JPH::PhysicsSystem> HoldOpen = physics_system;
-	physics_system.Reset(); //cast it into the fire.
-	CharacterToJoltMapping->Reset();//free characters so they don't double free inner shapes.
+	// Now safe to unregister types - no more character destructors will run
+	UnregisterTypes();
+	Factory::sInstance = nullptr;
+
+	// Release physics system
+	physics_system.Reset();
 	std::this_thread::yield(); //Cycle.
 	HoldOpen.Reset();
 	job_system.Reset();

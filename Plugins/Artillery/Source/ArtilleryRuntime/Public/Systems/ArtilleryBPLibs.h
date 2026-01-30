@@ -12,6 +12,7 @@
 #include "UFireControlMachine.h"
 #include "Components/TimerTickliteHandlerComponent.h"
 #include "BasicTypes/ProjectileDefinition.h"
+#include "Systems/BarrageEntitySpawner.h"
 #include "ArtilleryBPLibs.generated.h"
 
 UCLASS(meta=(ScriptName="InputSystemLibrary"))
@@ -540,6 +541,22 @@ public:
 			{
 				UArtilleryProjectileDispatch::SelfPtr->DeleteProjectile(Target); // quite a bit extra has to happen, but it does all happen.
 			}
+
+			// CRITICAL: Remove ISM render instance for entity types that have ISM.
+			// Without this, ISM instance becomes orphaned when physics body is tombstoned.
+			// Types with ISM: SFIX_BAR_PRIM (BarrageEntitySpawner), SFIX_GUN_SHOT (projectiles via FlecsGameplayLibrary)
+			uint64 KeyType = GET_SK_TYPE(static_cast<uint64>(Target));
+			if (KeyType == SKELLY::SFIX_BAR_PRIM || KeyType == SKELLY::SFIX_GUN_SHOT)
+			{
+				if (UWorld* World = UBarrageDispatch::SelfPtr->GetWorld())
+				{
+					if (UBarrageRenderManager* Renderer = UBarrageRenderManager::Get(World))
+					{
+						Renderer->RemoveInstance(Target);
+					}
+				}
+			}
+
 			uint32 TombResult = UBarrageDispatch::SelfPtr->SuggestTombstone(Prim);
 			UE_LOG(LogTemp, Warning, TEXT("TombstonePrimitive: SuggestTombstone result=%d (1=failed/null)"), TombResult);
 			return TombResult != 1;
