@@ -71,6 +71,9 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 	World.component<FTagProjectile>();
 	World.component<FTagCharacter>();
 	World.component<FFlecsCollisionEvent>();
+	World.component<FConstraintLink>();
+	World.component<FFlecsConstraintData>();
+	World.component<FTagConstrained>();
 
 	// ─────────────────────────────────────────────────────────
 	// ITEM DESPAWN SYSTEM

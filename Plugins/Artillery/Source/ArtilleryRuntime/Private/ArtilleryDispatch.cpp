@@ -165,20 +165,21 @@ void UArtilleryDispatch::Deinitialize()
 		___LIVING->IsReady = false;
 	}
 
-	// STEP 1: Signal the BusyWorker to stop FIRST (sets running=false)
-	// The thread will see this flag and exit its loop gracefully
-	UE_LOG(LogTemp, Warning, TEXT("ArtilleryDispatch::Deinitialize: Calling BusyWorker.Stop() FIRST"));
+	// STEP 1: Stop ALL workers FIRST (sets running=false on all threads)
+	// This MUST happen BEFORE triggering events, otherwise threads wake up
+	// while running=true and continue processing instead of exiting!
+	UE_LOG(LogTemp, Warning, TEXT("ArtilleryDispatch::Deinitialize: Stopping all workers FIRST"));
 	ArtilleryAsyncWorldSim.Stop();
+	ArtilleryAIWorker_LockstepToWorldSim.Stop();
+	ArtilleryTicklitesWorker_LockstepToWorldSim.Stop();
 
-	// STEP 2: Trigger events so other threads can wake up and exit
-	UE_LOG(LogTemp, Warning, TEXT("ArtilleryDispatch::Deinitialize: Triggering events for other workers"));
+	// STEP 2: NOW trigger events so threads can wake up and see running=false
+	UE_LOG(LogTemp, Warning, TEXT("ArtilleryDispatch::Deinitialize: Triggering events to wake up workers"));
 	StartTicklitesSim->Trigger();
 	StartTicklitesApply->Trigger();
 	StartRunAhead->Trigger();
 
-	// STEP 3: Stop other workers
-	ArtilleryAIWorker_LockstepToWorldSim.Stop();
-	ArtilleryTicklitesWorker_LockstepToWorldSim.Stop();
+	// STEP 3: Call Exit() on workers (cleanup)
 	ArtilleryTicklitesWorker_LockstepToWorldSim.Exit();
 	ArtilleryAIWorker_LockstepToWorldSim.Exit();
 

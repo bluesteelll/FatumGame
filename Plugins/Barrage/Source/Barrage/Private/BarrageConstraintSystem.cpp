@@ -405,25 +405,6 @@ FBarrageConstraintKey FBarrageConstraintSystem::CreateDistance(const FBDistanceC
 		return FBarrageConstraintKey();
 	}
 
-	DistanceConstraintSettings settings;
-	settings.mSpace = Params.Space == EBConstraintSpace::WorldSpace ?
-					  EConstraintSpace::WorldSpace : EConstraintSpace::LocalToBodyCOM;
-
-	settings.mPoint1 = CoordinateUtils::ToJoltCoordinates(Params.AnchorPoint1);
-	settings.mPoint2 = CoordinateUtils::ToJoltCoordinates(Params.AnchorPoint2);
-
-	// Convert distances from UE (cm) to Jolt (m)
-	settings.mMinDistance = Params.MinDistance / 100.0f;
-	settings.mMaxDistance = Params.MaxDistance > 0.0f ? Params.MaxDistance / 100.0f : -1.0f; // -1 = auto-detect
-
-	// Set up spring if requested
-	if (Params.SpringFrequency > 0.0f)
-	{
-		settings.mLimitsSpringSettings.mMode = ESpringMode::FrequencyAndDamping;
-		settings.mLimitsSpringSettings.mFrequency = Params.SpringFrequency;
-		settings.mLimitsSpringSettings.mDamping = Params.SpringDamping;
-	}
-
 	Ref<Constraint> constraint;
 	{
 		BodyID bodyIds[2] = { BodyId1, bHasBody2 ? BodyId2 : BodyID() };
@@ -441,7 +422,148 @@ FBarrageConstraintKey FBarrageConstraintSystem::CreateDistance(const FBDistanceC
 		Body& body1 = *body1Ptr;
 		Body& body2 = body2Ptr ? *body2Ptr : Body::sFixedToWorld;
 
-		constraint = settings.Create(body1, body2);
+		// Get body positions for distance calculation
+		Vec3 pos1 = body1.GetCenterOfMassPosition();
+		Vec3 pos2 = body2.GetID().IsInvalid() ? Vec3::sZero() : body2.GetCenterOfMassPosition();
+		Vec3 axis = pos2 - pos1;
+		float currentDistance = axis.Length();
+
+		// If bLockRotation is true, use SliderConstraint instead (locks rotation, allows linear movement)
+		if (Params.bLockRotation)
+		{
+			SliderConstraintSettings settings;
+			settings.mSpace = EConstraintSpace::WorldSpace;
+			settings.mPoint1 = pos1;
+			settings.mPoint2 = pos2;
+
+			// Slider axis is the direction from body1 to body2
+			if (currentDistance > 0.001f)
+			{
+				settings.mSliderAxis1 = axis.Normalized();
+			}
+			else
+			{
+				settings.mSliderAxis1 = Vec3(1, 0, 0); // Fallback
+			}
+			settings.mSliderAxis2 = settings.mSliderAxis1;
+
+			// Calculate normal axis perpendicular to slider
+			Vec3 up(0, 0, 1);
+			if (FMath::Abs(settings.mSliderAxis1.Dot(up)) > 0.99f)
+			{
+				up = Vec3(1, 0, 0); // Use different up if axis is nearly vertical
+			}
+			settings.mNormalAxis1 = settings.mSliderAxis1.Cross(up).Normalized();
+			settings.mNormalAxis2 = settings.mNormalAxis1;
+
+			// Convert distances from UE (cm) to Jolt (m)
+			float minDist = Params.MinDistance / 100.0f;
+			float maxDist = Params.MaxDistance > 0.0f ? Params.MaxDistance / 100.0f : currentDistance;
+			if (Params.MinDistance <= 0.0f)
+			{
+				minDist = currentDistance;
+			}
+
+			// Slider limits are relative to initial position
+			// So we set limits around 0 based on min/max distances
+			settings.mLimitsMin = minDist - currentDistance;
+			settings.mLimitsMax = maxDist - currentDistance;
+
+			// Set up spring if requested
+			if (Params.SpringFrequency > 0.0f)
+			{
+				settings.mLimitsSpringSettings.mMode = ESpringMode::FrequencyAndDamping;
+				settings.mLimitsSpringSettings.mFrequency = Params.SpringFrequency;
+				settings.mLimitsSpringSettings.mDamping = Params.SpringDamping;
+
+				UE_LOG(LogTemp, Warning, TEXT("SliderConstraint (LockRotation) SPRING: Frequency=%.2f Hz, Damping=%.2f"),
+					Params.SpringFrequency, Params.SpringDamping);
+			}
+
+			constraint = settings.Create(body1, body2);
+
+			UE_LOG(LogTemp, Warning, TEXT("SliderConstraint (LockRotation) CREATED:"));
+			UE_LOG(LogTemp, Warning, TEXT("  Limits: [%.2f, %.2f] m relative to start"),
+				settings.mLimitsMin, settings.mLimitsMax);
+		}
+		else
+		{
+			// Standard DistanceConstraint
+			DistanceConstraintSettings settings;
+
+			// For distance constraint, we use LocalToBodyCOM space and auto-detect anchor points
+			// This means anchor points are at the center of each body
+			if (Params.bAutoDetectAnchor)
+			{
+				settings.mSpace = EConstraintSpace::LocalToBodyCOM;
+				settings.mPoint1 = Vec3::sZero();
+				settings.mPoint2 = Vec3::sZero();
+			}
+			else
+			{
+				settings.mSpace = Params.Space == EBConstraintSpace::WorldSpace ?
+								  EConstraintSpace::WorldSpace : EConstraintSpace::LocalToBodyCOM;
+				settings.mPoint1 = CoordinateUtils::ToJoltCoordinates(Params.AnchorPoint1);
+				settings.mPoint2 = CoordinateUtils::ToJoltCoordinates(Params.AnchorPoint2);
+			}
+
+			// Convert distances from UE (cm) to Jolt (m)
+			settings.mMinDistance = Params.MinDistance / 100.0f;
+
+			// If MaxDistance is 0, auto-detect from current body positions
+			if (Params.MaxDistance > 0.0f)
+			{
+				settings.mMaxDistance = Params.MaxDistance / 100.0f;
+			}
+			else
+			{
+				settings.mMaxDistance = currentDistance;
+				// Also set min to same for rigid rope behavior
+				if (Params.MinDistance <= 0.0f)
+				{
+					settings.mMinDistance = currentDistance;
+				}
+			}
+
+			UE_LOG(LogTemp, Log, TEXT("DistanceConstraint: MinDist=%.2f m, MaxDist=%.2f m (input: %.0f cm, %.0f cm)"),
+				settings.mMinDistance, settings.mMaxDistance, Params.MinDistance, Params.MaxDistance);
+
+			// Set up spring if requested
+			// Spring makes the constraint "soft" - bodies can stretch beyond limits and spring back
+			if (Params.SpringFrequency > 0.0f)
+			{
+				// Use FrequencyAndDamping mode - more intuitive for Jolt
+				// Frequency is in Hz (oscillations per second)
+				// Damping ratio: 0 = no damping (bounces forever), 1 = critical damping (no oscillation)
+				settings.mLimitsSpringSettings.mMode = ESpringMode::FrequencyAndDamping;
+				settings.mLimitsSpringSettings.mFrequency = Params.SpringFrequency;
+				settings.mLimitsSpringSettings.mDamping = Params.SpringDamping;
+
+				UE_LOG(LogTemp, Warning, TEXT("DistanceConstraint SPRING: Frequency=%.2f Hz, Damping=%.2f"),
+					Params.SpringFrequency, Params.SpringDamping);
+			}
+			else
+			{
+				UE_LOG(LogTemp, Warning, TEXT("DistanceConstraint: NO SPRING (Frequency=0)"));
+			}
+
+			constraint = settings.Create(body1, body2);
+
+			// Debug: log constraint creation and body types
+			float actualDist = currentDistance;
+
+			UE_LOG(LogTemp, Warning, TEXT("DistanceConstraint CREATED:"));
+			UE_LOG(LogTemp, Warning, TEXT("  Body1: valid=%d, dynamic=%d, pos=(%.1f, %.1f, %.1f)"),
+				body1.GetID().IsInvalid() ? 0 : 1,
+				body1.IsDynamic() ? 1 : 0,
+				pos1.GetX() * 100.0f, pos1.GetY() * 100.0f, pos1.GetZ() * 100.0f);
+			UE_LOG(LogTemp, Warning, TEXT("  Body2: valid=%d, dynamic=%d, pos=(%.1f, %.1f, %.1f)"),
+				body2.GetID().IsInvalid() ? 0 : 1,
+				body2.IsDynamic() ? 1 : 0,
+				pos2.GetX() * 100.0f, pos2.GetY() * 100.0f, pos2.GetZ() * 100.0f);
+			UE_LOG(LogTemp, Warning, TEXT("  Actual distance: %.2f m (%.1f cm), Limits: [%.2f, %.2f] m"),
+				actualDist, actualDist * 100.0f, settings.mMinDistance, settings.mMaxDistance);
+		}
 	}
 
 	Owner->physics_system->AddConstraint(constraint.GetPtr());

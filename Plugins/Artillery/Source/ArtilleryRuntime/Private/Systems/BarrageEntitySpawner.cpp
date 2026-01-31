@@ -117,7 +117,9 @@ FBarrageSpawnResult FBarrageSpawnUtils::SpawnEntity(UWorld* World, const FBarrag
 		static_cast<uint16>(Params.PhysicsLayer),
 		Params.bIsSensor,
 		false, // not force dynamic
-		Params.bIsMovable
+		Params.bIsMovable,
+		Params.Friction,
+		Params.Restitution
 	);
 
 	if (!FBarragePrimitive::IsNotNull(Body))

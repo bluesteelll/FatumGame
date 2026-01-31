@@ -352,6 +352,30 @@ FlecsWorld->set_threads(0);  // Artillery is only executor
 
 ---
 
+## Known Issues / Debugging Tips
+
+### Distance Constraint Spring не работает (нет упругости)
+
+**Симптом:** Пружина Distance Constraint не сближает/отдаляет тела, или делает это очень медленно.
+
+**Причина:** Старый скомпилированный код использовал неправильную конвертацию `SpringFrequency → Stiffness` (freq * 10000), делая пружину в ~54× жёстче чем нужно.
+
+**Диагностика:** Проверить лог:
+- ❌ Старый код: `DistanceConstraint SPRING: Stiffness=46400 N/m, Damping=311`
+- ✅ Новый код: `DistanceConstraint SPRING: Frequency=15.00 Hz, Damping=0.31`
+
+**Решение:**
+1. Закрыть Unreal Editor и Rider/VS
+2. Удалить папки: `Binaries/`, `Intermediate/`, `Plugins/Barrage/Binaries/`, `Plugins/Barrage/Intermediate/`
+3. Rebuild Solution
+4. Проверить что лог показывает `Frequency=... Hz`
+
+**Параметры пружины:**
+- `SpringFrequency`: 1-5 Hz (мягкая), 10-15 Hz (средняя), 20+ Hz (жёсткая)
+- `SpringDamping`: 0 (бесконечные колебания), 0.3-0.5 (затухающие), 1.0 (без колебаний)
+
+---
+
 ## Broken Assets (need cleanup)
 
 - `Content/BP_MyArtilleryCharacter.uasset` - broken Enace refs

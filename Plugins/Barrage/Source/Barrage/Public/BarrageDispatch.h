@@ -101,7 +101,7 @@ public:
 	virtual void CastRay(FVector3d CastFrom, FVector3d Direction, const JPH::BroadPhaseLayerFilter& BroadPhaseFilter, const JPH::ObjectLayerFilter& ObjectFilter, const JPH::BodyFilter& BodiesFilter, TSharedPtr<FHitResult> OutHit);
 	
 	//and viola [sic] actually pretty elegant even without type polymorphism by using overloading polymorphism.
-	FBLet CreatePrimitive(FBBoxParams& Definition, FSkeletonKey Outkey, uint16 Layer, bool IsSensor = false, bool forceDynamic = false, bool isMovable = true);
+	FBLet CreatePrimitive(FBBoxParams& Definition, FSkeletonKey Outkey, uint16 Layer, bool IsSensor = false, bool forceDynamic = false, bool isMovable = true, float Friction = 0.5f, float Restitution = 0.3f);
 	FBLet CreatePrimitive(FBCapParams& Definition, FSkeletonKey Outkey, uint16 Layer, bool IsSensor = false, bool forceDynamic = false, bool isMovable = true);
 	FBLet CreatePrimitive(FBCharParams& Definition, FSkeletonKey Outkey, uint16 Layer);
 	FBLet CreatePrimitive(FBSphereParams& Definition, FSkeletonKey OutKey, uint16 Layer, bool IsSensor = false);
@@ -170,11 +170,15 @@ public:
 	 * @param MinDistance Minimum distance (0 = no minimum)
 	 * @param MaxDistance Maximum distance (0 = auto-detect from current positions)
 	 * @param BreakForce Force that will break the rope
+	 * @param SpringFrequency Spring stiffness in Hz (0 = rigid, higher = stiffer)
+	 * @param SpringDamping Damping ratio 0-1 (0 = bouncy, 1 = no bounce)
+	 * @param bLockRotation Lock relative rotation (bodies can't rotate independently)
 	 * @return Constraint key
 	 */
 	FBarrageConstraintKey CreateDistanceConstraint(FBarrageKey Body1, FBarrageKey Body2,
 													float MinDistance = 0.0f, float MaxDistance = 0.0f,
-													float BreakForce = 0.0f);
+													float BreakForce = 0.0f, float SpringFrequency = 0.0f,
+													float SpringDamping = 0.5f, bool bLockRotation = false);
 
 	/**
 	 * Remove a constraint.
@@ -258,6 +262,47 @@ public:
 	int32 GetBodyCount() const
 	{
 		return JoltBodyLifecycleMapping ? static_cast<int32>(JoltBodyLifecycleMapping->size()) : 0;
+	}
+
+	// ============================================================
+	// Key Translation API
+	// ============================================================
+
+	/**
+	 * Get a FBarrageKey from a FSkeletonKey.
+	 * Used by the constraint system to translate actor keys to physics body keys.
+	 *
+	 * @param SkeletonKey The skeleton key (e.g., from UPlayerKeyCarry)
+	 * @return The corresponding FBarrageKey, or invalid key if not found
+	 */
+	FBarrageKey GetBarrageKeyFromSkeletonKey(FSkeletonKey SkeletonKey) const
+	{
+		if (!TranslationMapping || !SkeletonKey.IsValid())
+		{
+			return FBarrageKey();
+		}
+
+		FBarrageKey Result;
+		if (TranslationMapping->find(SkeletonKey, Result))
+		{
+			return Result;
+		}
+		return FBarrageKey();
+	}
+
+	/**
+	 * Check if a FSkeletonKey has a corresponding physics body.
+	 *
+	 * @param SkeletonKey The skeleton key to check
+	 * @return True if the key maps to a physics body
+	 */
+	bool HasBarrageBody(FSkeletonKey SkeletonKey) const
+	{
+		if (!TranslationMapping || !SkeletonKey.IsValid())
+		{
+			return false;
+		}
+		return TranslationMapping->contains(SkeletonKey);
 	}
 
 private:

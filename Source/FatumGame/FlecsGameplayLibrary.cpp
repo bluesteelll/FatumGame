@@ -4,8 +4,11 @@
 #include "FlecsArtillerySubsystem.h"
 #include "FlecsComponents.h"
 #include "FlecsProjectileDefinition.h"
+#include "FlecsConstrainedGroupDefinition.h"
 #include "Systems/BarrageEntitySpawner.h"
 #include "BarrageDispatch.h"
+#include "BarrageConstraintSystem.h"
+#include "FWorldSimOwner.h"
 #include "FBarragePrimitive.h"
 #include "FBShapeParams.h"
 #include "Skeletonize.h"
@@ -545,4 +548,700 @@ FSkeletonKey UFlecsGameplayLibrary::SpawnProjectile(
 		static_cast<uint64>(EntityKey), *Velocity.ToString());
 
 	return EntityKey;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// CONSTRAINTS (game-thread safe, synchronous access to constraint system)
+// Note: Constraint operations go through Barrage/Jolt which is thread-safe.
+// We update Flecs FFlecsConstraintData via EnqueueCommand.
+// ═══════════════════════════════════════════════════════════════
+
+static UBarrageDispatch* GetBarrageDispatch(UObject* WorldContextObject)
+{
+	if (!WorldContextObject) return nullptr;
+	UWorld* World = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::ReturnNull);
+	if (!World) return nullptr;
+	return World->GetSubsystem<UBarrageDispatch>();
+}
+
+int64 UFlecsGameplayLibrary::CreateFixedConstraint(
+	UObject* WorldContextObject,
+	FSkeletonKey Entity1Key,
+	FSkeletonKey Entity2Key,
+	float BreakForce,
+	float BreakTorque)
+{
+	UBarrageDispatch* Barrage = GetBarrageDispatch(WorldContextObject);
+	UFlecsArtillerySubsystem* FlecsSubsystem = GetFlecsSubsystem(WorldContextObject);
+	if (!Barrage || !FlecsSubsystem) return 0;
+
+	// Get BarrageKeys from SkeletonKeys
+	FBarrageKey Body1 = Barrage->GetBarrageKeyFromSkeletonKey(Entity1Key);
+	FBarrageKey Body2 = Barrage->GetBarrageKeyFromSkeletonKey(Entity2Key);
+
+	if (Body1.KeyIntoBarrage == 0 || Body2.KeyIntoBarrage == 0)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("CreateFixedConstraint: Invalid body keys! Entity1=%llu Entity2=%llu"),
+			static_cast<uint64>(Entity1Key), static_cast<uint64>(Entity2Key));
+		return 0;
+	}
+
+	// Create constraint in Barrage (thread-safe)
+	FBarrageConstraintKey ConstraintKey = Barrage->CreateFixedConstraint(Body1, Body2, BreakForce, BreakTorque);
+	if (!ConstraintKey.IsValid())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("CreateFixedConstraint: Failed to create constraint!"));
+		return 0;
+	}
+
+	// Update FFlecsConstraintData on both Flecs entities (via Artillery thread)
+	int64 KeyValue = ConstraintKey.Key;
+	FlecsSubsystem->EnqueueCommand([FlecsSubsystem, Entity1Key, Entity2Key, KeyValue, BreakForce, BreakTorque]()
+	{
+		flecs::world* FlecsWorld = FlecsSubsystem->GetFlecsWorld();
+		if (!FlecsWorld) return;
+
+		// Update Entity1
+		flecs::entity E1 = FlecsSubsystem->GetEntityForBarrageKey(Entity1Key);
+		if (E1.is_valid() && E1.is_alive())
+		{
+			if (!E1.has<FFlecsConstraintData>())
+			{
+				E1.set<FFlecsConstraintData>({});
+			}
+			FFlecsConstraintData* Data = E1.try_get_mut<FFlecsConstraintData>();
+			if (Data)
+			{
+				Data->AddConstraint(KeyValue, Entity2Key, BreakForce, BreakTorque);
+			}
+			E1.add<FTagConstrained>();
+		}
+
+		// Update Entity2
+		flecs::entity E2 = FlecsSubsystem->GetEntityForBarrageKey(Entity2Key);
+		if (E2.is_valid() && E2.is_alive())
+		{
+			if (!E2.has<FFlecsConstraintData>())
+			{
+				E2.set<FFlecsConstraintData>({});
+			}
+			FFlecsConstraintData* Data = E2.try_get_mut<FFlecsConstraintData>();
+			if (Data)
+			{
+				Data->AddConstraint(KeyValue, Entity1Key, BreakForce, BreakTorque);
+			}
+			E2.add<FTagConstrained>();
+		}
+	});
+
+	UE_LOG(LogTemp, Log, TEXT("CreateFixedConstraint: Created constraint %lld between %llu and %llu"),
+		KeyValue, static_cast<uint64>(Entity1Key), static_cast<uint64>(Entity2Key));
+
+	return KeyValue;
+}
+
+int64 UFlecsGameplayLibrary::CreateHingeConstraint(
+	UObject* WorldContextObject,
+	FSkeletonKey Entity1Key,
+	FSkeletonKey Entity2Key,
+	FVector WorldAnchor,
+	FVector HingeAxis,
+	float BreakForce)
+{
+	UBarrageDispatch* Barrage = GetBarrageDispatch(WorldContextObject);
+	UFlecsArtillerySubsystem* FlecsSubsystem = GetFlecsSubsystem(WorldContextObject);
+	if (!Barrage || !FlecsSubsystem) return 0;
+
+	FBarrageKey Body1 = Barrage->GetBarrageKeyFromSkeletonKey(Entity1Key);
+	FBarrageKey Body2 = Barrage->GetBarrageKeyFromSkeletonKey(Entity2Key);
+
+	if (Body1.KeyIntoBarrage == 0 || Body2.KeyIntoBarrage == 0)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("CreateHingeConstraint: Invalid body keys!"));
+		return 0;
+	}
+
+	FBarrageConstraintKey ConstraintKey = Barrage->CreateHingeConstraint(Body1, Body2, WorldAnchor, HingeAxis, BreakForce);
+	if (!ConstraintKey.IsValid())
+	{
+		return 0;
+	}
+
+	int64 KeyValue = ConstraintKey.Key;
+	FlecsSubsystem->EnqueueCommand([FlecsSubsystem, Entity1Key, Entity2Key, KeyValue, BreakForce]()
+	{
+		flecs::world* FlecsWorld = FlecsSubsystem->GetFlecsWorld();
+		if (!FlecsWorld) return;
+
+		auto UpdateEntity = [&](flecs::entity E, FSkeletonKey OtherKey)
+		{
+			if (E.is_valid() && E.is_alive())
+			{
+				if (!E.has<FFlecsConstraintData>())
+				{
+					E.set<FFlecsConstraintData>({});
+				}
+				FFlecsConstraintData* Data = E.try_get_mut<FFlecsConstraintData>();
+				if (Data)
+				{
+					Data->AddConstraint(KeyValue, OtherKey, BreakForce, 0.f);
+				}
+				E.add<FTagConstrained>();
+			}
+		};
+
+		UpdateEntity(FlecsSubsystem->GetEntityForBarrageKey(Entity1Key), Entity2Key);
+		UpdateEntity(FlecsSubsystem->GetEntityForBarrageKey(Entity2Key), Entity1Key);
+	});
+
+	return KeyValue;
+}
+
+int64 UFlecsGameplayLibrary::CreateDistanceConstraint(
+	UObject* WorldContextObject,
+	FSkeletonKey Entity1Key,
+	FSkeletonKey Entity2Key,
+	float MinDistance,
+	float MaxDistance,
+	float BreakForce,
+	float SpringFrequency,
+	float SpringDamping,
+	bool bLockRotation)
+{
+	UBarrageDispatch* Barrage = GetBarrageDispatch(WorldContextObject);
+	UFlecsArtillerySubsystem* FlecsSubsystem = GetFlecsSubsystem(WorldContextObject);
+	if (!Barrage || !FlecsSubsystem) return 0;
+
+	FBarrageKey Body1 = Barrage->GetBarrageKeyFromSkeletonKey(Entity1Key);
+	FBarrageKey Body2 = Barrage->GetBarrageKeyFromSkeletonKey(Entity2Key);
+
+	if (Body1.KeyIntoBarrage == 0 || Body2.KeyIntoBarrage == 0)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("CreateDistanceConstraint: Invalid body keys!"));
+		return 0;
+	}
+
+	UE_LOG(LogTemp, Warning, TEXT("GameplayLib CreateDistance: MinDist=%.1f, MaxDist=%.1f, SpringFreq=%.2f, SpringDamp=%.2f, LockRot=%d"),
+		MinDistance, MaxDistance, SpringFrequency, SpringDamping, bLockRotation ? 1 : 0);
+
+	FBarrageConstraintKey ConstraintKey = Barrage->CreateDistanceConstraint(Body1, Body2, MinDistance, MaxDistance, BreakForce, SpringFrequency, SpringDamping, bLockRotation);
+	if (!ConstraintKey.IsValid())
+	{
+		return 0;
+	}
+
+	int64 KeyValue = ConstraintKey.Key;
+	FlecsSubsystem->EnqueueCommand([FlecsSubsystem, Entity1Key, Entity2Key, KeyValue, BreakForce]()
+	{
+		flecs::world* FlecsWorld = FlecsSubsystem->GetFlecsWorld();
+		if (!FlecsWorld) return;
+
+		auto UpdateEntity = [&](flecs::entity E, FSkeletonKey OtherKey)
+		{
+			if (E.is_valid() && E.is_alive())
+			{
+				if (!E.has<FFlecsConstraintData>())
+				{
+					E.set<FFlecsConstraintData>({});
+				}
+				FFlecsConstraintData* Data = E.try_get_mut<FFlecsConstraintData>();
+				if (Data)
+				{
+					Data->AddConstraint(KeyValue, OtherKey, BreakForce, 0.f);
+				}
+				E.add<FTagConstrained>();
+			}
+		};
+
+		UpdateEntity(FlecsSubsystem->GetEntityForBarrageKey(Entity1Key), Entity2Key);
+		UpdateEntity(FlecsSubsystem->GetEntityForBarrageKey(Entity2Key), Entity1Key);
+	});
+
+	return KeyValue;
+}
+
+int64 UFlecsGameplayLibrary::CreatePointConstraint(
+	UObject* WorldContextObject,
+	FSkeletonKey Entity1Key,
+	FSkeletonKey Entity2Key,
+	float BreakForce,
+	float BreakTorque)
+{
+	UBarrageDispatch* Barrage = GetBarrageDispatch(WorldContextObject);
+	UFlecsArtillerySubsystem* FlecsSubsystem = GetFlecsSubsystem(WorldContextObject);
+	if (!Barrage || !FlecsSubsystem) return 0;
+
+	FBarrageKey Body1 = Barrage->GetBarrageKeyFromSkeletonKey(Entity1Key);
+	FBarrageKey Body2 = Barrage->GetBarrageKeyFromSkeletonKey(Entity2Key);
+
+	if (Body1.KeyIntoBarrage == 0 || Body2.KeyIntoBarrage == 0)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("CreatePointConstraint: Invalid body keys!"));
+		return 0;
+	}
+
+	FBarrageConstraintSystem* ConstraintSystem = Barrage->GetConstraintSystem();
+	if (!ConstraintSystem) return 0;
+
+	FBPointConstraintParams Params;
+	Params.Body1 = Body1;
+	Params.Body2 = Body2;
+	Params.Space = EBConstraintSpace::WorldSpace;
+	Params.bAutoDetectAnchor = true;
+	Params.BreakForce = BreakForce;
+	Params.BreakTorque = BreakTorque;
+
+	FBarrageConstraintKey ConstraintKey = ConstraintSystem->CreatePoint(Params);
+	if (!ConstraintKey.IsValid())
+	{
+		return 0;
+	}
+
+	int64 KeyValue = ConstraintKey.Key;
+	FlecsSubsystem->EnqueueCommand([FlecsSubsystem, Entity1Key, Entity2Key, KeyValue, BreakForce, BreakTorque]()
+	{
+		auto UpdateEntity = [&](flecs::entity E, FSkeletonKey OtherKey)
+		{
+			if (E.is_valid() && E.is_alive())
+			{
+				if (!E.has<FFlecsConstraintData>())
+				{
+					E.set<FFlecsConstraintData>({});
+				}
+				FFlecsConstraintData* Data = E.try_get_mut<FFlecsConstraintData>();
+				if (Data)
+				{
+					Data->AddConstraint(KeyValue, OtherKey, BreakForce, BreakTorque);
+				}
+				E.add<FTagConstrained>();
+			}
+		};
+
+		UpdateEntity(FlecsSubsystem->GetEntityForBarrageKey(Entity1Key), Entity2Key);
+		UpdateEntity(FlecsSubsystem->GetEntityForBarrageKey(Entity2Key), Entity1Key);
+	});
+
+	return KeyValue;
+}
+
+bool UFlecsGameplayLibrary::RemoveConstraint(UObject* WorldContextObject, int64 ConstraintKey)
+{
+	UBarrageDispatch* Barrage = GetBarrageDispatch(WorldContextObject);
+	if (!Barrage || ConstraintKey == 0) return false;
+
+	FBarrageConstraintKey Key;
+	Key.Key = ConstraintKey;
+
+	bool bRemoved = Barrage->RemoveConstraint(Key);
+
+	// Note: FFlecsConstraintData cleanup on entities happens automatically when
+	// constraint breaking is processed via ProcessBreakableConstraints()
+	// or can be cleaned up manually if needed.
+
+	return bRemoved;
+}
+
+int32 UFlecsGameplayLibrary::RemoveAllConstraintsFromEntity(UObject* WorldContextObject, FSkeletonKey EntityKey)
+{
+	UBarrageDispatch* Barrage = GetBarrageDispatch(WorldContextObject);
+	UFlecsArtillerySubsystem* FlecsSubsystem = GetFlecsSubsystem(WorldContextObject);
+	if (!Barrage || !FlecsSubsystem || !EntityKey.IsValid()) return 0;
+
+	FBarrageKey BodyKey = Barrage->GetBarrageKeyFromSkeletonKey(EntityKey);
+	if (BodyKey.KeyIntoBarrage == 0) return 0;
+
+	FBarrageConstraintSystem* ConstraintSystem = Barrage->GetConstraintSystem();
+	if (!ConstraintSystem) return 0;
+
+	int32 RemovedCount = ConstraintSystem->RemoveAllForBody(BodyKey);
+
+	// Clear FFlecsConstraintData on entity
+	FlecsSubsystem->EnqueueCommand([FlecsSubsystem, EntityKey]()
+	{
+		flecs::entity Entity = FlecsSubsystem->GetEntityForBarrageKey(EntityKey);
+		if (Entity.is_valid() && Entity.is_alive())
+		{
+			Entity.remove<FFlecsConstraintData>();
+			Entity.remove<FTagConstrained>();
+		}
+	});
+
+	return RemovedCount;
+}
+
+bool UFlecsGameplayLibrary::IsConstraintActive(UObject* WorldContextObject, int64 ConstraintKey)
+{
+	UBarrageDispatch* Barrage = GetBarrageDispatch(WorldContextObject);
+	if (!Barrage || ConstraintKey == 0) return false;
+
+	FBarrageConstraintSystem* ConstraintSystem = Barrage->GetConstraintSystem();
+	if (!ConstraintSystem) return false;
+
+	FBarrageConstraintKey Key;
+	Key.Key = ConstraintKey;
+
+	return ConstraintSystem->IsValid(Key);
+}
+
+bool UFlecsGameplayLibrary::GetConstraintStressRatio(UObject* WorldContextObject, int64 ConstraintKey, float& OutStressRatio)
+{
+	OutStressRatio = 0.f;
+
+	UBarrageDispatch* Barrage = GetBarrageDispatch(WorldContextObject);
+	if (!Barrage || ConstraintKey == 0) return false;
+
+	FBarrageConstraintSystem* ConstraintSystem = Barrage->GetConstraintSystem();
+	if (!ConstraintSystem) return false;
+
+	FBarrageConstraintKey Key;
+	Key.Key = ConstraintKey;
+
+	FBConstraintForces Forces;
+	if (!ConstraintSystem->GetForces(Key, Forces))
+	{
+		return false;
+	}
+
+	// We need to access break thresholds to compute ratio
+	// For now, return the raw force magnitude - UI can normalize if needed
+	// TODO: Add GetBreakThresholds() to FBarrageConstraintSystem if needed
+	OutStressRatio = Forces.GetForceMagnitude();
+	return true;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// CONSTRAINED GROUP SPAWNING
+// ═══════════════════════════════════════════════════════════════
+
+namespace
+{
+	std::atomic<uint32> GGroupElementCounter{0};
+}
+
+FFlecsGroupSpawnResult UFlecsGameplayLibrary::SpawnConstrainedGroup(
+	UObject* WorldContextObject,
+	UFlecsConstrainedGroupDefinition* Definition,
+	FVector Location,
+	FRotator Rotation)
+{
+	FFlecsGroupSpawnResult Result;
+	Result.bSuccess = false;
+
+	if (!WorldContextObject || !Definition || !Definition->IsValid())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("SpawnConstrainedGroup: Invalid parameters!"));
+		return Result;
+	}
+
+	UWorld* World = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::ReturnNull);
+	if (!World) return Result;
+
+	UBarrageDispatch* Barrage = World->GetSubsystem<UBarrageDispatch>();
+	UBarrageRenderManager* Renderer = UBarrageRenderManager::Get(World);
+	UFlecsArtillerySubsystem* FlecsSubsystem = World->GetSubsystem<UFlecsArtillerySubsystem>();
+
+	if (!Barrage || !FlecsSubsystem)
+	{
+		UE_LOG(LogTemp, Error, TEXT("SpawnConstrainedGroup: Missing subsystems!"));
+		return Result;
+	}
+
+	FTransform GroupTransform(Rotation, Location);
+	Result.ElementKeys.Reserve(Definition->Elements.Num());
+	Result.ConstraintKeys.Reserve(Definition->Constraints.Num());
+
+	// ═══════════════════════════════════════════════════════════════
+	// PHASE 1: Spawn all elements (Barrage bodies + ISM)
+	// ═══════════════════════════════════════════════════════════════
+
+	for (const FFlecsGroupElement& Element : Definition->Elements)
+	{
+		if (!Element.Mesh)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("SpawnConstrainedGroup: Element '%s' has no mesh!"), *Element.ElementName.ToString());
+			Result.ElementKeys.Add(FSkeletonKey());
+			continue;
+		}
+
+		// Calculate world transform
+		FTransform LocalTransform(Element.LocalRotation, Element.LocalOffset, Element.Scale);
+		FTransform WorldTransform = LocalTransform * GroupTransform;
+
+		// Generate unique key
+		const uint32 Id = ++GGroupElementCounter;
+		FSkeletonKey EntityKey = FSkeletonKey(FORGE_SKELETON_KEY(Id, SKELLY::SFIX_ITEM));
+
+		// Create physics body
+		FBarrageSpawnParams Params;
+		Params.Mesh = Element.Mesh;
+		Params.WorldTransform = WorldTransform;
+		Params.EntityKey = EntityKey;
+		Params.PhysicsLayer = Element.PhysicsLayer;
+		Params.bAutoCollider = true;
+		Params.bIsMovable = Element.bIsMovable;
+		Params.bDestructible = Element.MaxHealth > 0.f;
+		Params.Friction = Element.Friction;
+		Params.Restitution = Element.Restitution;
+
+		FBarrageSpawnResult SpawnResult = FBarrageSpawnUtils::SpawnEntity(World, Params);
+		if (!SpawnResult.bSuccess)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("SpawnConstrainedGroup: Failed to spawn element '%s'"), *Element.ElementName.ToString());
+			Result.ElementKeys.Add(FSkeletonKey());
+			continue;
+		}
+
+		// Add ISM render instance
+		if (Renderer)
+		{
+			Renderer->AddInstance(Element.Mesh, Element.Material, WorldTransform, EntityKey);
+		}
+
+		Result.ElementKeys.Add(EntityKey);
+
+		// Queue Flecs entity creation
+		float MaxHP = Element.MaxHealth;
+		float ArmorVal = Element.Armor;
+		UStaticMesh* MeshPtr = Element.Mesh;
+		FVector ScaleVal = Element.Scale;
+
+		FlecsSubsystem->EnqueueCommand([FlecsSubsystem, EntityKey, MeshPtr, ScaleVal, MaxHP, ArmorVal]()
+		{
+			flecs::world* FlecsWorld = FlecsSubsystem->GetFlecsWorld();
+			if (!FlecsWorld) return;
+
+			flecs::entity Entity = FlecsWorld->entity()
+				.set<FISMRender>({ MeshPtr, ScaleVal });
+
+			if (MaxHP > 0.f)
+			{
+				Entity.set<FHealthData>({ MaxHP, MaxHP, ArmorVal });
+				Entity.add<FTagDestructible>();
+			}
+
+			FlecsSubsystem->BindEntityToBarrage(Entity, EntityKey);
+		});
+	}
+
+	// ═══════════════════════════════════════════════════════════════
+	// PHASE 2: Create constraints between elements
+	// ═══════════════════════════════════════════════════════════════
+
+	for (const FFlecsGroupConstraint& ConstraintDef : Definition->Constraints)
+	{
+		// Validate indices
+		if (ConstraintDef.Element1Index >= Result.ElementKeys.Num() ||
+			ConstraintDef.Element2Index >= Result.ElementKeys.Num())
+		{
+			UE_LOG(LogTemp, Warning, TEXT("SpawnConstrainedGroup: Invalid constraint indices!"));
+			Result.ConstraintKeys.Add(0);
+			continue;
+		}
+
+		FSkeletonKey Key1 = Result.ElementKeys[ConstraintDef.Element1Index];
+		FSkeletonKey Key2 = Result.ElementKeys[ConstraintDef.Element2Index];
+
+		if (!Key1.IsValid() || !Key2.IsValid())
+		{
+			Result.ConstraintKeys.Add(0);
+			continue;
+		}
+
+		FBarrageKey Body1 = Barrage->GetBarrageKeyFromSkeletonKey(Key1);
+		FBarrageKey Body2 = Barrage->GetBarrageKeyFromSkeletonKey(Key2);
+
+		if (Body1.KeyIntoBarrage == 0 || Body2.KeyIntoBarrage == 0)
+		{
+			Result.ConstraintKeys.Add(0);
+			continue;
+		}
+
+		FBarrageConstraintKey ConstraintKey;
+
+		// Calculate world anchor for hinge/distance
+		const FFlecsGroupElement& Elem1 = Definition->Elements[ConstraintDef.Element1Index];
+		FTransform LocalTransform1(Elem1.LocalRotation, Elem1.LocalOffset, Elem1.Scale);
+		FTransform WorldTransform1 = LocalTransform1 * GroupTransform;
+		FVector WorldAnchor = WorldTransform1.TransformPosition(ConstraintDef.AnchorOffset1);
+		FVector WorldHingeAxis = WorldTransform1.TransformVectorNoScale(ConstraintDef.HingeAxis);
+
+		switch (ConstraintDef.ConstraintType)
+		{
+		case EFlecsConstraintType::Fixed:
+			ConstraintKey = Barrage->CreateFixedConstraint(Body1, Body2, ConstraintDef.BreakForce, ConstraintDef.BreakTorque);
+			break;
+
+		case EFlecsConstraintType::Hinge:
+			ConstraintKey = Barrage->CreateHingeConstraint(Body1, Body2, WorldAnchor, WorldHingeAxis, ConstraintDef.BreakForce);
+			break;
+
+		case EFlecsConstraintType::Distance:
+			ConstraintKey = Barrage->CreateDistanceConstraint(Body1, Body2, ConstraintDef.MinDistance, ConstraintDef.MaxDistance, ConstraintDef.BreakForce, ConstraintDef.SpringFrequency, ConstraintDef.SpringDamping, ConstraintDef.bLockRotation);
+			break;
+
+		case EFlecsConstraintType::Point:
+			{
+				// Point constraint uses the same system as fixed but with different settings
+				FBarrageConstraintSystem* System = Barrage->GetConstraintSystem();
+				if (System)
+				{
+					FBPointConstraintParams Params;
+					Params.Body1 = Body1;
+					Params.Body2 = Body2;
+					Params.Space = EBConstraintSpace::WorldSpace;
+					Params.AnchorPoint1 = WorldAnchor;
+					Params.AnchorPoint2 = WorldTransform1.TransformPosition(ConstraintDef.AnchorOffset2);
+					Params.BreakForce = ConstraintDef.BreakForce;
+					Params.BreakTorque = ConstraintDef.BreakTorque;
+					ConstraintKey = System->CreatePoint(Params);
+				}
+			}
+			break;
+		}
+
+		int64 KeyValue = ConstraintKey.Key;
+		Result.ConstraintKeys.Add(KeyValue);
+
+		// Update Flecs constraint data
+		if (ConstraintKey.IsValid())
+		{
+			float BreakF = ConstraintDef.BreakForce;
+			float BreakT = ConstraintDef.BreakTorque;
+
+			FlecsSubsystem->EnqueueCommand([FlecsSubsystem, Key1, Key2, KeyValue, BreakF, BreakT]()
+			{
+				auto UpdateEntity = [&](flecs::entity E, FSkeletonKey OtherKey)
+				{
+					if (E.is_valid() && E.is_alive())
+					{
+						if (!E.has<FFlecsConstraintData>())
+						{
+							E.set<FFlecsConstraintData>({});
+						}
+						FFlecsConstraintData* Data = E.try_get_mut<FFlecsConstraintData>();
+						if (Data)
+						{
+							Data->AddConstraint(KeyValue, OtherKey, BreakF, BreakT);
+						}
+						E.add<FTagConstrained>();
+					}
+				};
+
+				UpdateEntity(FlecsSubsystem->GetEntityForBarrageKey(Key1), Key2);
+				UpdateEntity(FlecsSubsystem->GetEntityForBarrageKey(Key2), Key1);
+			});
+		}
+	}
+
+	Result.bSuccess = true;
+	UE_LOG(LogTemp, Log, TEXT("SpawnConstrainedGroup: Spawned %d elements with %d constraints"),
+		Result.ElementKeys.Num(), Result.ConstraintKeys.Num());
+
+	return Result;
+}
+
+FFlecsGroupSpawnResult UFlecsGameplayLibrary::SpawnChain(
+	UObject* WorldContextObject,
+	UStaticMesh* Mesh,
+	FVector StartLocation,
+	FVector Direction,
+	int32 Count,
+	float Spacing,
+	float BreakForce,
+	float MaxHealth)
+{
+	FFlecsGroupSpawnResult Result;
+	Result.bSuccess = false;
+
+	if (!WorldContextObject || !Mesh || Count < 1)
+	{
+		return Result;
+	}
+
+	Direction.Normalize();
+	FVector SpacingVec = Direction * Spacing;
+
+	UWorld* World = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::ReturnNull);
+	if (!World) return Result;
+
+	UBarrageDispatch* Barrage = World->GetSubsystem<UBarrageDispatch>();
+	UBarrageRenderManager* Renderer = UBarrageRenderManager::Get(World);
+	UFlecsArtillerySubsystem* FlecsSubsystem = World->GetSubsystem<UFlecsArtillerySubsystem>();
+
+	if (!Barrage || !FlecsSubsystem)
+	{
+		return Result;
+	}
+
+	Result.ElementKeys.Reserve(Count);
+	Result.ConstraintKeys.Reserve(Count - 1);
+
+	// Spawn elements
+	for (int32 i = 0; i < Count; ++i)
+	{
+		FVector Location = StartLocation + SpacingVec * static_cast<float>(i);
+
+		const uint32 Id = ++GGroupElementCounter;
+		FSkeletonKey EntityKey = FSkeletonKey(FORGE_SKELETON_KEY(Id, SKELLY::SFIX_ITEM));
+
+		FBarrageSpawnParams Params;
+		Params.Mesh = Mesh;
+		Params.WorldTransform = FTransform(Location);
+		Params.EntityKey = EntityKey;
+		Params.PhysicsLayer = EPhysicsLayer::MOVING;
+		Params.bAutoCollider = true;
+		Params.bIsMovable = true;
+		Params.bDestructible = MaxHealth > 0.f;
+
+		FBarrageSpawnResult SpawnResult = FBarrageSpawnUtils::SpawnEntity(World, Params);
+		if (!SpawnResult.bSuccess)
+		{
+			Result.ElementKeys.Add(FSkeletonKey());
+			continue;
+		}
+
+		if (Renderer)
+		{
+			Renderer->AddInstance(Mesh, nullptr, FTransform(Location), EntityKey);
+		}
+
+		Result.ElementKeys.Add(EntityKey);
+
+		// Flecs entity
+		FlecsSubsystem->EnqueueCommand([FlecsSubsystem, EntityKey, Mesh, MaxHealth]()
+		{
+			flecs::world* FlecsWorld = FlecsSubsystem->GetFlecsWorld();
+			if (!FlecsWorld) return;
+
+			flecs::entity Entity = FlecsWorld->entity()
+				.set<FISMRender>({ Mesh, FVector::OneVector });
+
+			if (MaxHealth > 0.f)
+			{
+				Entity.set<FHealthData>({ MaxHealth, MaxHealth, 0.f });
+				Entity.add<FTagDestructible>();
+			}
+
+			FlecsSubsystem->BindEntityToBarrage(Entity, EntityKey);
+		});
+	}
+
+	// Create constraints between adjacent elements
+	for (int32 i = 0; i < Count - 1; ++i)
+	{
+		FSkeletonKey Key1 = Result.ElementKeys[i];
+		FSkeletonKey Key2 = Result.ElementKeys[i + 1];
+
+		if (!Key1.IsValid() || !Key2.IsValid())
+		{
+			Result.ConstraintKeys.Add(0);
+			continue;
+		}
+
+		int64 ConstraintKey = CreateFixedConstraint(WorldContextObject, Key1, Key2, BreakForce, 0.f);
+		Result.ConstraintKeys.Add(ConstraintKey);
+	}
+
+	Result.bSuccess = true;
+	return Result;
 }

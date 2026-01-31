@@ -195,6 +195,18 @@ struct FBSliderConstraintParams : public FBConstraintParamsBase
 
 	/** Maximum force the motor can apply */
 	float MotorMaxForce = 0.0f;
+
+	/**
+	 * Spring frequency in Hz. Set to 0 for hard constraint.
+	 * Higher values = stiffer spring.
+	 */
+	float SpringFrequency = 0.0f;
+
+	/**
+	 * Spring damping ratio. 0 = no damping, 1 = critical damping.
+	 * Only used when SpringFrequency > 0.
+	 */
+	float SpringDamping = 0.0f;
 };
 
 /**
@@ -221,6 +233,13 @@ struct FBDistanceConstraintParams : public FBConstraintParamsBase
 	 * Only used when SpringFrequency > 0.
 	 */
 	float SpringDamping = 0.0f;
+
+	/**
+	 * Lock relative rotation between bodies.
+	 * When true, uses SliderConstraint internally instead of DistanceConstraint.
+	 * Bodies maintain their relative orientation but can compress/extend like a telescoping rod.
+	 */
+	bool bLockRotation = false;
 };
 
 /**

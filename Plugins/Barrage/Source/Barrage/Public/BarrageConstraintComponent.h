@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
 #include "FBConstraintParams.h"
+#include "BarrageBodyOwner.h"
 #include "BarrageConstraintComponent.generated.h"
 
 class UBarrageDispatch;

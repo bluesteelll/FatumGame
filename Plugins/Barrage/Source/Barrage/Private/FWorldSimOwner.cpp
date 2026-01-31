@@ -268,7 +268,7 @@ Ref<Shape> FWorldSimOwner::AttemptBoxCache(double JoltX, double JoltY, double Jo
 }
 
 //we need the coordinate utils, but we don't really want to include them in the .h
-FBarrageKey FWorldSimOwner::CreatePrimitive(FBBoxParams& ToCreate, uint16 Layer, bool IsSensor, bool forceDynamic, bool isMovable)
+FBarrageKey FWorldSimOwner::CreatePrimitive(FBBoxParams& ToCreate, uint16 Layer, bool IsSensor, bool forceDynamic, bool isMovable, float Friction, float Restitution)
 {
 	//if movable, check if dynamic. if not movable but dynamic, come on guys.
 	EMotionType MovementType = isMovable ?
@@ -298,7 +298,8 @@ FBarrageKey FWorldSimOwner::CreatePrimitive(FBBoxParams& ToCreate, uint16 Layer,
 	box_body_settings.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
 	box_body_settings.mIsSensor = IsSensor;
 	box_body_settings.mMotionQuality = MotionQuality;
-	box_body_settings.mRestitution = 0.3f; // Allow some bounce for projectiles
+	box_body_settings.mFriction = FMath::Clamp(Friction, 0.0f, 1.0f);
+	box_body_settings.mRestitution = FMath::Clamp(Restitution, 0.0f, 1.0f);
 
 	if (MovementType == EMotionType::Dynamic && (Layer == Layers::MOVING || Layer == Layers::ENEMY))
 	{

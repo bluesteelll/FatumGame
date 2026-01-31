@@ -243,6 +243,71 @@ struct FTagCharacter {};
 // COLLISION COMPONENTS
 // ═══════════════════════════════════════════════════════════════
 
+// ═══════════════════════════════════════════════════════════════
+// CONSTRAINT COMPONENTS
+// ═══════════════════════════════════════════════════════════════
+
+/** Single constraint link data. */
+USTRUCT(BlueprintType)
+struct FConstraintLink
+{
+	GENERATED_BODY()
+
+	/** Constraint key from Barrage ConstraintSystem */
+	UPROPERTY(BlueprintReadOnly, Category = "Constraint")
+	int64 ConstraintKey = 0;
+
+	/** SkeletonKey of the other entity in this constraint */
+	UPROPERTY(BlueprintReadOnly, Category = "Constraint")
+	FSkeletonKey OtherEntityKey;
+
+	/** Break force threshold (0 = unbreakable) */
+	UPROPERTY(BlueprintReadOnly, Category = "Constraint")
+	float BreakForce = 0.f;
+
+	/** Break torque threshold (0 = unbreakable) */
+	UPROPERTY(BlueprintReadOnly, Category = "Constraint")
+	float BreakTorque = 0.f;
+
+	bool IsValid() const { return ConstraintKey != 0; }
+};
+
+/** Constraint data. Entities with this are constrained to other entities. */
+USTRUCT(BlueprintType)
+struct FFlecsConstraintData
+{
+	GENERATED_BODY()
+
+	/** All constraints this entity participates in */
+	UPROPERTY(BlueprintReadOnly, Category = "Constraint")
+	TArray<FConstraintLink> Constraints;
+
+	int32 GetConstraintCount() const { return Constraints.Num(); }
+	bool HasConstraints() const { return Constraints.Num() > 0; }
+
+	void AddConstraint(int64 Key, FSkeletonKey OtherKey, float BreakForce = 0.f, float BreakTorque = 0.f)
+	{
+		FConstraintLink Link;
+		Link.ConstraintKey = Key;
+		Link.OtherEntityKey = OtherKey;
+		Link.BreakForce = BreakForce;
+		Link.BreakTorque = BreakTorque;
+		Constraints.Add(Link);
+	}
+
+	bool RemoveConstraint(int64 Key)
+	{
+		return Constraints.RemoveAll([Key](const FConstraintLink& L) { return L.ConstraintKey == Key; }) > 0;
+	}
+};
+
+/** Tag for entities that are part of a constraint chain (optimization for queries) */
+struct FTagConstrained {};
+
+// ═══════════════════════════════════════════════════════════════
+// COLLISION COMPONENTS
+// ═══════════════════════════════════════════════════════════════
+
 /**
  * Collision event data. Created when two Flecs-tracked entities collide.
  * Processed by collision systems, then removed.

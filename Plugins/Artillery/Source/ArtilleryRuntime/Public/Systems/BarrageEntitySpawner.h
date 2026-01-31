@@ -41,6 +41,10 @@ struct ARTILLERYRUNTIME_API FBarrageSpawnParams
 	FVector InitialVelocity = FVector::ZeroVector;
 	float GravityFactor = 1.0f;
 
+	// Surface properties
+	float Friction = 0.5f;        // 0 = ice, 1 = sticky
+	float Restitution = 0.3f;     // 0 = no bounce, 1 = full bounce
+
 	// Behavior tags
 	bool bDestructible = false;
 	bool bDamagesPlayer = false;

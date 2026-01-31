@@ -4,6 +4,8 @@
 #include "BarrageDispatch.h"
 #include "FWorldSimOwner.h"
 #include "BarrageConstraintSystem.h"
+#include "KeyCarry.h"
+#include "BarrageBodyOwner.h"
 
 UBarrageConstraintComponent::UBarrageConstraintComponent()
 {

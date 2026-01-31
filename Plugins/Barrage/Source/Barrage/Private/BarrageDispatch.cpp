@@ -188,11 +188,11 @@ void UBarrageDispatch::CastRay(
 //and it's not clear to me that Shapefulness is going to actually be the defining shared
 //feature. I'm going to wait to refactor the types until testing is complete.
 FBLet UBarrageDispatch::CreatePrimitive(FBBoxParams& Definition, FSkeletonKey OutKey, uint16_t Layer, bool isSensor,
-                                        bool forceDynamic, bool isMovable)
+                                        bool forceDynamic, bool isMovable, float Friction, float Restitution)
 {
 	if (JoltGameSim)
 	{
-		FBarrageKey temp = JoltGameSim->CreatePrimitive(Definition, Layer, isSensor, forceDynamic, isMovable);
+		FBarrageKey temp = JoltGameSim->CreatePrimitive(Definition, Layer, isSensor, forceDynamic, isMovable, Friction, Restitution);
 		return ManagePointers(OutKey, temp, Box);
 	}
 	return nullptr;
@@ -467,7 +467,8 @@ FBarrageConstraintKey UBarrageDispatch::CreateHingeConstraint(FBarrageKey Body1,
 
 FBarrageConstraintKey UBarrageDispatch::CreateDistanceConstraint(FBarrageKey Body1, FBarrageKey Body2,
 																  float MinDistance, float MaxDistance,
-																  float BreakForce)
+																  float BreakForce, float SpringFrequency,
+																  float SpringDamping, bool bLockRotation)
 {
 	FBarrageConstraintSystem* System = GetConstraintSystem();
 	if (!System)
@@ -483,6 +484,9 @@ FBarrageConstraintKey UBarrageDispatch::CreateDistanceConstraint(FBarrageKey Bod
 	Params.MinDistance = MinDistance;
 	Params.MaxDistance = MaxDistance;
 	Params.BreakForce = BreakForce;
+	Params.SpringFrequency = SpringFrequency;
+	Params.SpringDamping = SpringDamping;
+	Params.bLockRotation = bLockRotation;
 
 	return System->CreateDistance(Params);
 }
