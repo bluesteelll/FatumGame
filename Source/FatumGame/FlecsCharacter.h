@@ -9,6 +9,7 @@
 #include "FlecsCharacter.generated.h"
 
 class UFlecsProjectileDefinition;
+class UFlecsEntityDefinition;
 class UBarrageCharacterMovement;
 class UPlayerKeyCarry;
 class UInputAction;
@@ -87,6 +88,14 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input")
 	TObjectPtr<UInputAction> FireAction;
 
+	/** Spawn Item Input Action (E) */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input")
+	TObjectPtr<UInputAction> SpawnItemAction;
+
+	/** Destroy Item Input Action (F) */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input")
+	TObjectPtr<UInputAction> DestroyItemAction;
+
 	// ═══════════════════════════════════════════════════════════════
 	// HEALTH
 	// ═══════════════════════════════════════════════════════════════
@@ -152,6 +161,58 @@ public:
 	TArray<FSkeletonKey> FireProjectileSpread(int32 Count = 8, float SpreadAngle = 15.f);
 
 	// ═══════════════════════════════════════════════════════════════
+	// ENTITY SPAWNING (TEST)
+	// ═══════════════════════════════════════════════════════════════
+
+	/** Entity definition for test spawning (E key) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flecs|Entity")
+	TObjectPtr<UFlecsEntityDefinition> TestEntityDefinition;
+
+	/** Distance in front of character to spawn entity */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flecs|Entity")
+	float SpawnDistance = 200.f;
+
+	/** Spawn entity from TestEntityDefinition in front of character */
+	UFUNCTION(BlueprintCallable, Category = "Flecs|Entity")
+	FSkeletonKey SpawnTestEntity();
+
+	/** Destroy the last spawned test entity */
+	UFUNCTION(BlueprintCallable, Category = "Flecs|Entity")
+	void DestroyLastSpawnedEntity();
+
+	/** Get all spawned test entities */
+	UFUNCTION(BlueprintPure, Category = "Flecs|Entity")
+	TArray<FSkeletonKey> GetSpawnedEntities() const { return SpawnedEntityKeys; }
+
+	// ═══════════════════════════════════════════════════════════════
+	// CONTAINER TESTING
+	// ═══════════════════════════════════════════════════════════════
+
+	/** Container definition for testing (spawns on first E press if set) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flecs|Container")
+	TObjectPtr<UFlecsEntityDefinition> TestContainerDefinition;
+
+	/** Item definition to add to container on E press (must have ItemDefinition profile) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flecs|Container")
+	TObjectPtr<UFlecsEntityDefinition> TestItemDefinition;
+
+	/** Current test container key (spawned automatically) */
+	UPROPERTY(BlueprintReadOnly, Category = "Flecs|Container")
+	FSkeletonKey TestContainerKey;
+
+	/** Spawn test container in front of character (called automatically if TestContainerDefinition set) */
+	UFUNCTION(BlueprintCallable, Category = "Flecs|Container")
+	FSkeletonKey SpawnTestContainer();
+
+	/** Add test item to the container. Returns true if added. */
+	UFUNCTION(BlueprintCallable, Category = "Flecs|Container")
+	bool AddItemToTestContainer();
+
+	/** Remove all items from test container. Shows count on screen. */
+	UFUNCTION(BlueprintCallable, Category = "Flecs|Container")
+	void RemoveAllItemsFromTestContainer();
+
+	// ═══════════════════════════════════════════════════════════════
 	// IDENTITY
 	// ═══════════════════════════════════════════════════════════════
 
@@ -205,7 +266,15 @@ protected:
 	/** Called when Fire is pressed */
 	void StartFire(const FInputActionValue& Value);
 
+	/** Called when SpawnItem (E) is pressed */
+	void OnSpawnItem(const FInputActionValue& Value);
+
+	/** Called when DestroyItem (F) is pressed */
+	void OnDestroyItem(const FInputActionValue& Value);
+
 private:
+	/** Keys of spawned test entities (for cleanup) */
+	TArray<FSkeletonKey> SpawnedEntityKeys;
 	/** Cached health for change detection */
 	float CachedHealth = 0.f;
 

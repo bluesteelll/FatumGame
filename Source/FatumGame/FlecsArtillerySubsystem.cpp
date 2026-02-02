@@ -5,7 +5,11 @@
 #include "BarrageDispatch.h"
 #include "FBarragePrimitive.h"
 #include "FlecsComponents.h"
+#include "FlecsItemDefinition.h"
+#include "FlecsEntityDefinition.h"
+#include "ItemRegistry.h"
 #include "Systems/BarrageEntitySpawner.h"
+#include "EPhysicsLayer.h"
 
 bool UFlecsArtillerySubsystem::RegistrationImplementation()
 {
@@ -75,8 +79,69 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 	World.component<FFlecsConstraintData>();
 	World.component<FTagConstrained>();
 
+	// Advanced Item System components
+	World.component<FItemStaticData>();  // Prefab component for shared item data
+	World.component<FItemInstance>();
+	World.component<FItemUniqueData>();
+	World.component<FContainedIn>();
+	World.component<FWorldItemData>();
+	World.component<FContainerBase>();
+	World.component<FContainerGridData>();
+	World.component<FContainerSlotsData>();
+	World.component<FContainerListData>();
+	World.component<FTagDroppedItem>();
+	World.component<FTagContainer>();
+	World.component<FTagEquipment>();
+	World.component<FTagConsumable>();
+
 	// ─────────────────────────────────────────────────────────
-	// ITEM DESPAWN SYSTEM
+	// WORLD ITEM DESPAWN SYSTEM (NEW)
+	// World items with FWorldItemData get their DespawnTimer
+	// decremented. When it hits 0, the entity is tagged FTagDead.
+	// ─────────────────────────────────────────────────────────
+	World.system<FWorldItemData>("WorldItemDespawnSystem")
+		.with<FTagItem>()
+		.without<FTagDead>()
+		.each([](flecs::entity Entity, FWorldItemData& ItemData)
+		{
+			if (ItemData.DespawnTimer > 0.f)
+			{
+				constexpr float DeltaTime = 1.f / 120.f;
+				ItemData.DespawnTimer -= DeltaTime;
+				if (ItemData.DespawnTimer <= 0.f)
+				{
+					Entity.add<FTagDead>();
+				}
+			}
+		});
+
+	// ─────────────────────────────────────────────────────────
+	// PICKUP GRACE SYSTEM (NEW)
+	// World items with FTagDroppedItem get their PickupGraceTimer
+	// decremented. When it hits 0, the tag is removed and item
+	// becomes pickupable.
+	// ─────────────────────────────────────────────────────────
+	World.system<FWorldItemData>("PickupGraceSystem")
+		.with<FTagDroppedItem>()
+		.each([](flecs::entity Entity, FWorldItemData& ItemData)
+		{
+			if (ItemData.PickupGraceTimer > 0.f)
+			{
+				constexpr float DeltaTime = 1.f / 120.f;
+				ItemData.PickupGraceTimer -= DeltaTime;
+				if (ItemData.PickupGraceTimer <= 0.f)
+				{
+					Entity.remove<FTagDroppedItem>();
+				}
+			}
+			else
+			{
+				Entity.remove<FTagDroppedItem>();
+			}
+		});
+
+	// ─────────────────────────────────────────────────────────
+	// LEGACY ITEM DESPAWN SYSTEM
 	// Entities with FItemData and a positive DespawnTimer get
 	// their timer decremented. When it hits 0, the entity is
 	// tagged FTagDead for cleanup.
@@ -182,13 +247,13 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 	// Entities tagged FTagDead get fully cleaned up:
 	// 1. Remove ISM render instance
 	// 2. Unbind from Barrage (clears atomic in FBarragePrimitive)
-	// 3. Mark Barrage physics body for deferred destruction (tombstone)
-	// 4. Destroy Flecs entity
+	// 3. Move physics body to DEBRIS layer (disables gameplay collision)
+	// 4. Mark for deferred destruction via tombstone
+	// 5. Destroy Flecs entity
 	//
-	// NOTE: We only call SuggestTombstone(), NOT FinalizeReleasePrimitive().
-	// FinalizeReleasePrimitive is called automatically by ~FBarragePrimitive()
-	// when the tombstone expires and ref count reaches 0.
-	// Calling both causes double-free crash!
+	// NOTE: DO NOT call FinalizeReleasePrimitive() - causes crash on PIE exit!
+	// Instead, move to DEBRIS layer for immediate collision disable,
+	// and let tombstone handle safe deferred destruction.
 	// ─────────────────────────────────────────────────────────
 	World.system<>("DeadEntityCleanupSystem")
 		.with<FTagDead>()
@@ -216,9 +281,10 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 					}
 				}
 
-				// Mark Barrage physics body for deferred destruction via tombstone
-				// DO NOT call FinalizeReleasePrimitive here - it will be called
-				// automatically by ~FBarragePrimitive() when tombstone expires
+				// Handle Barrage physics body cleanup:
+				// 1. Move to DEBRIS layer immediately - disables collision with gameplay entities
+				// 2. Tombstone marks it for safe deferred destruction (~19 sec delay)
+				// This approach is crash-safe: no immediate Jolt body destruction.
 				if (CachedBarrageDispatch)
 				{
 					FBLet Prim = CachedBarrageDispatch->GetShapeRef(Key);
@@ -231,7 +297,20 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 					{
 						// Clear Flecs binding in FBarragePrimitive (reverse direction)
 						Prim->ClearFlecsEntity();
+
+						// Get the internal Jolt key (FBarrageKey)
+						FBarrageKey BarrageKey = Prim->KeyIntoBarrage;
+
+						// Move to DEBRIS layer - immediately disables collision with:
+						// MOVING, PROJECTILE, HITBOX, ENEMY, ENEMYPROJECTILE, etc.
+						// Only collides with NON_MOVING (static geometry) - harmless
+						CachedBarrageDispatch->SetBodyObjectLayer(BarrageKey, Layers::DEBRIS);
+
+						// Tombstone for safe deferred destruction
 						CachedBarrageDispatch->SuggestTombstone(Prim);
+
+						UE_LOG(LogTemp, Log, TEXT("PROJ_DEBUG Physics moved to DEBRIS layer: BarrageKey=%llu"),
+							BarrageKey.KeyIntoBarrage);
 					}
 				}
 			}
@@ -738,4 +817,117 @@ bool UFlecsArtillerySubsystem::HasFlecsEntityForBarrageKey(FSkeletonKey BarrageK
 {
 	// Deprecated: Use HasEntityForBarrageKey instead.
 	return HasEntityForBarrageKey(BarrageKey);
+}
+
+UBarrageRenderManager* UFlecsArtillerySubsystem::GetRenderManager() const
+{
+	if (CachedBarrageDispatch && CachedBarrageDispatch->GetWorld())
+	{
+		return UBarrageRenderManager::Get(CachedBarrageDispatch->GetWorld());
+	}
+	return nullptr;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ITEM PREFAB REGISTRY IMPLEMENTATION
+// ═══════════════════════════════════════════════════════════════
+
+flecs::entity UFlecsArtillerySubsystem::GetOrCreateItemPrefab(UFlecsEntityDefinition* EntityDefinition)
+{
+	if (!FlecsWorld || !EntityDefinition)
+	{
+		return flecs::entity();
+	}
+
+	// EntityDefinition must have ItemDefinition profile
+	UFlecsItemDefinition* ItemDef = EntityDefinition->ItemDefinition;
+	if (!ItemDef)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("GetOrCreateItemPrefab: EntityDefinition '%s' has no ItemDefinition"),
+			*EntityDefinition->GetName());
+		return flecs::entity();
+	}
+
+	int32 TypeId = ItemDef->ItemTypeId;
+	if (TypeId == 0)
+	{
+		// Auto-generate TypeId from name if not set
+		TypeId = GetTypeHash(ItemDef->ItemName);
+	}
+
+	// Check if prefab already exists
+	if (flecs::entity* Existing = ItemPrefabs.Find(TypeId))
+	{
+		if (Existing->is_valid() && Existing->is_alive())
+		{
+			return *Existing;
+		}
+	}
+
+	// Create new prefab
+	FString PrefabName = FString::Printf(TEXT("ItemPrefab_%s"), *ItemDef->ItemName.ToString());
+	flecs::entity Prefab = FlecsWorld->prefab(TCHAR_TO_ANSI(*PrefabName));
+
+	// Set static data on prefab - inherited by all instances via is_a()
+	FItemStaticData StaticData;
+	StaticData.TypeId = TypeId;
+	StaticData.MaxStack = ItemDef->MaxStackSize;
+	StaticData.Weight = ItemDef->Weight;
+	StaticData.GridSize = ItemDef->GridSize;
+	StaticData.ItemName = ItemDef->ItemName;
+	StaticData.EntityDefinition = EntityDefinition;
+	StaticData.ItemDefinition = ItemDef;
+	Prefab.set<FItemStaticData>(StaticData);
+
+	// Store in registry
+	ItemPrefabs.Add(TypeId, Prefab);
+
+	UE_LOG(LogTemp, Log, TEXT("Created item prefab: '%s' (TypeId=%d, MaxStack=%d)"),
+		*ItemDef->ItemName.ToString(), TypeId, ItemDef->MaxStackSize);
+
+	return Prefab;
+}
+
+flecs::entity UFlecsArtillerySubsystem::GetItemPrefab(int32 TypeId) const
+{
+	if (const flecs::entity* Found = ItemPrefabs.Find(TypeId))
+	{
+		return *Found;
+	}
+	return flecs::entity();
+}
+
+UFlecsEntityDefinition* UFlecsArtillerySubsystem::GetEntityDefinitionForItem(flecs::entity ItemEntity) const
+{
+	if (!ItemEntity.is_valid())
+	{
+		return nullptr;
+	}
+
+	// FItemStaticData is inherited from prefab via is_a()
+	// try_get<>() returns pointer, automatically resolves through IsA relationship
+	const FItemStaticData* StaticData = ItemEntity.try_get<FItemStaticData>();
+	if (StaticData)
+	{
+		return StaticData->EntityDefinition;
+	}
+
+	return nullptr;
+}
+
+UFlecsItemDefinition* UFlecsArtillerySubsystem::GetItemDefinitionForItem(flecs::entity ItemEntity) const
+{
+	if (!ItemEntity.is_valid())
+	{
+		return nullptr;
+	}
+
+	// FItemStaticData is inherited from prefab via is_a()
+	const FItemStaticData* StaticData = ItemEntity.try_get<FItemStaticData>();
+	if (StaticData)
+	{
+		return StaticData->ItemDefinition;
+	}
+
+	return nullptr;
 }

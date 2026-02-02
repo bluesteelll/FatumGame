@@ -17,14 +17,18 @@
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(BarrageEntitySpawner)
 
-namespace
-{
-	std::atomic<uint32> GEntityCounter{0};
-}
+// Global entity counter - used by ALL spawners to ensure unique keys
+static std::atomic<uint32> GGlobalEntityCounter{0};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // FBarrageSpawnUtils - Shared spawn logic
 // ═══════════════════════════════════════════════════════════════════════════
+
+FSkeletonKey FBarrageSpawnUtils::GenerateUniqueKey(uint64 KeyType)
+{
+	const uint32 Id = GGlobalEntityCounter.fetch_add(1) + 1;
+	return FSkeletonKey(FORGE_SKELETON_KEY(Id, KeyType));
+}
 
 FVector FBarrageSpawnUtils::CalculateColliderSize(UStaticMesh* Mesh, FVector Scale)
 {
@@ -492,9 +496,8 @@ FSkeletonKey ABarrageEntitySpawner::DoSpawn()
 		return FSkeletonKey();
 	}
 
-	// Generate key
-	const uint32 Id = ++GEntityCounter;
-	FSkeletonKey Key = FSkeletonKey(FORGE_SKELETON_KEY(Id, SKELLY::SFIX_BAR_PRIM));
+	// Generate key using global counter
+	FSkeletonKey Key = FBarrageSpawnUtils::GenerateUniqueKey();
 
 	// Fill spawn params
 	FBarrageSpawnParams Params;
@@ -548,9 +551,8 @@ FSkeletonKey ABarrageEntitySpawner::SpawnEntity(
 		return FSkeletonKey();
 	}
 
-	// Generate key
-	const uint32 Id = ++GEntityCounter;
-	FSkeletonKey Key = FSkeletonKey(FORGE_SKELETON_KEY(Id, SKELLY::SFIX_BAR_PRIM));
+	// Generate key using global counter
+	FSkeletonKey Key = FBarrageSpawnUtils::GenerateUniqueKey();
 
 	// Fill spawn params
 	FBarrageSpawnParams Params;

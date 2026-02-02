@@ -15,7 +15,11 @@
 
 class UBarrageDispatch;
 class UArtilleryDispatch;
+class UBarrageRenderManager;
+class UFlecsEntityDefinition;
+class UFlecsItemDefinition;
 struct BarrageContactEvent;
+struct FItemStaticData;
 
 /**
  * Bridge subsystem that runs the Flecs ECS world on the Artillery busy worker thread (~120Hz).
@@ -84,6 +88,12 @@ public:
 	/** Get the Flecs world. Only safe from Artillery thread. */
 	flecs::world* GetFlecsWorld() const { return FlecsWorld.Get(); }
 
+	/** Get the cached Barrage dispatch (for render manager access). */
+	UBarrageDispatch* GetBarrageDispatch() const { return CachedBarrageDispatch; }
+
+	/** Get the render manager (convenience). */
+	class UBarrageRenderManager* GetRenderManager() const;
+
 	/**
 	 * Get a Flecs stage for thread-safe deferred commands.
 	 * @param ThreadIndex Thread index (0 = main Artillery thread). Use 0 for now.
@@ -126,6 +136,43 @@ public:
 	 * @return true if bound to a Flecs entity.
 	 */
 	bool HasEntityForBarrageKey(FSkeletonKey BarrageKey) const;
+
+	// ═══════════════════════════════════════════════════════════════
+	// ITEM PREFAB REGISTRY
+	// Prefabs store shared static data for item types (FItemStaticData).
+	// Each UFlecsEntityDefinition with ItemDefinition gets one prefab.
+	// Item instances use is_a(Prefab) to inherit static data.
+	// ═══════════════════════════════════════════════════════════════
+
+	/**
+	 * Get or create a prefab for an item type.
+	 * Thread-safe: can be called from EnqueueCommand lambdas.
+	 *
+	 * @param EntityDefinition The entity definition containing ItemDefinition.
+	 * @return Flecs prefab entity with FItemStaticData, or invalid entity if no ItemDefinition.
+	 */
+	flecs::entity GetOrCreateItemPrefab(class UFlecsEntityDefinition* EntityDefinition);
+
+	/**
+	 * Get existing prefab by TypeId. Returns invalid entity if not registered.
+	 * @param TypeId Item type ID from UFlecsItemDefinition.
+	 * @return Prefab entity or invalid.
+	 */
+	flecs::entity GetItemPrefab(int32 TypeId) const;
+
+	/**
+	 * Get EntityDefinition from an item entity (via its prefab).
+	 * @param ItemEntity Item entity with is_a relationship to prefab.
+	 * @return EntityDefinition pointer or nullptr.
+	 */
+	class UFlecsEntityDefinition* GetEntityDefinitionForItem(flecs::entity ItemEntity) const;
+
+	/**
+	 * Get ItemDefinition from an item entity (via its prefab).
+	 * @param ItemEntity Item entity with is_a relationship to prefab.
+	 * @return ItemDefinition pointer or nullptr.
+	 */
+	class UFlecsItemDefinition* GetItemDefinitionForItem(flecs::entity ItemEntity) const;
 
 	// ═══════════════════════════════════════════════════════════════
 	// DEPRECATED API (for backward compatibility during migration)
@@ -193,4 +240,13 @@ private:
 
 	/** Set to true while inside ArtilleryTick(). Deinitialize() waits for this to become false. */
 	std::atomic<bool> bInArtilleryTick{false};
+
+	// ═══════════════════════════════════════════════════════════════
+	// ITEM PREFAB STORAGE
+	// Maps ItemTypeId → Flecs prefab entity.
+	// Prefabs contain FItemStaticData with shared immutable data.
+	// ═══════════════════════════════════════════════════════════════
+
+	/** TypeId → Prefab entity. Only accessed from Artillery thread. */
+	TMap<int32, flecs::entity> ItemPrefabs;
 };

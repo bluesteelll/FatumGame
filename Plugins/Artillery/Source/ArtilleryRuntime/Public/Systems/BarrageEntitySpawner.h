@@ -70,6 +70,15 @@ class ARTILLERYRUNTIME_API FBarrageSpawnUtils
 {
 public:
 	/**
+	 * Generate a globally unique entity key.
+	 * Use this for ALL entity spawning to avoid key collisions.
+	 * Thread-safe (uses atomic counter internally).
+	 *
+	 * @param KeyType The SFIX nibble type (default: SFIX_BAR_PRIM for physics entities)
+	 */
+	static FSkeletonKey GenerateUniqueKey(uint64 KeyType = 0x4000000000000000ULL);
+
+	/**
 	 * Spawn a physics entity with the given parameters.
 	 * This is the canonical spawn function - use this to ensure consistent behavior.
 	 */

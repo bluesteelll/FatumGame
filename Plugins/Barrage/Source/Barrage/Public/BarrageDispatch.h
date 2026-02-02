@@ -116,6 +116,13 @@ public:
 	FBLet GetShapeRef(FSkeletonKey Existing) const;
 	void FinalizeReleasePrimitive(FBarrageKey BarrageKey);
 
+	/**
+	 * Change a body's physics layer. Use to disable collision without destroying the body.
+	 * Moving to Layers::DEBRIS effectively disables gameplay collision while letting
+	 * tombstone handle safe destruction later.
+	 */
+	void SetBodyObjectLayer(FBarrageKey BarrageKey, uint8 NewLayer);
+
 	// Wake up all sleeping bodies in a given area - useful when removing support from stacked objects
 	void ActivateBodiesInArea(const FVector3d& Center, double HalfExtent);
 
@@ -310,6 +317,7 @@ private:
 	TSharedPtr<KeyToKey> TranslationMapping;
 	FBLet ManagePointers(FSkeletonKey OutKey, FBarrageKey temp, FBShape form) const;
 	uint32 TombOffset = 0; //ticks up by one every world step.
+
 	//this is a little hard to explain. so keys are inserted as 
 
 	//clean tombs must only ever be called from step world which must only ever be called from one thread.

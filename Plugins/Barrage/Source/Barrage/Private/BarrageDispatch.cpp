@@ -384,6 +384,14 @@ void UBarrageDispatch::FinalizeReleasePrimitive(FBarrageKey BarrageKey)
 	}
 }
 
+void UBarrageDispatch::SetBodyObjectLayer(FBarrageKey BarrageKey, uint8 NewLayer)
+{
+	if (JoltGameSim)
+	{
+		JoltGameSim->SetBodyObjectLayer(BarrageKey, NewLayer);
+	}
+}
+
 void UBarrageDispatch::ActivateBodiesInArea(const FVector3d& Center, double HalfExtent)
 {
 	if (JoltGameSim)

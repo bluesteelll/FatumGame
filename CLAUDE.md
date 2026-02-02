@@ -1,6 +1,8 @@
 # FatumGame - Project Documentation
 
-## ⚠️ ВАЖНЫЙ ПРИНЦИП: НЕ ИСПОЛЬЗОВАТЬ КОСТЫЛИ
+## ⚠️ КЛЮЧЕВЫЕ ПРИНЦИПЫ РАЗРАБОТКИ
+
+### 1. НЕ ИСПОЛЬЗОВАТЬ КОСТЫЛИ
 
 **НИКОГДА не применяй обходные решения (workarounds/hacks)!**
 
@@ -9,6 +11,38 @@
 - ✅ ХОРОШО: "Почему тело уничтожается раньше ISM?" → найти первопричину
 
 **Если видишь симптом - копай глубже, пока не найдёшь первопричину!**
+
+### 2. FAIL-FAST
+
+**Ошибки должны проявляться немедленно и громко!**
+
+- Используй `check()`, `ensure()`, `checkf()` для инвариантов
+- Валидируй входные данные в начале функции
+- Не "проглатывай" ошибки молча — логируй и падай/возвращай ошибку
+- ❌ ПЛОХО: `if (!Ptr) return;` — тихо скрывает баг
+- ✅ ХОРОШО: `check(Ptr);` или `if (!Ptr) { UE_LOG(LogTemp, Error, TEXT("...")); return; }`
+
+**Чем раньше ошибка обнаружена — тем проще её найти и исправить!**
+
+### 3. ИЗБЕГАТЬ БОЙЛЕРПЛЕЙТА
+
+**Код должен быть лаконичным и выразительным!**
+
+- Не дублируй код — выноси в функции/шаблоны
+- Используй auto, range-based for, structured bindings
+- Предпочитай декларативный стиль императивному
+- ❌ ПЛОХО: Копипаста одинаковой логики в 5 местах
+- ✅ ХОРОШО: Одна функция/макрос, переиспользуемая везде
+
+```cpp
+// ❌ Бойлерплейт
+for (int32 i = 0; i < Array.Num(); ++i) { DoSomething(Array[i]); }
+
+// ✅ Лаконично
+for (auto& Item : Array) { DoSomething(Item); }
+```
+
+**Меньше кода = меньше багов = проще поддержка!**
 
 ---
 
@@ -67,8 +101,16 @@ Action: Fire (LMB), Jump (Space)
 
 | Файл | Назначение |
 |------|------------|
-| `FlecsCharacter.h/cpp` | Персонаж с Flecs (здоровье, урон, стрельба) |
-| `FlecsProjectileDefinition.h/cpp` | Data Asset для снарядов |
+| `FlecsCharacter.h/cpp` | Персонаж с Flecs (здоровье, урон, стрельба, тест спавна E/F) |
+| `FlecsEntitySpawner.h/cpp` | **Unified Entity API**: FEntitySpawnRequest, UFlecsEntityLibrary |
+| `FlecsEntityDefinition.h` | **Unified preset** объединяющий все профили |
+| `FlecsPhysicsProfile.h` | Профиль физики (масса, коллизия, слой) |
+| `FlecsRenderProfile.h` | Профиль рендера (меш, материал, масштаб) |
+| `FlecsHealthProfile.h` | Профиль здоровья (HP, броня, реген) |
+| `FlecsDamageProfile.h` | Профиль урона (damage, area, crit) |
+| `FlecsProjectileProfile.h` | Профиль снаряда (lifetime, bounces, speed) |
+| `FlecsContainerProfile.h` | Профиль контейнера (Grid/Slot/List) |
+| `FlecsItemDefinition.h` | Определение предмета (стакинг, действия) |
 | `FlecsComponents.h/cpp` | ECS компоненты: FHealthData, FDamageSource, FBarrageBody, теги |
 | `FlecsGameplayLibrary.h/cpp` | Blueprint API: SpawnProjectile, ApplyDamage, Heal |
 | `FlecsArtillerySubsystem.h/cpp` | Мост Artillery↔Flecs, lock-free bidirectional binding, коллизии |
@@ -88,6 +130,8 @@ Action: Fire (LMB), Jump (Space)
 - `UBarrageDispatch` - Physics world subsystem
 - `UBarrageCharacterMovement` - Auto movement (bAutoProcessInput=true)
 - `OnBarrageContactAddedDelegate` - Collision events (120Hz)
+- `SetBodyObjectLayer(FBarrageKey, uint8)` - Change collision layer (use for entity cleanup!)
+- `SuggestTombstone(FBLet)` - Safe deferred destruction (~19 sec)
 
 ### Flecs ECS
 **Direct flecs::world** created in `FlecsArtillerySubsystem`, bypassing UnrealFlecs plugin ticks.
@@ -100,7 +144,18 @@ FHealthData      { CurrentHP, MaxHP, Armor }
 FDamageSource    { Damage, DamageType, bAreaDamage }
 FProjectileData  { LifetimeRemaining, MaxBounces, GraceFramesRemaining }
 FBarrageBody     { SkeletonKey }  // Forward binding: Entity → BarrageKey
-// Tags: FTagItem, FTagDestructible, FTagDead, FTagProjectile, FTagCharacter
+
+// Item components (Prefab System - February 2025)
+FItemStaticData  { TypeId, MaxStack, Weight, GridSize, ItemName, EntityDefinition*, ItemDefinition* }  // In PREFAB
+FItemInstance    { Count }  // Instance data only (TypeId moved to FItemStaticData)
+FContainedIn     { ContainerEntityId, GridPosition, SlotIndex }  // Links item → container
+
+// Container components
+FContainerBase   { Type, DefinitionId, OwnerEntityId, CurrentWeight, MaxWeight }
+FContainerListData { MaxItems, CurrentCount }
+FContainerGridData { Width, Height, OccupancyMask }
+
+// Tags (zero-size): FTagItem, FTagContainer, FTagDestructible, FTagDead, FTagProjectile, FTagCharacter
 ```
 
 **Systems:**
@@ -141,6 +196,8 @@ UFlecsGameplayLibrary::KillEntityByBarrageKey(World, EntityKey);
 - Flecs entity on BeginPlay (FHealthData, FTagCharacter)
 - Auto damage from projectiles via collision
 - Barrage physics movement
+- **Test entity spawning** (E = spawn, F = destroy)
+- **Container testing** (E = spawn container / add item, F = remove all items)
 
 **Blueprint Events:**
 - `OnDamageTaken(float Damage, float NewHealth)`
@@ -149,7 +206,19 @@ UFlecsGameplayLibrary::KillEntityByBarrageKey(World, EntityKey);
 
 **Properties:**
 - `ProjectileDefinition` - UFlecsProjectileDefinition Data Asset
+- `TestEntityDefinition` - UFlecsEntityDefinition для теста спавна (E/F)
+- `TestContainerDefinition` - UFlecsEntityDefinition с ContainerProfile для теста контейнеров
+- `TestItemDefinition` - UFlecsEntityDefinition с ItemDefinition для добавления в контейнер
 - `MaxHealth`, `Armor`
+
+**Input Actions (Enhanced Input):**
+- `MoveAction`, `LookAction`, `JumpAction`, `FireAction`
+- `SpawnItemAction` (E) - спавн TestEntityDefinition ИЛИ контейнер/добавить предмет
+- `DestroyItemAction` (F) - удаление последнего заспавненного ИЛИ очистить контейнер
+
+**Режим работы E/F:**
+- Если `TestContainerDefinition` + `TestItemDefinition` заданы → режим контейнера
+- Иначе → режим спавна сущностей
 
 ---
 
@@ -287,6 +356,93 @@ Currently all processing runs on Artillery thread (stage 0). Infrastructure read
 
 ---
 
+## Item Prefab System (February 2025)
+
+**Статус: Реализовано, требуется тестирование**
+
+Flecs prefabs используются для хранения shared static данных предметов. Это позволяет:
+- Хранить статические данные (TypeId, MaxStack, Weight) один раз в prefab
+- Хранить instance данные (Count) на каждой entity
+- Получить EntityDefinition из любого item entity для спавна в мир
+
+### Архитектура
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ PREFAB (один на тип предмета)                               │
+│   FItemStaticData {                                         │
+│     TypeId, MaxStack, Weight, GridSize, ItemName,           │
+│     EntityDefinition*,  ← Ссылка на UFlecsEntityDefinition  │
+│     ItemDefinition*     ← Ссылка на UFlecsItemDefinition    │
+│   }                                                         │
+└─────────────────────────────────────────────────────────────┘
+           ▲ IsA (наследование)
+           │
+┌─────────────────────────────────────────────────────────────┐
+│ ITEM ENTITY (каждый предмет)                                │
+│   (IsA, Prefab)         ← Наследует FItemStaticData         │
+│   FItemInstance { Count }  ← Instance данные                │
+│   FContainedIn { ... }     ← В каком контейнере             │
+│   FTagItem                 ← Zero-size tag                  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### API (UFlecsArtillerySubsystem)
+
+```cpp
+// Создать/получить prefab для типа предмета
+flecs::entity GetOrCreateItemPrefab(UFlecsEntityDefinition* EntityDef);
+
+// Получить prefab по TypeId
+flecs::entity GetItemPrefab(int32 TypeId) const;
+
+// Получить Definition из item entity (через prefab)
+UFlecsEntityDefinition* GetEntityDefinitionForItem(flecs::entity ItemEntity) const;
+UFlecsItemDefinition* GetItemDefinitionForItem(flecs::entity ItemEntity) const;
+```
+
+### Использование
+
+```cpp
+// Добавление предмета в контейнер (с prefab)
+UFlecsEntityLibrary::AddItemToContainerFromDefinition(
+    World, ContainerKey, DA_HealthPotion, Count, OutAdded);
+
+// Внутри (Artillery thread):
+flecs::entity Prefab = Subsystem->GetOrCreateItemPrefab(EntityDef);
+flecs::entity Item = FlecsWorld->entity()
+    .is_a(Prefab)                    // Наследует FItemStaticData
+    .set<FItemInstance>(Instance)    // Count only
+    .set<FContainedIn>(Contained)
+    .add<FTagItem>();
+
+// Получение EntityDefinition для спавна в мир при дропе:
+UFlecsEntityDefinition* Def = Subsystem->GetEntityDefinitionForItem(Item);
+// Теперь можно использовать Def->PhysicsProfile, Def->RenderProfile, etc.
+```
+
+### Flecs API Gotchas
+
+**ВАЖНО при работе с Flecs:**
+
+```cpp
+// ❌ НЕПРАВИЛЬНО: get<>() возвращает const T&, не указатель
+const FItemStaticData* Data = entity.get<FItemStaticData>();  // ОШИБКА!
+
+// ✅ ПРАВИЛЬНО: try_get<>() возвращает указатель (nullptr если нет)
+const FItemStaticData* Data = entity.try_get<FItemStaticData>();
+
+// ❌ НЕПРАВИЛЬНО: Aggregate init не работает с USTRUCT
+entity.set<FItemInstance>({ 5 });  // ОШИБКА компиляции!
+
+// ✅ ПРАВИЛЬНО: Явная инициализация
+FItemInstance Instance;
+Instance.Count = 5;
+entity.set<FItemInstance>(Instance);
+```
+
+---
+
 ## Critical Patterns
 
 ### Subsystem OnWorldBeginPlay
@@ -308,12 +464,34 @@ void UMySubsystem::Initialize(FSubsystemCollectionBase& Collection)
 ```
 
 ### Entity Destruction
-```cpp
-// CORRECT - let tombstone handle cleanup:
-UBarrageDispatch::SelfPtr->SuggestTombstone(Prim);
 
-// WRONG - causes double-free:
-// UBarrageDispatch::SelfPtr->FinalizeReleasePrimitive(Key);
+**Correct approach - DEBRIS layer + tombstone:**
+
+```cpp
+// Get primitive and Jolt key
+FBLet Prim = CachedBarrageDispatch->GetShapeRef(Key);
+FBarrageKey BarrageKey = Prim->KeyIntoBarrage;
+
+// Clear Flecs binding
+Prim->ClearFlecsEntity();
+
+// Move to DEBRIS layer - IMMEDIATELY disables collision with gameplay entities
+// (DEBRIS only collides with NON_MOVING static geometry)
+CachedBarrageDispatch->SetBodyObjectLayer(BarrageKey, Layers::DEBRIS);
+
+// Tombstone for safe deferred destruction (~19 seconds)
+CachedBarrageDispatch->SuggestTombstone(Prim);
+```
+
+**Why this works:**
+1. `SetBodyObjectLayer(DEBRIS)` - instantly disables collision with players, projectiles, enemies
+2. `SuggestTombstone()` - schedules safe destruction when all Jolt internal refs are cleared
+3. No crash risk - Jolt handles the body lifecycle properly
+
+**WRONG approach (causes crash on PIE exit):**
+```cpp
+// DON'T DO THIS - corrupts Jolt state, crashes during character cleanup:
+CachedBarrageDispatch->FinalizeReleasePrimitive(BarrageKey);  // CRASH RISK!
 ```
 
 ### Flecs World
@@ -352,6 +530,195 @@ FlecsWorld->set_threads(0);  // Artillery is only executor
 
 ---
 
+## Unified Entity Spawning System (February 2025)
+
+**Статус: Реализовано, требуется тестирование**
+
+### Архитектура
+
+Все сущности (предметы, снаряды, контейнеры, персонажи) спавнятся через **единый API** с композицией профилей.
+
+```
+UFlecsEntityDefinition (unified preset)
+    ├── UFlecsItemDefinition      (item logic)
+    ├── UFlecsPhysicsProfile      (collision, mass)
+    ├── UFlecsRenderProfile       (mesh, material)
+    ├── UFlecsHealthProfile       (HP, armor)
+    ├── UFlecsDamageProfile       (contact damage)
+    ├── UFlecsProjectileProfile   (lifetime, bounces)
+    └── UFlecsContainerProfile    (inventory)
+```
+
+### Профили (Data Assets с EditInlineNew)
+
+Профили можно:
+1. **Создать отдельно** как Data Asset и переиспользовать
+2. **Создать inline** прямо внутри EntityDefinition (Instanced)
+
+| Профиль | Назначение |
+|---------|------------|
+| `UFlecsPhysicsProfile` | CollisionRadius, Mass, Restitution, Friction, Layer, bIsSensor |
+| `UFlecsRenderProfile` | Mesh, MaterialOverride, Scale, bCastShadow |
+| `UFlecsHealthProfile` | MaxHealth, Armor, RegenPerSecond, bDestroyOnDeath |
+| `UFlecsDamageProfile` | Damage, DamageType, bAreaDamage, AreaRadius, bDestroyOnHit |
+| `UFlecsProjectileProfile` | DefaultSpeed, Lifetime, MaxBounces, GracePeriod |
+| `UFlecsContainerProfile` | ContainerType (Grid/Slot/List), GridWidth/Height, MaxWeight |
+| `UFlecsItemDefinition` | ItemTypeId, MaxStackSize, GridSize, Weight, Actions |
+
+### UFlecsEntityDefinition (unified preset)
+
+```cpp
+UCLASS(BlueprintType)
+class UFlecsEntityDefinition : public UPrimaryDataAsset
+{
+    // Profiles (Instanced - можно создать inline или выбрать существующий)
+    TObjectPtr<UFlecsItemDefinition> ItemDefinition;
+    TObjectPtr<UFlecsPhysicsProfile> PhysicsProfile;
+    TObjectPtr<UFlecsRenderProfile> RenderProfile;
+    TObjectPtr<UFlecsHealthProfile> HealthProfile;
+    TObjectPtr<UFlecsDamageProfile> DamageProfile;
+    TObjectPtr<UFlecsProjectileProfile> ProjectileProfile;
+    TObjectPtr<UFlecsContainerProfile> ContainerProfile;
+
+    // Tags
+    bool bPickupable, bDestructible, bHasLoot, bIsCharacter;
+
+    // Defaults
+    int32 DefaultItemCount = 1;
+    float DefaultDespawnTime = -1.f;
+};
+```
+
+### Blueprint API (UFlecsEntityLibrary)
+
+```cpp
+// Spawn from unified definition
+FSkeletonKey SpawnEntityFromDefinition(World, Definition, Location, Rotation);
+
+// Spawn from request (full control)
+FSkeletonKey SpawnEntity(World, FEntitySpawnRequest);
+
+// Batch spawn
+TArray<FSkeletonKey> SpawnEntities(World, TArray<FEntitySpawnRequest>);
+
+// Destruction
+void DestroyEntity(World, EntityKey);
+void DestroyEntities(World, TArray<EntityKeys>);
+
+// Health
+bool ApplyDamage(World, TargetKey, Damage);
+bool Heal(World, TargetKey, Amount);
+void Kill(World, TargetKey);
+float GetHealth(World, EntityKey);
+float GetMaxHealth(World, EntityKey);
+
+// Container operations (IMPLEMENTED February 2025)
+bool AddItemToContainerFromDefinition(World, ContainerKey, EntityDef, Count, OutAdded);  // ✅ Prefab-based (recommended)
+bool AddItemToContainer(World, ContainerKey, ItemDef, Count, OutAdded);  // ✅ Legacy (no EntityDef reference)
+int32 RemoveAllItemsFromContainer(World, ContainerKey);                   // ✅ Working
+int32 GetContainerItemCount(World, ContainerKey);                         // ✅ Working
+bool RemoveItemFromContainer(World, ContainerKey, ItemEntityId, Count);   // ✅ Working
+
+// Items (NOT YET IMPLEMENTED - need EntityDefinition from prefab for physics/render)
+bool PickupItem(World, WorldItemKey, ContainerKey, OutPickedUp);          // ❌ TODO
+FSkeletonKey DropItem(World, ContainerKey, ItemEntityId, Location, Count); // ❌ TODO (use GetEntityDefinitionForItem)
+```
+
+### FEntitySpawnRequest (C++ fluent builder)
+
+```cpp
+// Fluent API
+FSkeletonKey Key = FEntitySpawnRequest::At(Location)
+    .WithDefinition(DA_Bullet)         // или отдельные профили:
+    .WithPhysics(DA_SmallPhysics)
+    .WithRender(DA_BulletMesh)
+    .WithDamage(DA_BulletDamage)
+    .WithProjectile(DA_FastProjectile)
+    .WithVelocity(Direction * Speed)
+    .Spawn(WorldContext);
+
+// From definition
+FSkeletonKey Key = FEntitySpawnRequest::FromDefinition(DA_HealthPotion, Location)
+    .Pickupable()
+    .WithDespawn(30.f)
+    .Spawn(WorldContext);
+```
+
+### Примеры композиции
+
+| Сущность | Профили |
+|----------|---------|
+| Item in world | Item + Physics + Render + Pickupable |
+| Projectile | Physics + Render + Damage + Projectile |
+| Destructible box | Physics + Render + Health + Destructible |
+| Chest | Physics + Render + Container |
+| Player inventory | Container only (no world presence) |
+| Trigger zone | Physics(Sensor) only |
+
+### Тестирование в игре
+
+**AFlecsCharacter** имеет встроенный тест:
+- `TestEntityDefinition` - назначь EntityDefinition
+- **E** - спавнит сущность перед персонажем
+- **F** - удаляет последнюю заспавненную
+
+**Input Actions (нужно создать):**
+- `IA_SpawnItem` → E
+- `IA_DestroyItem` → F
+
+### Создание тестовой сущности
+
+1. Content Browser → Data Asset → **FlecsEntityDefinition** → `DA_TestCube`
+2. В редакторе:
+   - Physics Profile → выбрать тип `FlecsPhysicsProfile` → настроить inline
+   - Render Profile → выбрать тип `FlecsRenderProfile` → выбрать Mesh
+   - bPickupable = true
+3. В BP_Player:
+   - Test Entity Definition = `DA_TestCube`
+   - Spawn Item Action = `IA_SpawnItem`
+   - Destroy Item Action = `IA_DestroyItem`
+4. Play → E спавнит кубы, F удаляет
+
+### Тестирование контейнеров (February 2025)
+
+**Создание Data Assets:**
+
+1. **DA_TestContainer** (FlecsEntityDefinition):
+   - Container Profile → создать `FlecsContainerProfile` inline → ContainerType = `List`
+   - Physics Profile → создать `FlecsPhysicsProfile` inline
+   - Render Profile → создать `FlecsRenderProfile` inline → выбрать Mesh (куб/сундук)
+
+2. **DA_TestItem** (FlecsEntityDefinition):
+   - Item Definition → создать `FlecsItemDefinition` inline → ItemName = "TestItem"
+
+**Настройка персонажа (BP_Player):**
+```
+Test Container Definition = DA_TestContainer
+Test Item Definition = DA_TestItem
+Spawn Item Action = IA_SpawnItem (E)
+Destroy Item Action = IA_DestroyItem (F)
+```
+
+**Управление:**
+| Клавиша | Действие |
+|---------|----------|
+| **E** (1-й раз) | Спавнит контейнер перед персонажем |
+| **E** (далее) | Добавляет предмет в контейнер |
+| **F** | Удаляет ВСЕ предметы из контейнера |
+
+**On-screen сообщения:**
+- `Container spawned: 12345` (зелёный)
+- `Added item: TestItem (Container now has 3 items)` (голубой)
+- `Removed all items from container (3 items removed)` (жёлтый)
+
+**Как работает под капотом:**
+1. Контейнер создаётся как Flecs entity с `FContainerBase` + `FContainerListData` + `FTagContainer`
+2. Предметы создаются как отдельные Flecs entities с `FItemInstance` + `FContainedIn`
+3. `FContainedIn.ContainerEntityId` связывает предмет с контейнером
+4. При удалении — query по `FContainedIn` находит все предметы контейнера
+
+---
+
 ## Known Issues / Debugging Tips
 
 ### Distance Constraint Spring не работает (нет упругости)
@@ -373,6 +740,86 @@ FlecsWorld->set_threads(0);  // Artillery is only executor
 **Параметры пружины:**
 - `SpringFrequency`: 1-5 Hz (мягкая), 10-15 Hz (средняя), 20+ Hz (жёсткая)
 - `SpringDamping`: 0 (бесконечные колебания), 0.3-0.5 (затухающие), 1.0 (без колебаний)
+
+### Физическое тело не удаляется (остаётся коллизия после удаления)
+
+**Симптом:** При удалении сущности меш/ISM удаляется, но физическое тело продолжает участвовать в коллизиях.
+
+**Причина:** Использование только `SuggestTombstone()` создаёт **отложенное удаление на ~19 секунд**. Тело остаётся в Jolt simulation.
+
+**Решение:** Переместить тело в DEBRIS layer (не коллидирует с gameplay):
+```cpp
+// ПРАВИЛЬНО - мгновенное отключение коллизии:
+Prim->ClearFlecsEntity();
+FBarrageKey BarrageKey = Prim->KeyIntoBarrage;
+CachedBarrageDispatch->SetBodyObjectLayer(BarrageKey, Layers::DEBRIS);  // Disable collision
+CachedBarrageDispatch->SuggestTombstone(Prim);                          // Safe deferred destroy
+
+// НЕПРАВИЛЬНО - вызывает краш при выходе из PIE:
+CachedBarrageDispatch->FinalizeReleasePrimitive(BarrageKey);  // НЕ ДЕЛАТЬ!
+```
+
+**Диагностика:** В логе должно быть:
+- `PROJ_DEBUG Physics moved to DEBRIS layer: BarrageKey=...` — успех
+
+### Краш при выходе из PIE (BodyManager::DestroyBodies)
+
+**Симптом:** Краш в `JPH::BodyManager::DestroyBodies()` при выходе из PIE. Стек: `~UBarrageDispatch` → `~FWorldSimOwner` → `~CharacterVirtual` → crash.
+
+**Причина:** Вызов `FinalizeReleasePrimitive()` во время gameplay корраптит внутреннее состояние Jolt. При shutdown, когда CharacterVirtual пытается уничтожить свой inner body, Jolt крашится.
+
+**Почему это происходит:**
+- `FinalizeReleasePrimitive()` вызывает `body_interface->RemoveBody()` + `DestroyBody()`
+- Jolt держит внутренние ссылки на тела (contact cache, broad phase, constraints)
+- Немедленное удаление оставляет dangling references
+- Tombstone система (~19 сек) даёт время Jolt очистить все ссылки
+
+**Решение:** НИКОГДА не вызывать `FinalizeReleasePrimitive()` напрямую! Использовать:
+1. `SetBodyObjectLayer(DEBRIS)` — мгновенно отключает gameplay коллизии
+2. `SuggestTombstone()` — безопасное отложенное удаление
+
+**API для изменения слоя:**
+```cpp
+// В FWorldSimOwner.h и BarrageDispatch:
+void SetBodyObjectLayer(FBarrageKey BarrageKey, uint8 NewLayer);
+```
+
+**Слои коллизий (EPhysicsLayer.h):**
+- `DEBRIS` — коллидирует ТОЛЬКО с `NON_MOVING` (статичная геометрия)
+- Не коллидирует с: MOVING, PROJECTILE, HITBOX, ENEMY, CHARACTER
+
+### Flecs API Gotchas (February 2025)
+
+**Симптом:** Ошибки компиляции при работе с Flecs components.
+
+**Проблема 1: `get<>()` vs `try_get<>()`**
+```cpp
+// ❌ НЕПРАВИЛЬНО: get<>() возвращает const T&, не const T*
+const FItemStaticData* Data = entity.get<FItemStaticData>();  // ОШИБКА!
+
+// ✅ ПРАВИЛЬНО: try_get<>() возвращает указатель
+const FItemStaticData* Data = entity.try_get<FItemStaticData>();
+```
+
+**Проблема 2: Aggregate initialization с USTRUCT**
+```cpp
+// ❌ НЕПРАВИЛЬНО: USTRUCT с GENERATED_BODY() не поддерживает aggregate init
+entity.set<FItemInstance>({ 5 });           // ОШИБКА компиляции!
+entity.set<FContainedIn>({ id, pos, -1 });  // ОШИБКА компиляции!
+
+// ✅ ПРАВИЛЬНО: Явная инициализация
+FItemInstance Instance;
+Instance.Count = 5;
+entity.set<FItemInstance>(Instance);
+
+FContainedIn Contained;
+Contained.ContainerEntityId = id;
+Contained.GridPosition = pos;
+Contained.SlotIndex = -1;
+entity.set<FContainedIn>(Contained);
+```
+
+**Примечание:** Plain C++ structs (без GENERATED_BODY) поддерживают aggregate init, USTRUCT — нет.
 
 ---
 

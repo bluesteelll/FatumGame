@@ -413,6 +413,26 @@ public:
 		// If !bFoundAndErased, another thread already removed this key - that's fine (idempotent)
 	}
 
+	/**
+	 * Change a body's physics layer. Use this to disable collision without destroying the body.
+	 * Moving to DEBRIS layer effectively disables gameplay collision while letting tombstone
+	 * handle safe destruction.
+	 */
+	void SetBodyObjectLayer(FBarrageKey BarrageKey, uint8 NewLayer)
+	{
+		if (!body_interface)
+		{
+			return;
+		}
+
+		JPH::BodyID BodyID;
+		bool bFound = BarrageToJoltMapping->find(BarrageKey, BodyID);
+		if (bFound && !BodyID.IsInvalid())
+		{
+			body_interface->SetObjectLayer(BodyID, static_cast<JPH::ObjectLayer>(NewLayer));
+		}
+	}
+
 	// Wake up all sleeping bodies in a given area - useful when removing support from stacked objects
 	void ActivateBodiesInArea(const FVector3d& Center, double HalfExtent)
 	{
