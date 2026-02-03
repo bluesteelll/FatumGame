@@ -1,4 +1,3 @@
-// Copyright 2025 Oversized Sun Inc. All Rights Reserved.
 // Tags for Barrage entity properties
 
 #pragma once

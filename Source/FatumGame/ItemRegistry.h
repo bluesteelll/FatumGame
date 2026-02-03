@@ -1,4 +1,3 @@
-// Copyright 2025 Oversized Sun Inc. All Rights Reserved.
 // Item and Container registry for fast lookup by TypeId.
 
 #pragma once

@@ -10,7 +10,13 @@ public class FatumGame : ModuleRules
 
 		PublicIncludePaths.AddRange(
 			new string[] {
-				"FatumGame"
+				"FatumGame",
+				"FatumGame/Flecs/Subsystem",
+				"FatumGame/Flecs/Components",
+				"FatumGame/Flecs/Definitions",
+				"FatumGame/Flecs/Spawner",
+				"FatumGame/Flecs/Character",
+				"FatumGame/Flecs/Library"
 			}
 		);
 

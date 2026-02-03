@@ -1,4 +1,3 @@
-// Copyright 2025 Oversized Sun Inc. All Rights Reserved.
 // BarrageEntitySpawner - Drag & drop physics entity spawner
 // Just place, set mesh, done!
 

@@ -1,4 +1,3 @@
-// Copyright 2025 Oversized Sun Inc. All Rights Reserved.
 
 #include "PhysicsTypes/BarrageCharacterMovement.h"
 #include "GameFramework/PlayerController.h"

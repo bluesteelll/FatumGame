@@ -1,4 +1,3 @@
-// Copyright 2025 Oversized Sun Inc. All Rights Reserved.
 // Entity type classification derived from FSkeletonKey
 
 #pragma once

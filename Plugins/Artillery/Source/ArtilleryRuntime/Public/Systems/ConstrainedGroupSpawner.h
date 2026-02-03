@@ -1,4 +1,3 @@
-// Copyright 2025 Oversized Sun Inc. All Rights Reserved.
 // ConstrainedGroupSpawner - Spawn groups of physics bodies connected by breakable constraints
 
 #pragma once

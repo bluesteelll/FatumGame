@@ -1,4 +1,3 @@
-// Copyright 2025 Oversized Sun Inc. All Rights Reserved.
 // Auto Movement Component for Barrage Character Physics
 // Works like CharacterMovementComponent but for Barrage!
 
