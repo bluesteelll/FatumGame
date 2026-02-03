@@ -15,7 +15,7 @@
 #include "ArtilleryDispatch.h"
 #include "BarrageDispatch.h"
 #include "FBarragePrimitive.h"
-#include "FlecsComponents.h"
+#include "FlecsGameTags.h"
 
 // ═══════════════════════════════════════════════════════════════
 // REGISTRATION (ITickHeavy)

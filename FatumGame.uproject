@@ -81,6 +81,10 @@
 			"Enabled": true
 		},
 		{
+			"Name": "FlecsBarrage",
+			"Enabled": true
+		},
+		{
 			"Name": "ModularGameplay",
 			"Enabled": true
 		},

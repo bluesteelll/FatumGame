@@ -3,7 +3,9 @@
 #include "FlecsArtillerySubsystem.h"
 #include "BarrageDispatch.h"
 #include "FBarragePrimitive.h"
-#include "FlecsComponents.h"
+#include "FlecsGameTags.h"
+#include "FlecsStaticComponents.h"
+#include "FlecsInstanceComponents.h"
 
 void UFlecsArtillerySubsystem::SubscribeToBarrageEvents()
 {
@@ -76,11 +78,11 @@ void UFlecsArtillerySubsystem::OnBarrageContact(const BarrageContactEvent& Event
 	bool bEntity1Valid = Entity1.is_valid() && Entity1.is_alive();
 	bool bEntity2Valid = Entity2.is_valid() && Entity2.is_alive();
 
-	// Check entity capabilities
-	bool bEntity1HasHealth = bEntity1Valid && Entity1.has<FHealthData>();
-	bool bEntity2HasHealth = bEntity2Valid && Entity2.has<FHealthData>();
-	bool bEntity1HasDamage = bEntity1Valid && Entity1.has<FDamageSource>();
-	bool bEntity2HasDamage = bEntity2Valid && Entity2.has<FDamageSource>();
+	// Check entity capabilities (using new Static/Instance components)
+	bool bEntity1HasHealth = bEntity1Valid && Entity1.has<FHealthInstance>();
+	bool bEntity2HasHealth = bEntity2Valid && Entity2.has<FHealthInstance>();
+	bool bEntity1HasDamage = bEntity1Valid && Entity1.has<FDamageStatic>();
+	bool bEntity2HasDamage = bEntity2Valid && Entity2.has<FDamageStatic>();
 	bool bEntity1IsCharacter = bEntity1Valid && Entity1.has<FTagCharacter>();
 	bool bEntity2IsCharacter = bEntity2Valid && Entity2.has<FTagCharacter>();
 	bool bEntity1IsPickupable = bEntity1Valid && Entity1.has<FTagPickupable>() && Entity1.has<FTagItem>();
@@ -96,7 +98,7 @@ void UFlecsArtillerySubsystem::OnBarrageContact(const BarrageContactEvent& Event
 	// ─────────────────────────────────────────────────────────
 	bool bIsDamageCollision = false;
 
-	// Flecs projectile with FDamageSource hits target with FHealthData
+	// Flecs projectile with FDamageStatic hits target with FHealthInstance
 	if ((bEntity1HasDamage && bEntity2HasHealth) || (bEntity2HasDamage && bEntity1HasHealth))
 	{
 		bIsDamageCollision = true;

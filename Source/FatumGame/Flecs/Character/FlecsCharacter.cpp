@@ -6,7 +6,9 @@
 #include "FlecsEntityDefinition.h"
 #include "FlecsItemDefinition.h"
 #include "FlecsArtillerySubsystem.h"
-#include "FlecsComponents.h"
+#include "FlecsGameTags.h"
+#include "FlecsStaticComponents.h"
+#include "FlecsInstanceComponents.h"
 #include "Engine/Engine.h"  // For GEngine->AddOnScreenDebugMessage
 #include "EssentialTypes/PlayerKeyCarry.h"
 #include "PhysicsTypes/BarrageCharacterMovement.h"
@@ -86,6 +88,7 @@ void AFlecsCharacter::BeginPlay()
 
 	// ─────────────────────────────────────────────────────────────
 	// FLECS: Register character entity
+	// Uses NEW Static/Instance architecture
 	// ─────────────────────────────────────────────────────────────
 	float InitialHealth = StartingHealth > 0.f ? StartingHealth : MaxHealth;
 	CachedHealth = InitialHealth;
@@ -105,8 +108,21 @@ void AFlecsCharacter::BeginPlay()
 				flecs::world* FlecsWorld = FlecsSubsystem->GetFlecsWorld();
 				if (!FlecsWorld) return;
 
+				// Static data (could be shared via prefab in future)
+				FHealthStatic HealthStatic;
+				HealthStatic.MaxHP = CapturedMaxHealth;
+				HealthStatic.Armor = CapturedArmor;
+				HealthStatic.RegenPerSecond = 0.f;
+				HealthStatic.bDestroyOnDeath = false;  // Characters handle death differently
+
+				// Instance data (per-entity mutable state)
+				FHealthInstance HealthInstance;
+				HealthInstance.CurrentHP = CapturedInitialHealth;
+				HealthInstance.RegenAccumulator = 0.f;
+
 				flecs::entity Entity = FlecsWorld->entity()
-					.set<FHealthData>({ CapturedInitialHealth, CapturedMaxHealth, CapturedArmor })
+					.set<FHealthStatic>(HealthStatic)
+					.set<FHealthInstance>(HealthInstance)
 					.add<FTagCharacter>();
 
 				// Bidirectional binding: sets FBarrageBody + atomic in FBarragePrimitive

@@ -3,7 +3,9 @@
 #include "FlecsArtillerySubsystem.h"
 #include "BarrageDispatch.h"
 #include "FBarragePrimitive.h"
-#include "FlecsComponents.h"
+#include "FlecsGameTags.h"
+#include "FlecsStaticComponents.h"
+#include "FlecsInstanceComponents.h"
 #include "EPhysicsLayer.h"
 #include "Systems/BarrageEntitySpawner.h"
 
@@ -16,48 +18,55 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 	// Register all Flecs components (using direct flecs API)
 	// ═══════════════════════════════════════════════════════════════
 
-	// Core gameplay components
-	World.component<FItemData>();
-	World.component<FHealthData>();
-	World.component<FDamageSource>();
-	World.component<FProjectileData>();
-	World.component<FLootData>();
+	// ─────────────────────────────────────────────────────────
+	// STATIC COMPONENTS (Prefab - shared data per entity type)
+	// ─────────────────────────────────────────────────────────
+	World.component<FHealthStatic>();
+	World.component<FDamageStatic>();
+	World.component<FProjectileStatic>();
+	World.component<FLootStatic>();
+	World.component<FItemStaticData>();
+	World.component<FContainerStatic>();
+	World.component<FEntityDefinitionRef>();
+
+	// ─────────────────────────────────────────────────────────
+	// INSTANCE COMPONENTS (Per-entity mutable data)
+	// ─────────────────────────────────────────────────────────
+	World.component<FHealthInstance>();
+	World.component<FProjectileInstance>();
+	World.component<FItemInstance>();
+	World.component<FItemUniqueData>();
+	World.component<FContainerInstance>();
+	World.component<FContainerGridInstance>();
+	World.component<FContainerSlotsInstance>();
+	World.component<FWorldItemInstance>();
+	World.component<FContainedIn>();
+
+	// ─────────────────────────────────────────────────────────
+	// PHYSICS BRIDGE COMPONENTS
+	// ─────────────────────────────────────────────────────────
 	World.component<FBarrageBody>();
 	World.component<FISMRender>();
-	World.component<FContainerSlot>();
-	World.component<FContainerData>();
 
-	// Entity tags
+	// ─────────────────────────────────────────────────────────
+	// ENTITY TAGS (zero-size, for archetype queries)
+	// ─────────────────────────────────────────────────────────
 	World.component<FTagItem>();
+	World.component<FTagDroppedItem>();
+	World.component<FTagContainer>();
 	World.component<FTagDestructible>();
 	World.component<FTagPickupable>();
 	World.component<FTagHasLoot>();
 	World.component<FTagDead>();
 	World.component<FTagProjectile>();
 	World.component<FTagCharacter>();
-
-	// Legacy components
-	World.component<FFlecsCollisionEvent>();
-	World.component<FConstraintLink>();
-	World.component<FFlecsConstraintData>();
-	World.component<FTagConstrained>();
-
-	// Advanced Item System components
-	World.component<FItemStaticData>();  // Prefab component for shared item data
-	World.component<FItemInstance>();
-	World.component<FItemUniqueData>();
-	World.component<FContainedIn>();
-	World.component<FWorldItemData>();
-	World.component<FContainerBase>();
-	World.component<FContainerGridData>();
-	World.component<FContainerSlotsData>();
-	World.component<FContainerListData>();
-	World.component<FTagDroppedItem>();
-	World.component<FTagContainer>();
 	World.component<FTagEquipment>();
 	World.component<FTagConsumable>();
+	World.component<FTagConstrained>();
 
-	// Collision Pair System components
+	// ─────────────────────────────────────────────────────────
+	// COLLISION PAIR SYSTEM COMPONENTS
+	// ─────────────────────────────────────────────────────────
 	World.component<FCollisionPair>();
 	World.component<FTagCollisionDamage>();
 	World.component<FTagCollisionPickup>();
@@ -66,25 +75,32 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 	World.component<FTagCollisionCharacter>();
 	World.component<FTagCollisionProcessed>();
 
+	// ─────────────────────────────────────────────────────────
+	// CONSTRAINT COMPONENTS
+	// ─────────────────────────────────────────────────────────
+	World.component<FConstraintLink>();
+	World.component<FFlecsConstraintData>();
+
 	// ═══════════════════════════════════════════════════════════════
 	// GAMEPLAY SYSTEMS
 	// ═══════════════════════════════════════════════════════════════
 
 	// ─────────────────────────────────────────────────────────
 	// WORLD ITEM DESPAWN SYSTEM
-	// World items with FWorldItemData get their DespawnTimer
+	// World items with FWorldItemInstance get their DespawnTimer
 	// decremented. When it hits 0, the entity is tagged FTagDead.
+	// Uses FWorldItemInstance for despawn/grace timers.
 	// ─────────────────────────────────────────────────────────
-	World.system<FWorldItemData>("WorldItemDespawnSystem")
+	World.system<FWorldItemInstance>("WorldItemDespawnSystem")
 		.with<FTagItem>()
 		.without<FTagDead>()
-		.each([](flecs::entity Entity, FWorldItemData& ItemData)
+		.each([](flecs::entity Entity, FWorldItemInstance& WorldItem)
 		{
-			if (ItemData.DespawnTimer > 0.f)
+			if (WorldItem.DespawnTimer > 0.f)
 			{
 				constexpr float DeltaTime = 1.f / 120.f;
-				ItemData.DespawnTimer -= DeltaTime;
-				if (ItemData.DespawnTimer <= 0.f)
+				WorldItem.DespawnTimer -= DeltaTime;
+				if (WorldItem.DespawnTimer <= 0.f)
 				{
 					Entity.add<FTagDead>();
 				}
@@ -95,16 +111,17 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 	// PICKUP GRACE SYSTEM
 	// World items with FTagDroppedItem get their PickupGraceTimer
 	// decremented. When it hits 0, the tag is removed.
+	// Uses FWorldItemInstance for despawn/grace timers.
 	// ─────────────────────────────────────────────────────────
-	World.system<FWorldItemData>("PickupGraceSystem")
+	World.system<FWorldItemInstance>("PickupGraceSystem")
 		.with<FTagDroppedItem>()
-		.each([](flecs::entity Entity, FWorldItemData& ItemData)
+		.each([](flecs::entity Entity, FWorldItemInstance& WorldItem)
 		{
-			if (ItemData.PickupGraceTimer > 0.f)
+			if (WorldItem.PickupGraceTimer > 0.f)
 			{
 				constexpr float DeltaTime = 1.f / 120.f;
-				ItemData.PickupGraceTimer -= DeltaTime;
-				if (ItemData.PickupGraceTimer <= 0.f)
+				WorldItem.PickupGraceTimer -= DeltaTime;
+				if (WorldItem.PickupGraceTimer <= 0.f)
 				{
 					Entity.remove<FTagDroppedItem>();
 				}
@@ -116,37 +133,23 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 		});
 
 	// ─────────────────────────────────────────────────────────
-	// LEGACY ITEM DESPAWN SYSTEM
-	// Entities with FItemData and a positive DespawnTimer.
-	// ─────────────────────────────────────────────────────────
-	World.system<FItemData>("ItemDespawnSystem")
-		.each([](flecs::entity Entity, FItemData& Item)
-		{
-			if (Item.DespawnTimer > 0.f)
-			{
-				constexpr float DeltaTime = 1.f / 120.f;
-				Item.DespawnTimer -= DeltaTime;
-				if (Item.DespawnTimer <= 0.f)
-				{
-					Entity.add<FTagDead>();
-				}
-			}
-		});
-
-	// ─────────────────────────────────────────────────────────
 	// PROJECTILE LIFETIME SYSTEM
-	// Projectiles with FProjectileData get their lifetime
-	// decremented. Velocity check is DISABLED for true bouncing
-	// projectiles (MaxBounces == -1).
+	// Uses NEW Static/Instance architecture:
+	// - FProjectileStatic (prefab): MaxBounces, MinVelocity, GracePeriodFrames
+	// - FProjectileInstance (entity): LifetimeRemaining, BounceCount, GraceFramesRemaining
+	// Velocity check is DISABLED for true bouncing projectiles (MaxBounces == -1).
 	// ─────────────────────────────────────────────────────────
-	World.system<FProjectileData, const FBarrageBody>("ProjectileLifetimeSystem")
+	World.system<FProjectileInstance, const FBarrageBody>("ProjectileLifetimeSystem")
 		.with<FTagProjectile>()
 		.without<FTagDead>()
-		.each([this](flecs::entity Entity, FProjectileData& Projectile, const FBarrageBody& Body)
+		.each([this](flecs::entity Entity, FProjectileInstance& ProjInstance, const FBarrageBody& Body)
 		{
+			// Get static data from prefab (via IsA inheritance)
+			const FProjectileStatic* ProjStatic = Entity.try_get<FProjectileStatic>();
+
 			constexpr float DeltaTime = 1.f / 120.f;
-			Projectile.LifetimeRemaining -= DeltaTime;
-			if (Projectile.LifetimeRemaining <= 0.f)
+			ProjInstance.LifetimeRemaining -= DeltaTime;
+			if (ProjInstance.LifetimeRemaining <= 0.f)
 			{
 				UE_LOG(LogTemp, Log, TEXT("PROJ_DEBUG Lifetime EXPIRED: Key=%llu FlecsId=%llu"),
 					static_cast<uint64>(Body.BarrageKey), Entity.id());
@@ -154,27 +157,32 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 				return;
 			}
 
+			// Get MaxBounces from static, default to -1 (infinite) if no prefab
+			const int32 MaxBounces = ProjStatic ? ProjStatic->MaxBounces : -1;
+
 			// TRUE bouncing projectiles never die by velocity check
-			if (Projectile.MaxBounces == -1)
+			if (MaxBounces == -1)
 			{
 				return;
 			}
 
 			// Decrement grace period counter
-			if (Projectile.GraceFramesRemaining > 0)
+			if (ProjInstance.GraceFramesRemaining > 0)
 			{
-				Projectile.GraceFramesRemaining--;
+				ProjInstance.GraceFramesRemaining--;
 				return;
 			}
 
-			// Kill stopped projectiles (velocity < 50 units/sec)
+			// Kill stopped projectiles - MinVelocity from static, default 50
+			const float MinVelocity = ProjStatic ? ProjStatic->MinVelocity : 50.f;
+			const float MinVelocitySq = MinVelocity * MinVelocity;
+
 			if (Body.IsValid() && CachedBarrageDispatch)
 			{
 				FBLet Prim = CachedBarrageDispatch->GetShapeRef(Body.BarrageKey);
 				if (FBarragePrimitive::IsNotNull(Prim))
 				{
 					FVector3f Velocity = FBarragePrimitive::GetVelocity(Prim);
-					constexpr float MinVelocitySq = 50.f * 50.f;
 					if (Velocity.SizeSquared() < MinVelocitySq)
 					{
 						UE_LOG(LogTemp, Log, TEXT("PROJ_DEBUG VelocityCheck KILLED: Key=%llu FlecsId=%llu Vel=%.2f"),
@@ -199,7 +207,10 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 
 	// ─────────────────────────────────────────────────────────
 	// DAMAGE COLLISION SYSTEM
-	// Applies damage from FDamageSource entities to FHealthData targets.
+	// Uses Static/Instance architecture:
+	// - FDamageStatic (prefab): Damage, bAreaDamage, bDestroyOnHit
+	// - FHealthStatic (prefab): Armor
+	// - FHealthInstance (entity): CurrentHP
 	// ─────────────────────────────────────────────────────────
 	World.system<const FCollisionPair>("DamageCollisionSystem")
 		.with<FTagCollisionDamage>()
@@ -210,21 +221,31 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 			uint64 TargetId = Pair.GetTargetEntityId();
 
 			float Damage = 25.f; // Default for Artillery projectiles
+			bool bAreaDamage = false;
+			bool bDestroyOnHit = false;
+			int32 MaxBounces = 0;
 
 			flecs::entity ProjectileEntity;
-			const FDamageSource* DamageSource = nullptr;
-			const FProjectileData* ProjData = nullptr;
 
+			// Get damage data from projectile
 			if (ProjectileId != 0)
 			{
 				ProjectileEntity = World.entity(ProjectileId);
 				if (ProjectileEntity.is_valid())
 				{
-					DamageSource = ProjectileEntity.try_get<FDamageSource>();
-					ProjData = ProjectileEntity.try_get<FProjectileData>();
-					if (DamageSource)
+					const FDamageStatic* DmgStatic = ProjectileEntity.try_get<FDamageStatic>();
+					const FProjectileStatic* ProjStatic = ProjectileEntity.try_get<FProjectileStatic>();
+
+					if (DmgStatic)
 					{
-						Damage = DamageSource->Damage;
+						Damage = DmgStatic->Damage;
+						bAreaDamage = DmgStatic->bAreaDamage;
+						bDestroyOnHit = DmgStatic->bDestroyOnHit;
+					}
+
+					if (ProjStatic)
+					{
+						MaxBounces = ProjStatic->MaxBounces;
 					}
 				}
 			}
@@ -235,23 +256,28 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 				flecs::entity Target = World.entity(TargetId);
 				if (Target.is_valid() && !Target.has<FTagDead>())
 				{
-					FHealthData* Health = Target.try_get_mut<FHealthData>();
-					if (Health)
+					const FHealthStatic* HealthStatic = Target.try_get<FHealthStatic>();
+					FHealthInstance* HealthInstance = Target.try_get_mut<FHealthInstance>();
+
+					if (HealthInstance)
 					{
-						float EffectiveDamage = FMath::Max(0.f, Damage - Health->Armor);
-						Health->CurrentHP -= EffectiveDamage;
+						float Armor = HealthStatic ? HealthStatic->Armor : 0.f;
+						float MaxHP = HealthStatic ? HealthStatic->MaxHP : 100.f;
+
+						float EffectiveDamage = FMath::Max(0.f, Damage - Armor);
+						HealthInstance->CurrentHP -= EffectiveDamage;
 
 						UE_LOG(LogTemp, Log, TEXT("COLLISION: Damage %.1f applied to Entity %llu (HP: %.1f/%.1f)"),
-							EffectiveDamage, TargetId, Health->CurrentHP, Health->MaxHP);
+							EffectiveDamage, TargetId, HealthInstance->CurrentHP, MaxHP);
 					}
 				}
 			}
 
 			// Kill non-bouncing, non-area projectile after hit
-			if (ProjectileEntity.is_valid() && DamageSource)
+			if (ProjectileEntity.is_valid())
 			{
-				bool bIsBouncing = ProjData && ProjData->MaxBounces == -1;
-				if (!DamageSource->bAreaDamage && !bIsBouncing)
+				bool bIsBouncing = (MaxBounces == -1);
+				if (!bAreaDamage && !bIsBouncing)
 				{
 					ProjectileEntity.add<FTagDead>();
 					UE_LOG(LogTemp, Log, TEXT("COLLISION: Projectile %llu killed after damage hit"), ProjectileId);
@@ -263,7 +289,9 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 
 	// ─────────────────────────────────────────────────────────
 	// BOUNCE COLLISION SYSTEM
-	// Resets projectile grace period and increments bounce count.
+	// Uses Static/Instance architecture:
+	// - FProjectileStatic (prefab): MaxBounces, GracePeriodFrames
+	// - FProjectileInstance (entity): BounceCount, GraceFramesRemaining
 	// ─────────────────────────────────────────────────────────
 	World.system<const FCollisionPair>("BounceCollisionSystem")
 		.with<FTagCollisionBounce>()
@@ -277,16 +305,20 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 				flecs::entity Entity = World.entity(EntityId);
 				if (!Entity.is_valid() || Entity.has<FTagDead>()) return false;
 
-				FProjectileData* Projectile = Entity.try_get_mut<FProjectileData>();
-				if (!Projectile) return false;
+				FProjectileInstance* ProjInstance = Entity.try_get_mut<FProjectileInstance>();
+				if (!ProjInstance) return false;
 
-				Projectile->GraceFramesRemaining = FProjectileData::GracePeriodFrames;
-				Projectile->BounceCount++;
+				const FProjectileStatic* ProjStatic = Entity.try_get<FProjectileStatic>();
+				const int32 GracePeriodFrames = ProjStatic ? ProjStatic->GracePeriodFrames : 30;
+				const int32 MaxBounces = ProjStatic ? ProjStatic->MaxBounces : -1;
+
+				ProjInstance->GraceFramesRemaining = GracePeriodFrames;
+				ProjInstance->BounceCount++;
 
 				UE_LOG(LogTemp, Log, TEXT("COLLISION: Bounce %d/%d for Entity %llu"),
-					Projectile->BounceCount, Projectile->MaxBounces, EntityId);
+					ProjInstance->BounceCount, MaxBounces, EntityId);
 
-				if (Projectile->MaxBounces >= 0 && Projectile->BounceCount > Projectile->MaxBounces)
+				if (MaxBounces >= 0 && ProjInstance->BounceCount > MaxBounces)
 				{
 					Entity.add<FTagDead>();
 					UE_LOG(LogTemp, Log, TEXT("COLLISION: Projectile %llu exceeded max bounces"), EntityId);
@@ -306,6 +338,7 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 	// ─────────────────────────────────────────────────────────
 	// PICKUP COLLISION SYSTEM
 	// Handles item pickup when character touches pickupable item.
+	// Uses FWorldItemInstance for grace period check.
 	// ─────────────────────────────────────────────────────────
 	World.system<const FCollisionPair>("PickupCollisionSystem")
 		.with<FTagCollisionPickup>()
@@ -331,8 +364,9 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 
 			if (Character.is_valid() && Item.is_valid() && !Item.has<FTagDead>())
 			{
-				const FWorldItemData* WorldData = Item.try_get<FWorldItemData>();
-				if (WorldData && !WorldData->CanBePickedUp())
+				// Check grace period
+				const FWorldItemInstance* WorldItem = Item.try_get<FWorldItemInstance>();
+				if (WorldItem && !WorldItem->CanBePickedUp())
 				{
 					PairEntity.add<FTagCollisionProcessed>();
 					return;
@@ -384,11 +418,11 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 
 	// ─────────────────────────────────────────────────────────
 	// DEATH CHECK SYSTEM
-	// Entities with FHealthData that have CurrentHP <= 0.
+	// Entities with FHealthInstance that have CurrentHP <= 0.
 	// ─────────────────────────────────────────────────────────
-	World.system<const FHealthData>("DeathCheckSystem")
+	World.system<const FHealthInstance>("DeathCheckSystem")
 		.without<FTagDead>()
-		.each([](flecs::entity Entity, const FHealthData& Health)
+		.each([](flecs::entity Entity, const FHealthInstance& Health)
 		{
 			if (!Health.IsAlive())
 			{

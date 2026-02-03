@@ -2,7 +2,9 @@
 #include "FlecsConstrainedGroupSpawner.h"
 #include "FlecsGameplayLibrary.h"
 #include "FlecsArtillerySubsystem.h"
-#include "FlecsComponents.h"
+#include "FlecsGameTags.h"
+#include "FlecsStaticComponents.h"
+#include "FlecsInstanceComponents.h"
 #include "Systems/BarrageEntitySpawner.h"
 #include "BarrageDispatch.h"
 #include "Components/BillboardComponent.h"
@@ -137,7 +139,16 @@ FFlecsGroupSpawnResult AFlecsConstrainedGroupSpawner::SpawnGroup()
 
 			if (MaxHP > 0.f)
 			{
-				Entity.set<FHealthData>({ MaxHP, MaxHP, ArmorVal });
+				FHealthStatic HealthStatic;
+				HealthStatic.MaxHP = MaxHP;
+				HealthStatic.Armor = ArmorVal;
+				HealthStatic.bDestroyOnDeath = true;
+
+				FHealthInstance HealthInstance;
+				HealthInstance.CurrentHP = MaxHP;
+
+				Entity.set<FHealthStatic>(HealthStatic);
+				Entity.set<FHealthInstance>(HealthInstance);
 				Entity.add<FTagDestructible>();
 			}
 

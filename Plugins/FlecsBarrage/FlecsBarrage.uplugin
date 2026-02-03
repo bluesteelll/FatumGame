@@ -1,0 +1,38 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0",
+	"FriendlyName": "Flecs Barrage Integration",
+	"Description": "Bridge between Flecs ECS and Barrage Physics (Jolt). Provides lock-free bidirectional entity binding and Artillery thread integration.",
+	"Category": "Gameplay",
+	"CreatedBy": "FatumGame",
+	"EnabledByDefault": true,
+	"CanContainContent": false,
+	"IsBetaVersion": false,
+	"IsExperimentalVersion": false,
+	"Modules": [
+		{
+			"Name": "FlecsBarrage",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	],
+	"Plugins": [
+		{
+			"Name": "UnrealFlecs",
+			"Enabled": true
+		},
+		{
+			"Name": "Barrage",
+			"Enabled": true
+		},
+		{
+			"Name": "Cabling",
+			"Enabled": true
+		},
+		{
+			"Name": "SkeletonKey",
+			"Enabled": true
+		}
+	]
+}

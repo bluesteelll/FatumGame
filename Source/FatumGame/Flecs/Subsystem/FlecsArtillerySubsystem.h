@@ -137,14 +137,26 @@ public:
 	bool HasEntityForBarrageKey(FSkeletonKey BarrageKey) const;
 
 	// ═══════════════════════════════════════════════════════════════
-	// ITEM PREFAB REGISTRY
-	// Prefabs store shared static data for item types (FItemStaticData).
-	// Each UFlecsEntityDefinition with ItemDefinition gets one prefab.
-	// Item instances use is_a(Prefab) to inherit static data.
+	// ENTITY PREFAB REGISTRY
+	// Prefabs store shared static data for entity types.
+	// Each UFlecsEntityDefinition gets one prefab with:
+	// - FHealthStatic, FDamageStatic, FProjectileStatic, etc.
+	// - FEntityDefinitionRef for back-reference
+	// Entity instances use is_a(Prefab) to inherit static data.
 	// ═══════════════════════════════════════════════════════════════
 
 	/**
-	 * Get or create a prefab for an item type.
+	 * Get or create a prefab for an entity type.
+	 * Creates prefab with all Static components from the definition's profiles.
+	 * Thread-safe: can be called from EnqueueCommand lambdas.
+	 *
+	 * @param EntityDefinition The entity definition.
+	 * @return Flecs prefab entity with static components, or invalid if null.
+	 */
+	flecs::entity GetOrCreateEntityPrefab(class UFlecsEntityDefinition* EntityDefinition);
+
+	/**
+	 * Get or create a prefab for an item type (specialized for items).
 	 * Thread-safe: can be called from EnqueueCommand lambdas.
 	 *
 	 * @param EntityDefinition The entity definition containing ItemDefinition.
@@ -241,11 +253,14 @@ private:
 	std::atomic<bool> bInArtilleryTick{false};
 
 	// ═══════════════════════════════════════════════════════════════
-	// ITEM PREFAB STORAGE
-	// Maps ItemTypeId → Flecs prefab entity.
-	// Prefabs contain FItemStaticData with shared immutable data.
+	// PREFAB STORAGE
+	// Maps definition pointers → Flecs prefab entities.
+	// Only accessed from Artillery thread.
 	// ═══════════════════════════════════════════════════════════════
 
-	/** TypeId → Prefab entity. Only accessed from Artillery thread. */
+	/** EntityDefinition* → Prefab entity. General entity prefabs. */
+	TMap<UFlecsEntityDefinition*, flecs::entity> EntityPrefabs;
+
+	/** TypeId → Prefab entity. Item-specific prefabs (for lookup by TypeId). */
 	TMap<int32, flecs::entity> ItemPrefabs;
 };

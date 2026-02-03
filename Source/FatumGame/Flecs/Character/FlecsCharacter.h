@@ -22,7 +22,7 @@ struct FInputActionValue;
  *
  * Features:
  * - Barrage physics movement (Jolt engine)
- * - Flecs entity with FHealthData, FTagCharacter
+ * - Flecs entity with FHealthStatic + FHealthInstance, FTagCharacter
  * - Automatic damage handling from projectiles
  * - Death callbacks
  *

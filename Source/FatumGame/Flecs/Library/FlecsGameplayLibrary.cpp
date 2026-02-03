@@ -1,7 +1,9 @@
 
 #include "FlecsGameplayLibrary.h"
 #include "FlecsArtillerySubsystem.h"
-#include "FlecsComponents.h"
+#include "FlecsGameTags.h"
+#include "FlecsStaticComponents.h"
+#include "FlecsInstanceComponents.h"
 #include "FlecsProjectileDefinition.h"
 #include "FlecsConstrainedGroupDefinition.h"
 #include "Systems/BarrageEntitySpawner.h"
@@ -66,13 +68,28 @@ void UFlecsGameplayLibrary::SpawnWorldItem(
 
 	// Enqueue Flecs entity creation to Artillery thread
 	FSkeletonKey EntityKey = Result.EntityKey;
-	Subsystem->EnqueueCommand([Subsystem, EntityKey, ItemDefinition, Mesh, Count, DespawnTime]()
+	Subsystem->EnqueueCommand([Subsystem, EntityKey, Mesh, Count, DespawnTime]()
 	{
 		flecs::world* FlecsWorld = Subsystem->GetFlecsWorld();
 		if (!FlecsWorld) return;
 
+		FItemStaticData ItemStatic;
+		ItemStatic.TypeId = 0;  // No type ID for legacy spawn
+		ItemStatic.MaxStack = 99;
+		ItemStatic.Weight = 0.1f;
+		ItemStatic.GridSize = FIntPoint(1, 1);
+
+		FItemInstance ItemInstance;
+		ItemInstance.Count = Count;
+
+		FWorldItemInstance WorldItem;
+		WorldItem.DespawnTimer = DespawnTime;
+		WorldItem.PickupGraceTimer = 0.f;
+
 		flecs::entity Entity = FlecsWorld->entity()
-			.set<FItemData>({ ItemDefinition, Count, DespawnTime })
+			.set<FItemStaticData>(ItemStatic)
+			.set<FItemInstance>(ItemInstance)
+			.set<FWorldItemInstance>(WorldItem)
 			.set<FISMRender>({ Mesh, FVector::OneVector })
 			.add<FTagItem>()
 			.add<FTagPickupable>();
@@ -113,8 +130,17 @@ void UFlecsGameplayLibrary::SpawnDestructible(
 		flecs::world* FlecsWorld = Subsystem->GetFlecsWorld();
 		if (!FlecsWorld) return;
 
+		FHealthStatic HealthStatic;
+		HealthStatic.MaxHP = MaxHP;
+		HealthStatic.Armor = 0.f;
+		HealthStatic.bDestroyOnDeath = true;
+
+		FHealthInstance HealthInstance;
+		HealthInstance.CurrentHP = MaxHP;
+
 		flecs::entity Entity = FlecsWorld->entity()
-			.set<FHealthData>({ MaxHP, MaxHP, 0.f })
+			.set<FHealthStatic>(HealthStatic)
+			.set<FHealthInstance>(HealthInstance)
 			.set<FISMRender>({ Mesh, FVector::OneVector })
 			.add<FTagDestructible>();
 
@@ -156,9 +182,23 @@ void UFlecsGameplayLibrary::SpawnLootableDestructible(
 		flecs::world* FlecsWorld = Subsystem->GetFlecsWorld();
 		if (!FlecsWorld) return;
 
+		FHealthStatic HealthStatic;
+		HealthStatic.MaxHP = MaxHP;
+		HealthStatic.Armor = 0.f;
+		HealthStatic.bDestroyOnDeath = true;
+
+		FHealthInstance HealthInstance;
+		HealthInstance.CurrentHP = MaxHP;
+
+		FLootStatic LootStatic;
+		LootStatic.MinDrops = MinDrops;
+		LootStatic.MaxDrops = MaxDrops;
+		LootStatic.DropChance = 1.f;
+
 		flecs::entity Entity = FlecsWorld->entity()
-			.set<FHealthData>({ MaxHP, MaxHP, 0.f })
-			.set<FLootData>({ MinDrops, MaxDrops })
+			.set<FHealthStatic>(HealthStatic)
+			.set<FHealthInstance>(HealthInstance)
+			.set<FLootStatic>(LootStatic)
 			.set<FISMRender>({ Mesh, FVector::OneVector })
 			.add<FTagDestructible>()
 			.add<FTagHasLoot>();
@@ -231,10 +271,10 @@ void UFlecsGameplayLibrary::SetItemDespawnTimer(UObject* WorldContextObject, FSk
 		flecs::entity Entity = GetFlecsEntityForKey(Subsystem, CapturedKey);
 		if (Entity.is_valid() && Entity.is_alive())
 		{
-			FItemData* Item = Entity.try_get_mut<FItemData>();
-			if (Item)
+			FWorldItemInstance* WorldItem = Entity.try_get_mut<FWorldItemInstance>();
+			if (WorldItem)
 			{
-				Item->DespawnTimer = Timer;
+				WorldItem->DespawnTimer = Timer;
 			}
 		}
 	});
@@ -249,15 +289,19 @@ bool UFlecsGameplayLibrary::ApplyDamage_ArtilleryThread(UFlecsArtillerySubsystem
 	flecs::entity Entity = GetFlecsEntityForKey(Subsystem, BarrageKey);
 	if (!Entity.is_valid() || !Entity.is_alive()) return false;
 
-	FHealthData* Health = Entity.try_get_mut<FHealthData>();
-	if (!Health) return false;
+	FHealthInstance* HealthInst = Entity.try_get_mut<FHealthInstance>();
+	if (!HealthInst) return false;
 
-	float ActualDamage = FMath::Max(0.f, Damage - Health->Armor);
-	Health->CurrentHP -= ActualDamage;
+	// Get armor from static (prefab or direct)
+	const FHealthStatic* HealthStatic = Entity.try_get<FHealthStatic>();
+	float Armor = HealthStatic ? HealthStatic->Armor : 0.f;
 
-	if (Health->CurrentHP <= 0.f)
+	float ActualDamage = FMath::Max(0.f, Damage - Armor);
+	HealthInst->CurrentHP -= ActualDamage;
+
+	if (HealthInst->CurrentHP <= 0.f)
 	{
-		Health->CurrentHP = 0.f;
+		HealthInst->CurrentHP = 0.f;
 		Entity.add<FTagDead>();
 		return true;
 	}
@@ -269,10 +313,13 @@ void UFlecsGameplayLibrary::Heal_ArtilleryThread(UFlecsArtillerySubsystem* Subsy
 	flecs::entity Entity = GetFlecsEntityForKey(Subsystem, BarrageKey);
 	if (!Entity.is_valid() || !Entity.is_alive()) return;
 
-	FHealthData* Health = Entity.try_get_mut<FHealthData>();
-	if (!Health) return;
+	FHealthInstance* HealthInst = Entity.try_get_mut<FHealthInstance>();
+	if (!HealthInst) return;
 
-	Health->CurrentHP = FMath::Min(Health->CurrentHP + Amount, Health->MaxHP);
+	const FHealthStatic* HealthStatic = Entity.try_get<FHealthStatic>();
+	float MaxHP = HealthStatic ? HealthStatic->MaxHP : 100.f;
+
+	HealthInst->CurrentHP = FMath::Min(HealthInst->CurrentHP + Amount, MaxHP);
 }
 
 bool UFlecsGameplayLibrary::IsAlive_ArtilleryThread(UFlecsArtillerySubsystem* Subsystem, FSkeletonKey BarrageKey)
@@ -280,8 +327,8 @@ bool UFlecsGameplayLibrary::IsAlive_ArtilleryThread(UFlecsArtillerySubsystem* Su
 	flecs::entity Entity = GetFlecsEntityForKey(Subsystem, BarrageKey);
 	if (!Entity.is_valid() || !Entity.is_alive()) return false;
 
-	const FHealthData* Health = Entity.try_get<FHealthData>();
-	return Health ? Health->IsAlive() : Entity.is_alive();
+	const FHealthInstance* HealthInst = Entity.try_get<FHealthInstance>();
+	return HealthInst ? HealthInst->IsAlive() : Entity.is_alive();
 }
 
 bool UFlecsGameplayLibrary::GetHealth_ArtilleryThread(UFlecsArtillerySubsystem* Subsystem, FSkeletonKey BarrageKey,
@@ -290,11 +337,13 @@ bool UFlecsGameplayLibrary::GetHealth_ArtilleryThread(UFlecsArtillerySubsystem* 
 	flecs::entity Entity = GetFlecsEntityForKey(Subsystem, BarrageKey);
 	if (!Entity.is_valid() || !Entity.is_alive()) return false;
 
-	const FHealthData* Health = Entity.try_get<FHealthData>();
-	if (!Health) return false;
+	const FHealthInstance* HealthInst = Entity.try_get<FHealthInstance>();
+	if (!HealthInst) return false;
 
-	OutCurrentHP = Health->CurrentHP;
-	OutMaxHP = Health->MaxHP;
+	const FHealthStatic* HealthStatic = Entity.try_get<FHealthStatic>();
+
+	OutCurrentHP = HealthInst->CurrentHP;
+	OutMaxHP = HealthStatic ? HealthStatic->MaxHP : 100.f;
 	return true;
 }
 
@@ -525,9 +574,29 @@ FSkeletonKey UFlecsGameplayLibrary::SpawnProjectile(
 				return;
 			}
 
+			// Static damage data
+			FDamageStatic DamageStatic;
+			DamageStatic.Damage = Damage;
+			DamageStatic.bAreaDamage = false;
+			DamageStatic.bDestroyOnHit = (MaxBounces != -1);  // Non-bouncing projectiles destroy on hit
+
+			// Static projectile data
+			FProjectileStatic ProjStatic;
+			ProjStatic.MaxLifetime = LifetimeSeconds;
+			ProjStatic.MaxBounces = MaxBounces;
+			ProjStatic.GracePeriodFrames = 30;
+			ProjStatic.MinVelocity = 50.f;
+
+			// Instance projectile data
+			FProjectileInstance ProjInstance;
+			ProjInstance.LifetimeRemaining = LifetimeSeconds;
+			ProjInstance.BounceCount = 0;
+			ProjInstance.GraceFramesRemaining = 30;
+
 			flecs::entity Entity = FlecsWorld->entity()
-				.set<FDamageSource>({ Damage, FGameplayTag(), false, 0.f })
-				.set<FProjectileData>({ LifetimeSeconds, MaxBounces, 0 })
+				.set<FDamageStatic>(DamageStatic)
+				.set<FProjectileStatic>(ProjStatic)
+				.set<FProjectileInstance>(ProjInstance)
 				.set<FISMRender>({ Mesh, FVector(VisualScale) })
 				.add<FTagProjectile>();
 
@@ -1014,7 +1083,16 @@ FFlecsGroupSpawnResult UFlecsGameplayLibrary::SpawnConstrainedGroup(
 
 			if (MaxHP > 0.f)
 			{
-				Entity.set<FHealthData>({ MaxHP, MaxHP, ArmorVal });
+				FHealthStatic HealthStatic;
+				HealthStatic.MaxHP = MaxHP;
+				HealthStatic.Armor = ArmorVal;
+				HealthStatic.bDestroyOnDeath = true;
+
+				FHealthInstance HealthInstance;
+				HealthInstance.CurrentHP = MaxHP;
+
+				Entity.set<FHealthStatic>(HealthStatic);
+				Entity.set<FHealthInstance>(HealthInstance);
 				Entity.add<FTagDestructible>();
 			}
 
@@ -1217,7 +1295,16 @@ FFlecsGroupSpawnResult UFlecsGameplayLibrary::SpawnChain(
 
 			if (MaxHealth > 0.f)
 			{
-				Entity.set<FHealthData>({ MaxHealth, MaxHealth, 0.f });
+				FHealthStatic HealthStatic;
+				HealthStatic.MaxHP = MaxHealth;
+				HealthStatic.Armor = 0.f;
+				HealthStatic.bDestroyOnDeath = true;
+
+				FHealthInstance HealthInstance;
+				HealthInstance.CurrentHP = MaxHealth;
+
+				Entity.set<FHealthStatic>(HealthStatic);
+				Entity.set<FHealthInstance>(HealthInstance);
 				Entity.add<FTagDestructible>();
 			}
 

@@ -3,7 +3,7 @@
 #include "FlecsArtillerySubsystem.h"
 #include "BarrageDispatch.h"
 #include "FBarragePrimitive.h"
-#include "FlecsComponents.h"
+#include "FlecsGameTags.h"
 #include "Systems/BarrageEntitySpawner.h"
 
 // ═══════════════════════════════════════════════════════════════

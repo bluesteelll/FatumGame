@@ -111,9 +111,16 @@ Action: Fire (LMB), Jump (Space)
 | `FlecsProjectileProfile.h` | Projectile profile (lifetime, bounces, speed) |
 | `FlecsContainerProfile.h` | Container profile (Grid/Slot/List) |
 | `FlecsItemDefinition.h` | Item definition (stacking, actions) |
-| `FlecsComponents.h/cpp` | ECS components: FHealthData, FDamageSource, FBarrageBody, tags |
+| **`FlecsStaticComponents.h`** | **PREFAB components** (FHealthStatic, FDamageStatic, FProjectileStatic, FItemStaticData) |
+| **`FlecsInstanceComponents.h/cpp`** | **Instance components** (FHealthInstance, FProjectileInstance, FItemInstance) |
+| `FlecsComponents.h/cpp` | Game-specific tags (FTagItem, FTagCharacter, etc.) |
 | `FlecsGameplayLibrary.h/cpp` | Blueprint API: SpawnProjectile, ApplyDamage, Heal |
 | `FlecsArtillerySubsystem.h/cpp` | Artillery-Flecs bridge, lock-free bidirectional binding, collisions |
+
+**Plugins/FlecsBarrage (NEW):**
+| File | Purpose |
+|------|---------|
+| `FlecsBarrageComponents.h/cpp` | Bridge components: FBarrageBody, FISMRender, FCollisionPair, collision tags, constraints |
 
 **Plugins/Barrage:** `FBarragePrimitive.h` - atomic `FlecsEntityId` for reverse binding
 
@@ -139,41 +146,61 @@ Action: Fire (LMB), Jump (Space)
 **Lock-free bidirectional binding** - see [Lock-Free Bidirectional Binding](#lock-free-bidirectional-binding-january-2025)
 
 ```cpp
-// Components
-FHealthData      { CurrentHP, MaxHP, Armor }
-FDamageSource    { Damage, DamageType, bAreaDamage }
-FProjectileData  { LifetimeRemaining, MaxBounces, GraceFramesRemaining }
-FBarrageBody     { SkeletonKey }  // Forward binding: Entity -> BarrageKey
+// ═══════════════════════════════════════════════════════════════
+// STATIC COMPONENTS (FlecsStaticComponents.h) - Live in PREFAB
+// Immutable data shared by all entities of the same type
+// ═══════════════════════════════════════════════════════════════
+FHealthStatic     { MaxHP, Armor, RegenPerSecond, bDestroyOnDeath }
+FDamageStatic     { Damage, DamageType, bAreaDamage, AreaRadius, bDestroyOnHit }
+FProjectileStatic { MaxLifetime, MaxBounces, GracePeriodFrames, MinVelocity }
+FLootStatic       { MinDrops, MaxDrops, LootTableId, DropChance }
+FItemStaticData   { TypeId, MaxStack, Weight, GridSize, EntityDefinition*, ItemDefinition* }
+FContainerStatic  { Type, GridWidth, GridHeight, MaxItems, MaxWeight }
+FEntityDefinitionRef { EntityDefinition* }
 
-// Item components (Prefab System - February 2025)
-FItemStaticData  { TypeId, MaxStack, Weight, GridSize, ItemName, EntityDefinition*, ItemDefinition* }  // In PREFAB
-FItemInstance    { Count }  // Instance data only (TypeId moved to FItemStaticData)
-FContainedIn     { ContainerEntityId, GridPosition, SlotIndex }  // Links item -> container
+// ═══════════════════════════════════════════════════════════════
+// INSTANCE COMPONENTS (FlecsInstanceComponents.h) - Live on ENTITY
+// Mutable per-entity data, static data comes from prefab via IsA
+// ═══════════════════════════════════════════════════════════════
+FHealthInstance   { CurrentHP, RegenAccumulator }
+FProjectileInstance { LifetimeRemaining, BounceCount, GraceFramesRemaining }
+FItemInstance     { Count }
+FContainerInstance { CurrentWeight, CurrentCount, OwnerEntityId }
+FContainerGridInstance { OccupancyMask }
+FContainerSlotsInstance { SlotToItemEntity }
+FWorldItemInstance { DespawnTimer, PickupGraceTimer, DroppedByEntityId }
+FContainedIn      { ContainerEntityId, GridPosition, SlotIndex }
 
-// Container components
-FContainerBase   { Type, DefinitionId, OwnerEntityId, CurrentWeight, MaxWeight }
-FContainerListData { MaxItems, CurrentCount }
-FContainerGridData { Width, Height, OccupancyMask }
+// ═══════════════════════════════════════════════════════════════
+// BRIDGE COMPONENTS (FlecsBarrageComponents.h - Plugins/FlecsBarrage)
+// ═══════════════════════════════════════════════════════════════
+FBarrageBody      { SkeletonKey }  // Forward binding: Entity -> BarrageKey
+FISMRender        { Mesh, Scale }  // ISM render instance
+FConstraintLink   { ConstraintKey, OtherEntityKey, BreakForce, BreakTorque }
+FFlecsConstraintData { Constraints[] }
 
-// Collision Pair System (February 2025)
-FCollisionPair   { EntityId1, EntityId2, Key1, Key2, ContactPoint, bBody1IsProjectile, bBody2IsProjectile }
+// Collision Pair System
+FCollisionPair    { EntityId1, EntityId2, Key1, Key2, ContactPoint, bBody1/2IsProjectile }
 
-// Entity Tags (zero-size): FTagItem, FTagContainer, FTagDestructible, FTagDead, FTagProjectile, FTagCharacter
 // Collision Tags (zero-size): FTagCollisionDamage, FTagCollisionBounce, FTagCollisionPickup, FTagCollisionDestructible
+
+// ═══════════════════════════════════════════════════════════════
+// GAME-SPECIFIC TAGS (FlecsComponents.h - Source/FatumGame)
+// ═══════════════════════════════════════════════════════════════
+// Entity Tags (zero-size): FTagItem, FTagContainer, FTagDestructible, FTagDead, FTagProjectile, FTagCharacter
 ```
 
 **Systems (execution order):**
 1. `WorldItemDespawnSystem` - World item despawn timer
 2. `PickupGraceSystem` - Item pickup grace period
-3. `ItemDespawnSystem` - Legacy item despawn
-4. `ProjectileLifetimeSystem` - Lifetime, velocity check with grace period
-5. `DamageCollisionSystem` - Apply damage from collision pairs
-6. `BounceCollisionSystem` - Handle projectile bounces
-7. `PickupCollisionSystem` - Handle item pickup
-8. `DestructibleCollisionSystem` - Destroy destructibles
-9. `DeathCheckSystem` - HP <= 0 -> FTagDead
-10. `DeadEntityCleanupSystem` - Cleanup dead entities (ISM, physics, Flecs)
-11. `CollisionPairCleanupSystem` - Destroy collision pairs (LAST)
+3. `ProjectileLifetimeSystem` - Lifetime, velocity check with grace period
+4. `DamageCollisionSystem` - Apply damage from collision pairs
+5. `BounceCollisionSystem` - Handle projectile bounces
+6. `PickupCollisionSystem` - Handle item pickup
+7. `DestructibleCollisionSystem` - Destroy destructibles
+8. `DeathCheckSystem` - HP <= 0 -> FTagDead
+9. `DeadEntityCleanupSystem` - Cleanup dead entities (ISM, physics, Flecs)
+10. `CollisionPairCleanupSystem` - Destroy collision pairs (LAST)
 
 ### SkeletonKey (Entity Identity)
 64-bit keys: `[Type:4][Metadata:28][Hash:32]`
@@ -204,7 +231,7 @@ UFlecsGameplayLibrary::KillEntityByBarrageKey(World, EntityKey);
 ## AFlecsCharacter
 
 **Features:**
-- Flecs entity on BeginPlay (FHealthData, FTagCharacter)
+- Flecs entity on BeginPlay (FHealthStatic/FHealthInstance, FTagCharacter)
 - Auto damage from projectiles via collision
 - Barrage physics movement
 - **Test entity spawning** (E = spawn, F = destroy)
@@ -299,7 +326,7 @@ struct FCollisionPair
 
 | Tag | When Added | Processed By |
 |-----|------------|--------------|
-| `FTagCollisionDamage` | Projectile/FDamageSource hits FHealthData | DamageCollisionSystem |
+| `FTagCollisionDamage` | FDamageStatic hits FHealthInstance | DamageCollisionSystem |
 | `FTagCollisionBounce` | FTagProjectile entity collides | BounceCollisionSystem |
 | `FTagCollisionPickup` | FTagCharacter touches FTagPickupable + FTagItem | PickupCollisionSystem |
 | `FTagCollisionDestructible` | Projectile hits FTagDestructible | DestructibleCollisionSystem |
@@ -310,17 +337,17 @@ struct FCollisionPair
 
 **DamageCollisionSystem:**
 - Queries: `FCollisionPair, FTagCollisionDamage, !FTagCollisionProcessed`
-- Applies FDamageSource damage to FHealthData (respects armor)
+- Applies FDamageStatic damage to FHealthInstance (respects FHealthStatic.Armor)
 - Kills non-bouncing projectiles after hit
 
 **BounceCollisionSystem:**
 - Queries: `FCollisionPair, FTagCollisionBounce, !FTagCollisionProcessed`
-- Resets `FProjectileData.GraceFramesRemaining`
+- Resets `FProjectileInstance.GraceFramesRemaining`
 - Increments bounce count, kills if MaxBounces exceeded
 
 **PickupCollisionSystem:**
 - Queries: `FCollisionPair, FTagCollisionPickup, !FTagCollisionProcessed`
-- Checks `FWorldItemData.CanBePickedUp()` grace period
+- Checks `FWorldItemInstance.CanBePickedUp()` grace period
 - TODO: Transfer item to character inventory
 
 **DestructibleCollisionSystem:**
@@ -329,7 +356,7 @@ struct FCollisionPair
 
 ### Adding New Collision Types
 
-1. **Add classification tag** in `FlecsComponents.h`:
+1. **Add classification tag** in `FlecsBarrageComponents.h` (Plugins/FlecsBarrage):
    ```cpp
    struct FTagCollisionMyType {};
    ```
@@ -424,7 +451,7 @@ void ClearFlecsEntity();
 bool HasFlecsEntity() const;
 ```
 
-**FlecsComponents.h** - FBarrageBody is forward binding:
+**FlecsBarrageComponents.h** (Plugins/FlecsBarrage) - FBarrageBody is forward binding:
 ```cpp
 struct FBarrageBody
 {
@@ -437,8 +464,12 @@ struct FBarrageBody
 
 ```cpp
 // Creating entities (use in EnqueueCommand lambda)
+FHealthInstance HealthInstance;
+HealthInstance.CurrentHP = 100.f;
+
 flecs::entity Entity = FlecsWorld->entity()
-    .set<FHealthData>({ 100.f, 100.f, 0.f })
+    .is_a(Prefab)                           // Inherit FHealthStatic from prefab
+    .set<FHealthInstance>(HealthInstance)
     .add<FTagCharacter>();
 Subsystem->BindEntityToBarrage(Entity, Key);
 
@@ -469,38 +500,114 @@ Currently all processing runs on Artillery thread (stage 0). Infrastructure read
 
 ---
 
-## Item Prefab System (February 2025)
+## Static/Instance Component Architecture (February 2025)
 
-**Status: Implemented, needs testing**
+**Status: Fully Migrated** ✅
 
-Flecs prefabs are used to store shared static item data. This allows:
-- Storing static data (TypeId, MaxStack, Weight) once in prefab
-- Storing instance data (Count) on each entity
-- Getting EntityDefinition from any item entity for world spawning
+All systems, spawner, and Blueprint API use the new Static/Instance architecture. Legacy components have been removed.
+
+Components are split into **Static** (prefab) and **Instance** (per-entity) for:
+- **Memory efficiency**: Static data stored once per type, not per entity
+- **Easy balancing**: Change prefab → all entities updated
+- **Better cache locality**: Instance components are smaller
+- **Clear separation**: "What should be" (Static) vs "Current state" (Instance)
+
+### File Structure
+
+| File | Contents |
+|------|----------|
+| `FlecsStaticComponents.h` | Static (prefab) components: FHealthStatic, FDamageStatic, FProjectileStatic, etc. |
+| `FlecsInstanceComponents.h/cpp` | Instance (per-entity) components: FHealthInstance, FProjectileInstance, etc. |
+| `FlecsComponents.h/cpp` | Game-specific tags (FTagItem, FTagCharacter, etc.) |
+| `FlecsBarrageComponents.h/cpp` (Plugin) | Bridge components: FBarrageBody, FISMRender, FCollisionPair, collision tags |
 
 ### Architecture
 
 ```
 +------------------------------------------------------------+
-| PREFAB (one per item type)                                 |
-|   FItemStaticData {                                        |
-|     TypeId, MaxStack, Weight, GridSize, ItemName,          |
-|     EntityDefinition*,  <- Reference to UFlecsEntityDef    |
-|     ItemDefinition*     <- Reference to UFlecsItemDef      |
-|   }                                                        |
+| PREFAB (one per entity type)                               |
+|   FHealthStatic { MaxHP, Armor, RegenPerSecond }           |
+|   FDamageStatic { Damage, DamageType, bAreaDamage }        |
+|   FProjectileStatic { MaxLifetime, MaxBounces }            |
+|   FItemStaticData { TypeId, MaxStack, Weight, ... }        |
+|   FEntityDefinitionRef { EntityDefinition* }               |
 +------------------------------------------------------------+
            ^ IsA (inheritance)
            |
 +------------------------------------------------------------+
-| ITEM ENTITY (each item)                                    |
-|   (IsA, Prefab)         <- Inherits FItemStaticData        |
-|   FItemInstance { Count }  <- Instance data                |
-|   FContainedIn { ... }     <- Which container              |
-|   FTagItem                 <- Zero-size tag                |
+| ENTITY (each instance)                                     |
+|   (IsA, Prefab)         <- Inherits all Static components  |
+|   FHealthInstance { CurrentHP }                            |
+|   FProjectileInstance { LifetimeRemaining, BounceCount }   |
+|   FItemInstance { Count }                                  |
+|   FBarrageBody { BarrageKey }                              |
+|   + Tags (FTagProjectile, FTagCharacter, etc.)             |
 +------------------------------------------------------------+
 ```
 
-### API (UFlecsArtillerySubsystem)
+### Memory Comparison (1000 enemies)
+
+| Approach | Memory |
+|----------|--------|
+| OLD: FHealthData per entity | 1000 × 12 bytes = 12 KB |
+| NEW: FHealthStatic (1) + FHealthInstance (1000) | 16 bytes + 1000 × 4 bytes = 4 KB |
+
+### API for Static/Instance
+
+```cpp
+// ═══════════════════════════════════════════════════════════════
+// SPAWNING WITH PREFAB
+// ═══════════════════════════════════════════════════════════════
+
+// Get or create prefab for entity type
+flecs::entity Prefab = Subsystem->GetOrCreateEntityPrefab(EntityDefinition);
+
+// Create entity with prefab inheritance
+const FHealthStatic* Static = Prefab.try_get<FHealthStatic>();
+
+FHealthInstance Instance;
+Instance.CurrentHP = Static->MaxHP;  // Initialize from prefab
+
+flecs::entity Entity = FlecsWorld->entity()
+    .is_a(Prefab)                     // Inherit all Static components
+    .set<FHealthInstance>(Instance)   // Add Instance data
+    .set<FBarrageBody>({ Key })
+    .add<FTagCharacter>();
+
+// ═══════════════════════════════════════════════════════════════
+// ACCESSING DATA
+// ═══════════════════════════════════════════════════════════════
+
+// Static data (from prefab via IsA - read-only)
+const FHealthStatic* Static = Entity.try_get<FHealthStatic>();
+float MaxHP = Static->MaxHP;
+float Armor = Static->Armor;
+
+// Instance data (from entity - mutable)
+FHealthInstance* Instance = Entity.get_mut<FHealthInstance>();
+Instance->CurrentHP -= Damage;
+
+// ═══════════════════════════════════════════════════════════════
+// APPLYING DAMAGE (example)
+// ═══════════════════════════════════════════════════════════════
+
+void ApplyDamage(flecs::entity Entity, float Damage)
+{
+    const FHealthStatic* Static = Entity.try_get<FHealthStatic>();
+    FHealthInstance* Instance = Entity.get_mut<FHealthInstance>();
+    if (!Static || !Instance) return;
+
+    float EffectiveDamage = FMath::Max(0.f, Damage - Static->Armor);
+    Instance->CurrentHP -= EffectiveDamage;
+
+    if (Instance->CurrentHP <= 0.f && Static->bDestroyOnDeath)
+    {
+        Entity.add<FTagDead>();
+    }
+}
+```
+
+### Item Prefab API (UFlecsArtillerySubsystem)
 
 ```cpp
 // Create/get prefab for item type
@@ -512,26 +619,6 @@ flecs::entity GetItemPrefab(int32 TypeId) const;
 // Get Definition from item entity (via prefab)
 UFlecsEntityDefinition* GetEntityDefinitionForItem(flecs::entity ItemEntity) const;
 UFlecsItemDefinition* GetItemDefinitionForItem(flecs::entity ItemEntity) const;
-```
-
-### Usage
-
-```cpp
-// Adding item to container (with prefab)
-UFlecsEntityLibrary::AddItemToContainerFromDefinition(
-    World, ContainerKey, DA_HealthPotion, Count, OutAdded);
-
-// Internally (Artillery thread):
-flecs::entity Prefab = Subsystem->GetOrCreateItemPrefab(EntityDef);
-flecs::entity Item = FlecsWorld->entity()
-    .is_a(Prefab)                    // Inherits FItemStaticData
-    .set<FItemInstance>(Instance)    // Count only
-    .set<FContainedIn>(Contained)
-    .add<FTagItem>();
-
-// Getting EntityDefinition for world spawning on drop:
-UFlecsEntityDefinition* Def = Subsystem->GetEntityDefinitionForItem(Item);
-// Now can use Def->PhysicsProfile, Def->RenderProfile, etc.
 ```
 
 ### Flecs API Gotchas
@@ -645,7 +732,7 @@ FlecsWorld->set_threads(0);  // Artillery is only executor
 
 ## Unified Entity Spawning System (February 2025)
 
-**Status: Implemented, needs testing**
+**Status: Fully Migrated** ✅ - Uses prefab architecture
 
 ### Architecture
 
@@ -825,8 +912,8 @@ Destroy Item Action = IA_DestroyItem (F)
 - `Removed all items from container (3 items removed)` (yellow)
 
 **How it works under the hood:**
-1. Container is created as Flecs entity with `FContainerBase` + `FContainerListData` + `FTagContainer`
-2. Items are created as separate Flecs entities with `FItemInstance` + `FContainedIn`
+1. Container is created as Flecs entity with `FContainerStatic` (prefab) + `FContainerInstance` + `FTagContainer`
+2. Items are created as separate Flecs entities with `FItemStaticData` (prefab) + `FItemInstance` + `FContainedIn`
 3. `FContainedIn.ContainerEntityId` links item to container
 4. On removal - query by `FContainedIn` finds all container items
 

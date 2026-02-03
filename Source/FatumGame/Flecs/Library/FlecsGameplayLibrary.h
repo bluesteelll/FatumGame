@@ -36,7 +36,7 @@ public:
 
 	/**
 	 * Spawn a world item with physics, rendering, and Flecs entity.
-	 * Creates: FItemData, FBarrageBody, FISMRender, FTagItem, FTagPickupable
+	 * Creates: FItemStaticData + FItemInstance, FWorldItemInstance, FBarrageBody, FISMRender, FTagItem, FTagPickupable
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Flecs|Spawn", meta = (WorldContext = "WorldContextObject"))
 	static void SpawnWorldItem(
@@ -51,7 +51,7 @@ public:
 
 	/**
 	 * Spawn a destructible entity with health, physics, and rendering.
-	 * Creates: FHealthData, FBarrageBody, FISMRender, FTagDestructible
+	 * Creates: FHealthStatic + FHealthInstance, FBarrageBody, FISMRender, FTagDestructible
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Flecs|Spawn", meta = (WorldContext = "WorldContextObject"))
 	static void SpawnDestructible(
@@ -64,7 +64,7 @@ public:
 
 	/**
 	 * Spawn a destructible entity that drops loot on death.
-	 * Creates: FHealthData, FLootData, FBarrageBody, FISMRender, FTagDestructible, FTagHasLoot
+	 * Creates: FHealthStatic + FHealthInstance, FLootStatic, FBarrageBody, FISMRender, FTagDestructible, FTagHasLoot
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Flecs|Spawn", meta = (WorldContext = "WorldContextObject"))
 	static void SpawnLootableDestructible(
@@ -204,7 +204,7 @@ public:
 	/** Check if an entity is alive. Artillery thread only. */
 	static bool IsAlive_ArtilleryThread(UFlecsArtillerySubsystem* Subsystem, FSkeletonKey BarrageKey);
 
-	/** Get entity health data. Returns false if entity has no FHealthData. Artillery thread only. */
+	/** Get entity health data. Returns false if entity has no FHealthInstance. Artillery thread only. */
 	static bool GetHealth_ArtilleryThread(UFlecsArtillerySubsystem* Subsystem, FSkeletonKey BarrageKey,
 		float& OutCurrentHP, float& OutMaxHP);
 

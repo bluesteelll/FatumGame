@@ -35,6 +35,7 @@ public class FatumGame : ModuleRules
 				// ECS (Flecs integration)
 				"UnrealFlecs",
 				"FlecsLibrary",
+				"FlecsBarrage",
 				"SolidMacros",
 				// Gameplay systems
 				"GameplayTags",

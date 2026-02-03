@@ -5,7 +5,7 @@
 #include "CoreMinimal.h"
 #include "Engine/DataAsset.h"
 #include "GameplayTagContainer.h"
-#include "FlecsComponents.h"
+#include "FlecsGameTags.h"
 #include "FlecsContainerDefinition.generated.h"
 
 /**

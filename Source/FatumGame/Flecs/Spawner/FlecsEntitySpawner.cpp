@@ -9,7 +9,9 @@
 #include "FlecsDamageProfile.h"
 #include "FlecsProjectileProfile.h"
 #include "FlecsContainerProfile.h"
-#include "FlecsComponents.h"
+#include "FlecsGameTags.h"
+#include "FlecsStaticComponents.h"
+#include "FlecsInstanceComponents.h"
 #include "BarrageDispatch.h"
 #include "FBarragePrimitive.h"
 #include "Systems/BarrageEntitySpawner.h"
@@ -234,51 +236,34 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 
 	// ─────────────────────────────────────────────────────────────
 	// PHASE 2: Create Flecs entity with components (on Artillery thread)
+	// Uses NEW prefab architecture: Static components on prefab, Instance on entity.
 	// ─────────────────────────────────────────────────────────────
 
-	// Capture all data for lambda
+	// Capture data for lambda
 	struct FSpawnData
 	{
 		FSkeletonKey Key;
-		FVector Location;
-		FRotator Rotation;
 		FVector Scale;
 		bool bHasPhysics;
 		bool bHasRender;
 		UStaticMesh* Mesh;
 
-		// Item
-		bool bHasItem;
-		int32 ItemTypeId;
+		// EntityDefinition for prefab creation (safe - DataAssets persist)
+		UFlecsEntityDefinition* EntityDefinition;
+
+		// Instance-specific data (not in prefab)
 		int32 ItemCount;
 		float DespawnTime;
+		float StartingHealth;  // Calculated from profile
+		float Lifetime;        // Calculated from profile
+		int32 GraceFrames;     // Calculated from profile
 
-		// Health
-		bool bHasHealth;
-		float MaxHealth;
-		float StartingHealth;
-		float Armor;
-
-		// Damage
-		bool bHasDamage;
-		float Damage;
-		bool bAreaDamage;
-		float AreaRadius;
-		bool bDestroyOnHit;
-
-		// Projectile
-		bool bHasProjectile;
-		float Lifetime;
-		int32 MaxBounces;
-		int32 GraceFrames;
-
-		// Container
+		// Container instance data
 		bool bHasContainer;
 		EContainerType ContainerType;
 		int32 GridWidth;
 		int32 GridHeight;
 		int32 MaxListItems;
-		float MaxWeight;
 
 		// Tags
 		bool bPickupable;
@@ -288,16 +273,19 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 
 		// Owner
 		FSkeletonKey OwnerKey;
+
+		// Profile flags (for entities without EntityDefinition)
+		bool bHasHealth;
+		bool bHasDamage;
+		bool bHasProjectile;
+		bool bHasItem;
 	};
 
 	FSpawnData Data;
 	Data.Key = EntityKey;
-	Data.Location = Request.Location;
-	Data.Rotation = Request.Rotation;
+	Data.EntityDefinition = Request.EntityDefinition;
 
-	// Physics binding is needed if we created a physics body in PHASE 1
-	// A physics body is created for ALL world entities (those with Physics OR Render profile)
-	// If EntityKey is valid and we reached here, the body was created successfully
+	// Physics binding needed if we created a physics body
 	const bool bIsWorldEntity = (EffectivePhysics != nullptr) || (EffectiveRender != nullptr);
 	Data.bHasPhysics = bIsWorldEntity && EntityKey.IsValid();
 
@@ -306,39 +294,18 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 	Data.Mesh = Data.bHasRender ? EffectiveRender->Mesh : nullptr;
 	Data.Scale = Data.bHasRender ? EffectiveRender->Scale : FVector::OneVector;
 
-	// Item
+	// Profile flags
 	Data.bHasItem = EffectiveItem != nullptr;
-	Data.ItemTypeId = Data.bHasItem ? EffectiveItem->ItemTypeId : 0;
+	Data.bHasHealth = EffectiveHealth != nullptr;
+	Data.bHasDamage = EffectiveDamage != nullptr;
+	Data.bHasProjectile = EffectiveProjectile != nullptr;
+
+	// Instance data
 	Data.ItemCount = ItemCount;
 	Data.DespawnTime = DespawnTime;
-
-	// Health
-	Data.bHasHealth = EffectiveHealth != nullptr;
-	if (Data.bHasHealth)
-	{
-		Data.MaxHealth = EffectiveHealth->MaxHealth;
-		Data.StartingHealth = EffectiveHealth->GetStartingHealth();
-		Data.Armor = EffectiveHealth->Armor;
-	}
-
-	// Damage
-	Data.bHasDamage = EffectiveDamage != nullptr;
-	if (Data.bHasDamage)
-	{
-		Data.Damage = EffectiveDamage->Damage;
-		Data.bAreaDamage = EffectiveDamage->bAreaDamage;
-		Data.AreaRadius = EffectiveDamage->AreaRadius;
-		Data.bDestroyOnHit = EffectiveDamage->bDestroyOnHit;
-	}
-
-	// Projectile
-	Data.bHasProjectile = EffectiveProjectile != nullptr;
-	if (Data.bHasProjectile)
-	{
-		Data.Lifetime = EffectiveProjectile->Lifetime;
-		Data.MaxBounces = EffectiveProjectile->MaxBounces;
-		Data.GraceFrames = EffectiveProjectile->GetGraceFrames();
-	}
+	Data.StartingHealth = Data.bHasHealth ? EffectiveHealth->GetStartingHealth() : 100.f;
+	Data.Lifetime = Data.bHasProjectile ? EffectiveProjectile->Lifetime : 10.f;
+	Data.GraceFrames = Data.bHasProjectile ? EffectiveProjectile->GetGraceFrames() : 30;
 
 	// Container
 	Data.bHasContainer = EffectiveContainer != nullptr;
@@ -348,10 +315,9 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 		Data.GridWidth = EffectiveContainer->GridWidth;
 		Data.GridHeight = EffectiveContainer->GridHeight;
 		Data.MaxListItems = EffectiveContainer->MaxListItems;
-		Data.MaxWeight = EffectiveContainer->MaxWeight;
 	}
 
-	// Tags (already resolved above)
+	// Tags
 	Data.bPickupable = bPickupable;
 	Data.bDestructible = bDestructible;
 	Data.bHasLoot = bHasLoot;
@@ -367,86 +333,106 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 			return;
 		}
 
-		flecs::entity Entity = FlecsWorld->entity();
+		flecs::entity Entity;
 
 		// ─────────────────────────────────────────────────────────
-		// ADD COMPONENTS BASED ON PROFILES
+		// CREATE ENTITY WITH PREFAB (if EntityDefinition available)
+		// Static components are inherited from prefab via is_a()
 		// ─────────────────────────────────────────────────────────
+		if (Data.EntityDefinition)
+		{
+			flecs::entity Prefab = FlecsSubsystem->GetOrCreateEntityPrefab(Data.EntityDefinition);
+			if (Prefab.is_valid())
+			{
+				Entity = FlecsWorld->entity().is_a(Prefab);
+				UE_LOG(LogFlecsEntity, Log, TEXT("SpawnEntity PHASE2: Using prefab %llu for entity"),
+					Prefab.id());
+			}
+			else
+			{
+				Entity = FlecsWorld->entity();
+				UE_LOG(LogFlecsEntity, Warning, TEXT("SpawnEntity PHASE2: Failed to create prefab, using standalone entity"));
+			}
+		}
+		else
+		{
+			Entity = FlecsWorld->entity();
+		}
 
-		// Physics binding
+		// ─────────────────────────────────────────────────────────
+		// PHYSICS BINDING (always on entity, not prefab)
+		// ─────────────────────────────────────────────────────────
 		if (Data.bHasPhysics)
 		{
-			Entity.set<FBarrageBody>({ Data.Key });
+			FBarrageBody Body;
+			Body.BarrageKey = Data.Key;
+			Entity.set<FBarrageBody>(Body);
 			FlecsSubsystem->BindEntityToBarrage(Entity, Data.Key);
 			UE_LOG(LogFlecsEntity, Log, TEXT("SpawnEntity PHASE2: Created Flecs entity %llu, bound to Key=%llu"),
 				Entity.id(), static_cast<uint64>(Data.Key));
 		}
 		else
 		{
-			UE_LOG(LogFlecsEntity, Warning, TEXT("SpawnEntity PHASE2: Created Flecs entity %llu WITHOUT physics binding! "
-				"bHasPhysics=false, Key=%llu will NOT be destroyable via DestroyEntity!"),
-				Entity.id(), static_cast<uint64>(Data.Key));
+			UE_LOG(LogFlecsEntity, Warning, TEXT("SpawnEntity PHASE2: Created Flecs entity %llu WITHOUT physics binding!"),
+				Entity.id());
 		}
 
-		// Render
+		// ─────────────────────────────────────────────────────────
+		// RENDER (always on entity, not prefab)
+		// ─────────────────────────────────────────────────────────
 		if (Data.bHasRender)
 		{
-			Entity.set<FISMRender>({ Data.Mesh, Data.Scale });
+			FISMRender Render;
+			Render.Mesh = Data.Mesh;
+			Render.Scale = Data.Scale;
+			Entity.set<FISMRender>(Render);
 		}
 
-		// Item
-		if (Data.bHasItem)
-		{
-			// Legacy spawn without prefab - store static data directly on entity
-			FItemStaticData StaticData;
-			StaticData.TypeId = Data.ItemTypeId;
-			StaticData.MaxStack = 99;
-			StaticData.Weight = 0.1f;
-			StaticData.GridSize = FIntPoint(1, 1);
-			StaticData.ItemName = NAME_None;
-			StaticData.EntityDefinition = nullptr;
-			StaticData.ItemDefinition = nullptr;
-			Entity.set<FItemStaticData>(StaticData);
+		// ─────────────────────────────────────────────────────────
+		// INSTANCE COMPONENTS (mutable per-entity data)
+		// Static data comes from prefab via is_a() inheritance
+		// ─────────────────────────────────────────────────────────
 
-			FItemInstance Instance;
-			Instance.Count = Data.ItemCount;
-			Entity.set<FItemInstance>(Instance);
-			Entity.add<FTagItem>();
-
-			if (Data.DespawnTime > 0.f || Data.bPickupable)
-			{
-				Entity.set<FWorldItemData>({ Data.DespawnTime, 0.f, 0 });
-			}
-		}
-
-		// Health
+		// Health instance
 		if (Data.bHasHealth)
 		{
-			Entity.set<FHealthData>({ Data.StartingHealth, Data.MaxHealth, Data.Armor });
+			FHealthInstance HealthInst;
+			HealthInst.CurrentHP = Data.StartingHealth;
+			HealthInst.RegenAccumulator = 0.f;
+			Entity.set<FHealthInstance>(HealthInst);
 		}
 
-		// Damage
-		if (Data.bHasDamage)
-		{
-			FDamageSource DamageSource;
-			DamageSource.Damage = Data.Damage;
-			DamageSource.bAreaDamage = Data.bAreaDamage;
-			DamageSource.AreaRadius = Data.AreaRadius;
-			Entity.set<FDamageSource>(DamageSource);
-		}
-
-		// Projectile
+		// Projectile instance
 		if (Data.bHasProjectile)
 		{
-			FProjectileData ProjData;
-			ProjData.LifetimeRemaining = Data.Lifetime;
-			ProjData.MaxBounces = Data.MaxBounces;
-			ProjData.GraceFramesRemaining = Data.GraceFrames;
-			Entity.set<FProjectileData>(ProjData);
+			FProjectileInstance ProjInst;
+			ProjInst.LifetimeRemaining = Data.Lifetime;
+			ProjInst.BounceCount = 0;
+			ProjInst.GraceFramesRemaining = Data.GraceFrames;
+			Entity.set<FProjectileInstance>(ProjInst);
 			Entity.add<FTagProjectile>();
 		}
 
-		// Container
+		// Item instance
+		if (Data.bHasItem)
+		{
+			FItemInstance ItemInst;
+			ItemInst.Count = Data.ItemCount;
+			Entity.set<FItemInstance>(ItemInst);
+			Entity.add<FTagItem>();
+
+			// World item data for despawn/pickup
+			if (Data.DespawnTime > 0.f || Data.bPickupable)
+			{
+				FWorldItemInstance WorldInst;
+				WorldInst.DespawnTimer = Data.DespawnTime;
+				WorldInst.PickupGraceTimer = 0.f;
+				WorldInst.DroppedByEntityId = 0;
+				Entity.set<FWorldItemInstance>(WorldInst);
+			}
+		}
+
+		// Container instance
 		if (Data.bHasContainer)
 		{
 			int64 OwnerEntityId = 0;
@@ -459,61 +445,59 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 				}
 			}
 
-			Entity.set<FContainerBase>({
-				Data.ContainerType,
-				0,  // DefinitionId
-				OwnerEntityId,
-				0.f,  // CurrentWeight
-				Data.MaxWeight
-			});
+			FContainerInstance ContainerInst;
+			ContainerInst.CurrentWeight = 0.f;
+			ContainerInst.CurrentCount = 0;
+			ContainerInst.OwnerEntityId = OwnerEntityId;
+			Entity.set<FContainerInstance>(ContainerInst);
 			Entity.add<FTagContainer>();
 
+			// Type-specific instance components
 			switch (Data.ContainerType)
 			{
 			case EContainerType::Grid:
 				{
-					FContainerGridData GridData;
-					GridData.Initialize(Data.GridWidth, Data.GridHeight);
-					Entity.set<FContainerGridData>(GridData);
+					FContainerGridInstance GridInst;
+					GridInst.Initialize(Data.GridWidth, Data.GridHeight);
+					Entity.set<FContainerGridInstance>(GridInst);
 				}
 				break;
 			case EContainerType::Slot:
-				Entity.set<FContainerSlotsData>({});
+				{
+					FContainerSlotsInstance SlotsInst;
+					Entity.set<FContainerSlotsInstance>(SlotsInst);
+				}
 				break;
 			case EContainerType::List:
-				Entity.set<FContainerListData>({ Data.MaxListItems, 0 });
+				// List uses ContainerInstance.CurrentCount, no extra component needed
 				break;
 			}
 		}
 
 		// ─────────────────────────────────────────────────────────
-		// ADD TAGS
+		// TAGS (zero-size markers)
 		// ─────────────────────────────────────────────────────────
-
 		if (Data.bPickupable)
 		{
 			Entity.add<FTagPickupable>();
 		}
-
 		if (Data.bDestructible)
 		{
 			Entity.add<FTagDestructible>();
 		}
-
 		if (Data.bHasLoot)
 		{
 			Entity.add<FTagHasLoot>();
 		}
-
 		if (Data.bIsCharacter)
 		{
 			Entity.add<FTagCharacter>();
 		}
 
-		UE_LOG(LogFlecsEntity, Verbose, TEXT("Spawned entity: Key=%llu FlecsId=%llu Item=%d Physics=%d Render=%d Health=%d Damage=%d Projectile=%d Container=%d"),
+		UE_LOG(LogFlecsEntity, Verbose, TEXT("Spawned entity: Key=%llu FlecsId=%llu Item=%d Health=%d Projectile=%d Container=%d Prefab=%d"),
 			static_cast<uint64>(Data.Key), Entity.id(),
-			Data.bHasItem, Data.bHasPhysics, Data.bHasRender,
-			Data.bHasHealth, Data.bHasDamage, Data.bHasProjectile, Data.bHasContainer);
+			Data.bHasItem, Data.bHasHealth, Data.bHasProjectile, Data.bHasContainer,
+			Data.EntityDefinition != nullptr);
 	});
 
 	return EntityKey;
@@ -746,11 +730,20 @@ bool UFlecsEntityLibrary::AddItemToContainerFromDefinition(
 			return;
 		}
 
-		// Get container data
-		FContainerBase* ContainerBase = ContainerEntity.try_get_mut<FContainerBase>();
-		if (!ContainerBase)
+		// Get container static data (from prefab)
+		const FContainerStatic* ContainerStatic = ContainerEntity.try_get<FContainerStatic>();
+		if (!ContainerStatic)
 		{
-			UE_LOG(LogFlecsEntity, Warning, TEXT("AddItemToContainerFromDefinition: Container %llu has no FContainerBase"),
+			UE_LOG(LogFlecsEntity, Warning, TEXT("AddItemToContainerFromDefinition: Container %llu has no FContainerStatic"),
+				ContainerEntity.id());
+			return;
+		}
+
+		// Get container instance data
+		FContainerInstance* ContainerInstance = ContainerEntity.try_get_mut<FContainerInstance>();
+		if (!ContainerInstance)
+		{
+			UE_LOG(LogFlecsEntity, Warning, TEXT("AddItemToContainerFromDefinition: Container %llu has no FContainerInstance"),
 				ContainerEntity.id());
 			return;
 		}
@@ -777,10 +770,10 @@ bool UFlecsEntityLibrary::AddItemToContainerFromDefinition(
 		};
 
 		// For List containers, check capacity
-		if (ContainerBase->Type == EContainerType::List)
+		if (ContainerStatic->Type == EContainerType::List)
 		{
-			FContainerListData* ListData = ContainerEntity.try_get_mut<FContainerListData>();
-			if (ListData && !ListData->CanAdd())
+			// Check if full
+			if (ContainerStatic->MaxItems > 0 && ContainerInstance->CurrentCount >= ContainerStatic->MaxItems)
 			{
 				UE_LOG(LogFlecsEntity, Warning, TEXT("AddItemToContainerFromDefinition: List container %llu is full"),
 					ContainerEntity.id());
@@ -790,25 +783,22 @@ bool UFlecsEntityLibrary::AddItemToContainerFromDefinition(
 			// Create item entity with prefab
 			flecs::entity ItemEntity = CreateItemEntity(
 				FIntPoint(-1, -1),  // Not in grid
-				ListData ? ListData->CurrentCount : 0  // Slot index
+				ContainerInstance->CurrentCount  // Slot index
 			);
 
 			// Update list count
-			if (ListData)
-			{
-				ListData->CurrentCount++;
-			}
+			ContainerInstance->CurrentCount++;
 
 			UE_LOG(LogFlecsEntity, Log, TEXT("AddItemToContainerFromDefinition: Added item '%s' (Count=%d) to container %llu. ItemEntity=%llu (prefab=%llu)"),
 				*ItemName.ToString(), Count, ContainerEntity.id(), ItemEntity.id(), ItemPrefab.id());
 		}
-		else if (ContainerBase->Type == EContainerType::Grid)
+		else if (ContainerStatic->Type == EContainerType::Grid)
 		{
 			// For Grid containers, find free space
-			FContainerGridData* GridData = ContainerEntity.try_get_mut<FContainerGridData>();
-			if (!GridData)
+			FContainerGridInstance* GridInstance = ContainerEntity.try_get_mut<FContainerGridInstance>();
+			if (!GridInstance)
 			{
-				UE_LOG(LogFlecsEntity, Warning, TEXT("AddItemToContainerFromDefinition: Grid container %llu has no FContainerGridData"),
+				UE_LOG(LogFlecsEntity, Warning, TEXT("AddItemToContainerFromDefinition: Grid container %llu has no FContainerGridInstance"),
 					ContainerEntity.id());
 				return;
 			}
@@ -817,7 +807,7 @@ bool UFlecsEntityLibrary::AddItemToContainerFromDefinition(
 			const FItemStaticData* StaticData = ItemPrefab.try_get<FItemStaticData>();
 			FIntPoint ItemSize = StaticData ? StaticData->GridSize : FIntPoint(1, 1);
 
-			FIntPoint FreePos = GridData->FindFreeSpace(ItemSize);
+			FIntPoint FreePos = GridInstance->FindFreeSpace(ItemSize, ContainerStatic->GridWidth, ContainerStatic->GridHeight);
 			if (FreePos.X < 0)
 			{
 				UE_LOG(LogFlecsEntity, Warning, TEXT("AddItemToContainerFromDefinition: Grid container %llu is full"),
@@ -826,10 +816,13 @@ bool UFlecsEntityLibrary::AddItemToContainerFromDefinition(
 			}
 
 			// Occupy the cells
-			GridData->Occupy(FreePos, ItemSize);
+			GridInstance->Occupy(FreePos, ItemSize, ContainerStatic->GridWidth);
 
 			// Create item entity with prefab
 			flecs::entity ItemEntity = CreateItemEntity(FreePos, -1);
+
+			// Update container count
+			ContainerInstance->CurrentCount++;
 
 			UE_LOG(LogFlecsEntity, Log, TEXT("AddItemToContainerFromDefinition: Added item '%s' to grid container %llu at (%d,%d). ItemEntity=%llu (prefab=%llu)"),
 				*ItemName.ToString(), ContainerEntity.id(), FreePos.X, FreePos.Y, ItemEntity.id(), ItemPrefab.id());
@@ -837,7 +830,7 @@ bool UFlecsEntityLibrary::AddItemToContainerFromDefinition(
 		else
 		{
 			UE_LOG(LogFlecsEntity, Warning, TEXT("AddItemToContainerFromDefinition: Unsupported container type %d"),
-				static_cast<int32>(ContainerBase->Type));
+				static_cast<int32>(ContainerStatic->Type));
 		}
 	});
 
@@ -897,20 +890,29 @@ bool UFlecsEntityLibrary::AddItemToContainer(
 			return;
 		}
 
-		// Get container data
-		FContainerBase* ContainerBase = ContainerEntity.try_get_mut<FContainerBase>();
-		if (!ContainerBase)
+		// Get container static data (from prefab)
+		const FContainerStatic* ContainerStatic = ContainerEntity.try_get<FContainerStatic>();
+		if (!ContainerStatic)
 		{
-			UE_LOG(LogFlecsEntity, Warning, TEXT("AddItemToContainer: Container %llu has no FContainerBase"),
+			UE_LOG(LogFlecsEntity, Warning, TEXT("AddItemToContainer: Container %llu has no FContainerStatic"),
+				ContainerEntity.id());
+			return;
+		}
+
+		// Get container instance data
+		FContainerInstance* ContainerInstance = ContainerEntity.try_get_mut<FContainerInstance>();
+		if (!ContainerInstance)
+		{
+			UE_LOG(LogFlecsEntity, Warning, TEXT("AddItemToContainer: Container %llu has no FContainerInstance"),
 				ContainerEntity.id());
 			return;
 		}
 
 		// For List containers, check capacity
-		if (ContainerBase->Type == EContainerType::List)
+		if (ContainerStatic->Type == EContainerType::List)
 		{
-			FContainerListData* ListData = ContainerEntity.try_get_mut<FContainerListData>();
-			if (ListData && !ListData->CanAdd())
+			// Check if full
+			if (ContainerStatic->MaxItems > 0 && ContainerInstance->CurrentCount >= ContainerStatic->MaxItems)
 			{
 				UE_LOG(LogFlecsEntity, Warning, TEXT("AddItemToContainer: List container %llu is full"),
 					ContainerEntity.id());
@@ -934,7 +936,7 @@ bool UFlecsEntityLibrary::AddItemToContainer(
 			FContainedIn Contained;
 			Contained.ContainerEntityId = static_cast<int64>(ContainerEntity.id());
 			Contained.GridPosition = FIntPoint(-1, -1);
-			Contained.SlotIndex = ListData ? ListData->CurrentCount : 0;
+			Contained.SlotIndex = ContainerInstance->CurrentCount;
 
 			flecs::entity ItemEntity = FlecsWorld->entity()
 				.set<FItemStaticData>(StaticData)
@@ -942,25 +944,22 @@ bool UFlecsEntityLibrary::AddItemToContainer(
 				.set<FContainedIn>(Contained)
 				.add<FTagItem>();
 
-			if (ListData)
-			{
-				ListData->CurrentCount++;
-			}
+			ContainerInstance->CurrentCount++;
 
 			UE_LOG(LogFlecsEntity, Log, TEXT("AddItemToContainer (legacy): Added item '%s' (TypeId=%d, Count=%d) to container %llu. ItemEntity=%llu"),
 				*ItemName.ToString(), ItemTypeId, Count, ContainerEntity.id(), ItemEntity.id());
 		}
-		else if (ContainerBase->Type == EContainerType::Grid)
+		else if (ContainerStatic->Type == EContainerType::Grid)
 		{
-			FContainerGridData* GridData = ContainerEntity.try_get_mut<FContainerGridData>();
-			if (!GridData)
+			FContainerGridInstance* GridInstance = ContainerEntity.try_get_mut<FContainerGridInstance>();
+			if (!GridInstance)
 			{
-				UE_LOG(LogFlecsEntity, Warning, TEXT("AddItemToContainer: Grid container %llu has no FContainerGridData"),
+				UE_LOG(LogFlecsEntity, Warning, TEXT("AddItemToContainer: Grid container %llu has no FContainerGridInstance"),
 					ContainerEntity.id());
 				return;
 			}
 
-			FIntPoint FreePos = GridData->FindFreeSpace(FIntPoint(1, 1));
+			FIntPoint FreePos = GridInstance->FindFreeSpace(FIntPoint(1, 1), ContainerStatic->GridWidth, ContainerStatic->GridHeight);
 			if (FreePos.X < 0)
 			{
 				UE_LOG(LogFlecsEntity, Warning, TEXT("AddItemToContainer: Grid container %llu is full"),
@@ -968,7 +967,7 @@ bool UFlecsEntityLibrary::AddItemToContainer(
 				return;
 			}
 
-			GridData->Occupy(FreePos, FIntPoint(1, 1));
+			GridInstance->Occupy(FreePos, FIntPoint(1, 1), ContainerStatic->GridWidth);
 
 			FItemStaticData StaticData;
 			StaticData.TypeId = ItemTypeId;
@@ -993,13 +992,15 @@ bool UFlecsEntityLibrary::AddItemToContainer(
 				.set<FContainedIn>(Contained)
 				.add<FTagItem>();
 
+			ContainerInstance->CurrentCount++;
+
 			UE_LOG(LogFlecsEntity, Log, TEXT("AddItemToContainer (legacy): Added item '%s' to grid container %llu at (%d,%d). ItemEntity=%llu"),
 				*ItemName.ToString(), ContainerEntity.id(), FreePos.X, FreePos.Y, ItemEntity.id());
 		}
 		else
 		{
 			UE_LOG(LogFlecsEntity, Warning, TEXT("AddItemToContainer: Unsupported container type %d"),
-				static_cast<int32>(ContainerBase->Type));
+				static_cast<int32>(ContainerStatic->Type));
 		}
 	});
 
@@ -1057,21 +1058,22 @@ bool UFlecsEntityLibrary::RemoveItemFromContainer(
 			return;
 		}
 
-		// Free grid space if needed
-		FContainerBase* ContainerBase = ContainerEntity.try_get_mut<FContainerBase>();
-		if (ContainerBase && ContainerBase->Type == EContainerType::Grid && ContainedIn->IsInGrid())
+		// Free grid space if needed and update counter
+		const FContainerStatic* ContainerStatic = ContainerEntity.try_get<FContainerStatic>();
+		FContainerInstance* ContainerInstance = ContainerEntity.try_get_mut<FContainerInstance>();
+
+		if (ContainerStatic && ContainerStatic->Type == EContainerType::Grid && ContainedIn->IsInGrid())
 		{
-			if (FContainerGridData* GridData = ContainerEntity.try_get_mut<FContainerGridData>())
+			if (FContainerGridInstance* GridInstance = ContainerEntity.try_get_mut<FContainerGridInstance>())
 			{
-				GridData->Free(ContainedIn->GridPosition, FIntPoint(1, 1));
+				GridInstance->Free(ContainedIn->GridPosition, FIntPoint(1, 1), ContainerStatic->GridWidth);
 			}
 		}
-		else if (ContainerBase && ContainerBase->Type == EContainerType::List)
+
+		// Decrement counter
+		if (ContainerInstance)
 		{
-			if (FContainerListData* ListData = ContainerEntity.try_get_mut<FContainerListData>())
-			{
-				ListData->CurrentCount = FMath::Max(0, ListData->CurrentCount - 1);
-			}
+			ContainerInstance->CurrentCount = FMath::Max(0, ContainerInstance->CurrentCount - 1);
 		}
 
 		// Destroy item entity
@@ -1137,23 +1139,20 @@ int32 UFlecsEntityLibrary::RemoveAllItemsFromContainer(
 		}
 
 		// Reset container counters
-		FContainerBase* ContainerBase = ContainerEntity.try_get_mut<FContainerBase>();
-		if (ContainerBase)
+		const FContainerStatic* ContainerStatic = ContainerEntity.try_get<FContainerStatic>();
+		FContainerInstance* ContainerInstance = ContainerEntity.try_get_mut<FContainerInstance>();
+
+		if (ContainerInstance)
 		{
-			if (ContainerBase->Type == EContainerType::List)
+			ContainerInstance->CurrentCount = 0;
+		}
+
+		// Reset grid if applicable
+		if (ContainerStatic && ContainerStatic->Type == EContainerType::Grid)
+		{
+			if (FContainerGridInstance* GridInstance = ContainerEntity.try_get_mut<FContainerGridInstance>())
 			{
-				if (FContainerListData* ListData = ContainerEntity.try_get_mut<FContainerListData>())
-				{
-					ListData->CurrentCount = 0;
-				}
-			}
-			else if (ContainerBase->Type == EContainerType::Grid)
-			{
-				if (FContainerGridData* GridData = ContainerEntity.try_get_mut<FContainerGridData>())
-				{
-					// Clear all occupancy
-					GridData->Initialize(GridData->Width, GridData->Height);
-				}
+				GridInstance->Initialize(ContainerStatic->GridWidth, ContainerStatic->GridHeight);
 			}
 		}
 
@@ -1185,33 +1184,8 @@ int32 UFlecsEntityLibrary::GetContainerItemCount(
 		return -1;
 	}
 
-	const FContainerBase* ContainerBase = ContainerEntity.try_get<FContainerBase>();
-	if (!ContainerBase)
-	{
-		return -1;
-	}
-
-	if (ContainerBase->Type == EContainerType::List)
-	{
-		const FContainerListData* ListData = ContainerEntity.try_get<FContainerListData>();
-		return ListData ? ListData->CurrentCount : 0;
-	}
-	else if (ContainerBase->Type == EContainerType::Grid)
-	{
-		// Count items by querying
-		const int64 ContainerId = static_cast<int64>(ContainerEntity.id());
-		int32 Count = 0;
-		FlecsSubsystem->GetFlecsWorld()->each([ContainerId, &Count](flecs::entity E, const FContainedIn& ContainedIn)
-		{
-			if (ContainedIn.ContainerEntityId == ContainerId)
-			{
-				Count++;
-			}
-		});
-		return Count;
-	}
-
-	return 0;
+	const FContainerInstance* ContainerInstance = ContainerEntity.try_get<FContainerInstance>();
+	return ContainerInstance ? ContainerInstance->CurrentCount : 0;
 }
 
 bool UFlecsEntityLibrary::PickupItem(
@@ -1251,6 +1225,7 @@ FSkeletonKey UFlecsEntityLibrary::DropItem(
 
 // ═══════════════════════════════════════════════════════════════
 // HEALTH OPERATIONS
+// Uses Static/Instance architecture.
 // ═══════════════════════════════════════════════════════════════
 
 bool UFlecsEntityLibrary::ApplyDamage(
@@ -1277,11 +1252,13 @@ bool UFlecsEntityLibrary::ApplyDamage(
 			return;
 		}
 
-		FHealthData* Health = Entity.try_get_mut<FHealthData>();
-		if (Health)
+		FHealthInstance* HealthInst = Entity.try_get_mut<FHealthInstance>();
+		if (HealthInst)
 		{
-			float EffectiveDamage = FMath::Max(0.f, Damage - Health->Armor);
-			Health->CurrentHP -= EffectiveDamage;
+			const FHealthStatic* HealthStatic = Entity.try_get<FHealthStatic>();
+			float Armor = HealthStatic ? HealthStatic->Armor : 0.f;
+			float EffectiveDamage = FMath::Max(0.f, Damage - Armor);
+			HealthInst->CurrentHP -= EffectiveDamage;
 		}
 	});
 
@@ -1312,10 +1289,12 @@ bool UFlecsEntityLibrary::Heal(
 			return;
 		}
 
-		FHealthData* Health = Entity.try_get_mut<FHealthData>();
-		if (Health)
+		FHealthInstance* HealthInst = Entity.try_get_mut<FHealthInstance>();
+		if (HealthInst)
 		{
-			Health->CurrentHP = FMath::Min(Health->CurrentHP + Amount, Health->MaxHP);
+			const FHealthStatic* HealthStatic = Entity.try_get<FHealthStatic>();
+			float MaxHP = HealthStatic ? HealthStatic->MaxHP : 100.f;
+			HealthInst->CurrentHP = FMath::Min(HealthInst->CurrentHP + Amount, MaxHP);
 		}
 	});
 
@@ -1368,8 +1347,8 @@ float UFlecsEntityLibrary::GetHealth(
 		return 0.f;
 	}
 
-	const FHealthData* Health = Entity.try_get<FHealthData>();
-	return Health ? Health->CurrentHP : 0.f;
+	const FHealthInstance* HealthInst = Entity.try_get<FHealthInstance>();
+	return HealthInst ? HealthInst->CurrentHP : 0.f;
 }
 
 float UFlecsEntityLibrary::GetMaxHealth(
@@ -1393,6 +1372,6 @@ float UFlecsEntityLibrary::GetMaxHealth(
 		return 0.f;
 	}
 
-	const FHealthData* Health = Entity.try_get<FHealthData>();
-	return Health ? Health->MaxHP : 0.f;
+	const FHealthStatic* HealthStatic = Entity.try_get<FHealthStatic>();
+	return HealthStatic ? HealthStatic->MaxHP : 0.f;
 }
