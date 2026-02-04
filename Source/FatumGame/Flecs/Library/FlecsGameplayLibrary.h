@@ -13,6 +13,7 @@ class UPrimaryDataAsset;
 class UStaticMesh;
 class UFlecsArtillerySubsystem;
 class UFlecsProjectileDefinition;
+class UFlecsEntityDefinition;
 class UFlecsConstrainedGroupDefinition;
 
 /**
@@ -78,15 +79,33 @@ public:
 	);
 
 	/**
-	 * Spawn a projectile from a FlecsProjectileDefinition data asset.
-	 * This is the preferred method - configure projectile in editor, spawn at runtime.
+	 * Spawn a projectile from UFlecsEntityDefinition (RECOMMENDED).
+	 * Uses prefab system for efficient memory usage.
+	 * EntityDefinition must have: PhysicsProfile, RenderProfile, ProjectileProfile, DamageProfile (optional).
 	 *
-	 * @param Definition The projectile data asset (configure in Content Browser)
+	 * @param Definition Entity definition with projectile profiles
 	 * @param Location Spawn location (muzzle position)
 	 * @param Direction Direction to fire (will be normalized)
-	 * @param SpeedOverride Override speed from definition (0 = use definition)
+	 * @param SpeedOverride Override speed from ProjectileProfile (0 = use profile)
+	 * @param OwnerEntityId Flecs entity ID of the shooter (for friendly fire check)
+	 * @return SkeletonKey of spawned projectile
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Flecs|Projectile", meta = (WorldContext = "WorldContextObject"))
+	static FSkeletonKey SpawnProjectileFromEntityDef(
+		UObject* WorldContextObject,
+		UFlecsEntityDefinition* Definition,
+		FVector Location,
+		FVector Direction,
+		float SpeedOverride = 0.f,
+		int64 OwnerEntityId = 0
+	);
+
+	/**
+	 * DEPRECATED: Use SpawnProjectileFromEntityDef with UFlecsEntityDefinition instead.
+	 * Spawn a projectile from old FlecsProjectileDefinition data asset.
+	 */
+	UE_DEPRECATED(5.7, "Use SpawnProjectileFromEntityDef with UFlecsEntityDefinition instead")
+	UFUNCTION(BlueprintCallable, Category = "Flecs|Projectile", meta = (WorldContext = "WorldContextObject", DeprecatedFunction, DeprecationMessage = "Use SpawnProjectileFromEntityDef"))
 	static FSkeletonKey SpawnProjectileFromDefinition(
 		UObject* WorldContextObject,
 		UFlecsProjectileDefinition* Definition,
@@ -176,6 +195,17 @@ public:
 	/** Apply damage to an entity by its Barrage SkeletonKey. */
 	UFUNCTION(BlueprintCallable, Category = "Flecs|Damage", meta = (WorldContext = "WorldContextObject"))
 	static void ApplyDamageByBarrageKey(UObject* WorldContextObject, FSkeletonKey BarrageKey, float Damage);
+
+	/**
+	 * Apply damage with damage type and options.
+	 * @param BarrageKey Target entity key.
+	 * @param Damage Base damage amount.
+	 * @param DamageType Damage type tag for resistances.
+	 * @param bIgnoreArmor If true, bypasses armor calculation.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Flecs|Damage", meta = (WorldContext = "WorldContextObject"))
+	static void ApplyDamageWithType(UObject* WorldContextObject, FSkeletonKey BarrageKey, float Damage,
+	                                FGameplayTag DamageType, bool bIgnoreArmor = false);
 
 	/** Heal an entity by its Barrage SkeletonKey. */
 	UFUNCTION(BlueprintCallable, Category = "Flecs|Damage", meta = (WorldContext = "WorldContextObject"))
@@ -365,4 +395,80 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Flecs|Constraints", meta = (WorldContext = "WorldContextObject"))
 	static bool GetConstraintStressRatio(UObject* WorldContextObject, int64 ConstraintKey, float& OutStressRatio);
+
+	// ═══════════════════════════════════════════════════════════════
+	// WEAPON CONTROL (game-thread safe, enqueued to Artillery thread)
+	// ═══════════════════════════════════════════════════════════════
+
+	/**
+	 * Start firing a weapon (hold trigger).
+	 * For automatic weapons, will continue firing while held.
+	 * For semi-auto, fires once per call (must call StopFiring between shots).
+	 *
+	 * @param WeaponEntityId Flecs entity ID of the weapon
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Flecs|Weapon", meta = (WorldContext = "WorldContextObject"))
+	static void StartFiring(UObject* WorldContextObject, int64 WeaponEntityId);
+
+	/**
+	 * Stop firing a weapon (release trigger).
+	 * Required for semi-auto weapons to fire again.
+	 *
+	 * @param WeaponEntityId Flecs entity ID of the weapon
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Flecs|Weapon", meta = (WorldContext = "WorldContextObject"))
+	static void StopFiring(UObject* WorldContextObject, int64 WeaponEntityId);
+
+	/**
+	 * Request weapon reload.
+	 * Will reload if: not already reloading, magazine not full, has reserve ammo.
+	 *
+	 * @param WeaponEntityId Flecs entity ID of the weapon
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Flecs|Weapon", meta = (WorldContext = "WorldContextObject"))
+	static void ReloadWeapon(UObject* WorldContextObject, int64 WeaponEntityId);
+
+	/**
+	 * Set aim direction for a character.
+	 * Used by WeaponFireSystem to determine projectile direction.
+	 *
+	 * @param CharacterEntityId Flecs entity ID of the character
+	 * @param Direction Aim direction (will be normalized)
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Flecs|Weapon", meta = (WorldContext = "WorldContextObject"))
+	static void SetAimDirection(UObject* WorldContextObject, int64 CharacterEntityId, FVector Direction);
+
+	/**
+	 * Get current ammo in weapon magazine.
+	 * WARNING: Cross-thread read - value may be stale by 1-2 frames.
+	 *
+	 * @param WeaponEntityId Flecs entity ID of the weapon
+	 * @return Current ammo count, -1 if not a weapon
+	 */
+	UFUNCTION(BlueprintPure, Category = "Flecs|Weapon", meta = (WorldContext = "WorldContextObject"))
+	static int32 GetWeaponAmmo(UObject* WorldContextObject, int64 WeaponEntityId);
+
+	/**
+	 * Get weapon ammo info (current, magazine size, reserve).
+	 * WARNING: Cross-thread read - values may be stale by 1-2 frames.
+	 *
+	 * @param WeaponEntityId Flecs entity ID of the weapon
+	 * @param OutCurrentAmmo Current ammo in magazine
+	 * @param OutMagazineSize Magazine capacity
+	 * @param OutReserveAmmo Reserve ammo
+	 * @return True if weapon found
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Flecs|Weapon", meta = (WorldContext = "WorldContextObject"))
+	static bool GetWeaponAmmoInfo(UObject* WorldContextObject, int64 WeaponEntityId,
+		int32& OutCurrentAmmo, int32& OutMagazineSize, int32& OutReserveAmmo);
+
+	/**
+	 * Check if weapon is currently reloading.
+	 * WARNING: Cross-thread read - value may be stale by 1-2 frames.
+	 *
+	 * @param WeaponEntityId Flecs entity ID of the weapon
+	 * @return True if reloading
+	 */
+	UFUNCTION(BlueprintPure, Category = "Flecs|Weapon", meta = (WorldContext = "WorldContextObject"))
+	static bool IsWeaponReloading(UObject* WorldContextObject, int64 WeaponEntityId);
 };

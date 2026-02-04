@@ -207,3 +207,15 @@ void UFlecsArtillerySubsystem::EnqueueCommand(TFunction<void()>&& Command)
 {
 	CommandQueue.Enqueue(MoveTemp(Command));
 }
+
+// ═══════════════════════════════════════════════════════════════
+// GAME THREAD TICK (UTickableWorldSubsystem)
+// Processes operations that require Game thread (e.g., Barrage body creation).
+// ═══════════════════════════════════════════════════════════════
+
+void UFlecsArtillerySubsystem::Tick(float DeltaTime)
+{
+	// Process pending projectile spawns from weapon fire.
+	// These are queued by WeaponFireSystem on Artillery thread.
+	ProcessPendingProjectileSpawns();
+}

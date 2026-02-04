@@ -1,0 +1,284 @@
+// Weapon components for Flecs ECS.
+// Static data in prefab, instance data per-entity.
+
+#pragma once
+
+#include "CoreMinimal.h"
+#include "FlecsWeaponComponents.generated.h"
+
+class UFlecsEntityDefinition;
+class USkeletalMesh;
+class UStaticMesh;
+class UAnimMontage;
+
+// ═══════════════════════════════════════════════════════════════
+// AIM DIRECTION (Per-Character)
+// ═══════════════════════════════════════════════════════════════
+//
+// Aim direction for shooting. Updated by player input or AI.
+// WeaponFireSystem reads this to determine projectile direction.
+//
+// Usage:
+//   // Player: update from camera
+//   FAimDirection* Aim = CharacterEntity.get_mut<FAimDirection>();
+//   Aim->Direction = CameraForward;
+//
+//   // AI: update towards target
+//   Aim->Direction = (TargetLocation - MyLocation).GetSafeNormal();
+// ═══════════════════════════════════════════════════════════════
+
+struct FAimDirection
+{
+	/** Normalized aim direction in world space */
+	FVector Direction = FVector::ForwardVector;
+};
+
+// ═══════════════════════════════════════════════════════════════
+// WEAPON STATIC (Prefab)
+// ═══════════════════════════════════════════════════════════════
+//
+// Static weapon data - lives in PREFAB, shared by all weapons of this type.
+// Contains immutable weapon configuration derived from UFlecsWeaponProfile.
+//
+// Usage:
+//   const FWeaponStatic* Static = WeaponEntity.try_get<FWeaponStatic>(); // from prefab
+//   FWeaponInstance* Instance = WeaponEntity.get_mut<FWeaponInstance>();  // from entity
+// ═══════════════════════════════════════════════════════════════
+
+struct FWeaponStatic
+{
+	// ─────────────────────────────────────────────────────────
+	// FIRING
+	// ─────────────────────────────────────────────────────────
+
+	/** Projectile definition to spawn (from WeaponProfile) */
+	UFlecsEntityDefinition* ProjectileDefinition = nullptr;
+
+	/** Time between shots in seconds (e.g., 0.1 = 10 shots/sec) */
+	float FireInterval = 0.1f;
+
+	/** Burst count for burst fire mode */
+	int32 BurstCount = 1;
+
+	/** Delay between bursts in seconds */
+	float BurstDelay = 0.3f;
+
+	/** Projectile speed multiplier */
+	float ProjectileSpeedMultiplier = 1.0f;
+
+	/** Damage multiplier */
+	float DamageMultiplier = 1.0f;
+
+	/** Projectiles per shot (>1 for shotguns) */
+	int32 ProjectilesPerShot = 1;
+
+	/** Is automatic fire? */
+	bool bIsAutomatic = false;
+
+	/** Is burst fire? */
+	bool bIsBurst = false;
+
+	// ─────────────────────────────────────────────────────────
+	// AMMO
+	// ─────────────────────────────────────────────────────────
+
+	/** Magazine capacity */
+	int32 MagazineSize = 30;
+
+	/** Reload time in seconds */
+	float ReloadTime = 2.0f;
+
+	/** Max reserve ammo */
+	int32 MaxReserveAmmo = 300;
+
+	/** Ammo consumed per shot */
+	int32 AmmoPerShot = 1;
+
+	/** Unlimited ammo flag */
+	bool bUnlimitedAmmo = false;
+
+	// ─────────────────────────────────────────────────────────
+	// MUZZLE
+	// ─────────────────────────────────────────────────────────
+
+	/** Muzzle offset from weapon origin */
+	FVector MuzzleOffset = FVector(50.f, 0.f, 0.f);
+
+	/** Muzzle socket name (optional) */
+	FName MuzzleSocketName = NAME_None;
+
+	// ─────────────────────────────────────────────────────────
+	// VISUALS
+	// Pointers are safe because DataAssets persist for game lifetime.
+	// ─────────────────────────────────────────────────────────
+
+	/** Skeletal mesh when equipped (for animations) */
+	USkeletalMesh* EquippedMesh = nullptr;
+
+	/** Static mesh when dropped (for ISM) */
+	UStaticMesh* DroppedMesh = nullptr;
+
+	/** Attach socket on character */
+	FName AttachSocket = TEXT("weapon_r");
+
+	/** Local transform offset when attached */
+	FTransform AttachOffset;
+
+	/** Scale when dropped */
+	FVector DroppedScale = FVector::OneVector;
+
+	// ─────────────────────────────────────────────────────────
+	// ANIMATIONS
+	// ─────────────────────────────────────────────────────────
+
+	/** Fire animation montage */
+	UAnimMontage* FireMontage = nullptr;
+
+	/** Reload animation montage */
+	UAnimMontage* ReloadMontage = nullptr;
+
+	/** Equip animation montage */
+	UAnimMontage* EquipMontage = nullptr;
+};
+
+// ═══════════════════════════════════════════════════════════════
+// WEAPON INSTANCE (Per-Entity)
+// ═══════════════════════════════════════════════════════════════
+//
+// Instance weapon data - mutable per-entity data.
+// Static data (magazine size, fire rate) comes from FWeaponStatic in prefab.
+// ═══════════════════════════════════════════════════════════════
+
+USTRUCT(BlueprintType)
+struct FWeaponInstance
+{
+	GENERATED_BODY()
+
+	// ─────────────────────────────────────────────────────────
+	// AMMO STATE
+	// ─────────────────────────────────────────────────────────
+
+	/** Current ammo in magazine */
+	UPROPERTY(BlueprintReadWrite, Category = "Weapon")
+	int32 CurrentAmmo = 30;
+
+	/** Reserve ammo */
+	UPROPERTY(BlueprintReadWrite, Category = "Weapon")
+	int32 ReserveAmmo = 300;
+
+	// ─────────────────────────────────────────────────────────
+	// FIRING STATE
+	// ─────────────────────────────────────────────────────────
+
+	/** Time since last shot in seconds */
+	float TimeSinceLastShot = 999.f;
+
+	/** Remaining shots in current burst */
+	int32 BurstShotsRemaining = 0;
+
+	/** Burst cooldown time remaining in seconds */
+	float BurstCooldownRemaining = 0.f;
+
+	/** For semi-auto: already fired while trigger held, must release first */
+	bool bHasFiredSincePress = false;
+
+	// ─────────────────────────────────────────────────────────
+	// RELOAD STATE
+	// ─────────────────────────────────────────────────────────
+
+	/** Is currently reloading? */
+	UPROPERTY(BlueprintReadOnly, Category = "Weapon")
+	bool bIsReloading = false;
+
+	/** Reload time remaining in seconds */
+	float ReloadTimeRemaining = 0.f;
+
+	// ─────────────────────────────────────────────────────────
+	// INPUT FLAGS (Game Thread → Artillery Thread)
+	// Set by game thread via EnqueueCommand, consumed by systems.
+	// ─────────────────────────────────────────────────────────
+
+	/** Fire button is held */
+	bool bFireRequested = false;
+
+	/** Reload was requested */
+	bool bReloadRequested = false;
+
+	// ─────────────────────────────────────────────────────────
+	// HELPERS
+	// ─────────────────────────────────────────────────────────
+
+	/** Check if weapon can fire (cooldown ready, has ammo, not reloading) */
+	bool CanFire(float FireInterval) const
+	{
+		return !bIsReloading
+			&& CurrentAmmo > 0
+			&& TimeSinceLastShot >= FireInterval
+			&& BurstCooldownRemaining <= 0.f;
+	}
+
+	/** Check if weapon needs reload */
+	bool NeedsReload(int32 MagazineSize, bool bUnlimitedAmmo) const
+	{
+		if (bUnlimitedAmmo) return false;
+		return CurrentAmmo == 0 && ReserveAmmo > 0 && MagazineSize > 0;
+	}
+
+	/** Check if weapon can reload */
+	bool CanReload(int32 MagazineSize, bool bUnlimitedAmmo) const
+	{
+		if (bUnlimitedAmmo) return false;
+		if (bIsReloading) return false;
+		return CurrentAmmo < MagazineSize && ReserveAmmo > 0;
+	}
+};
+
+// ═══════════════════════════════════════════════════════════════
+// EQUIPPED BY (Relationship)
+// ═══════════════════════════════════════════════════════════════
+//
+// Marks weapon as equipped by a character.
+// Similar to FContainedIn but for weapons.
+//
+// When present: weapon uses SkeletalMesh attached to character socket.
+// When absent:  weapon exists in world with StaticMesh + Barrage physics.
+//
+// Usage:
+//   // Equip
+//   FEquippedBy Equipped;
+//   Equipped.CharacterEntityId = CharacterEntity.id();
+//   Equipped.SlotId = 0;
+//   WeaponEntity.set<FEquippedBy>(Equipped);
+//
+//   // Query equipped weapons
+//   world.each([](flecs::entity E, const FEquippedBy& Eq) {
+//       if (Eq.CharacterEntityId == MyCharId) { ... }
+//   });
+//
+//   // Unequip
+//   WeaponEntity.remove<FEquippedBy>();
+// ═══════════════════════════════════════════════════════════════
+
+USTRUCT(BlueprintType)
+struct FEquippedBy
+{
+	GENERATED_BODY()
+
+	/** Flecs entity ID of the character wielding this weapon */
+	UPROPERTY(BlueprintReadOnly, Category = "Weapon")
+	int64 CharacterEntityId = 0;
+
+	/** Equipment slot identifier (0 = primary, 1 = secondary, etc.) */
+	UPROPERTY(BlueprintReadOnly, Category = "Weapon")
+	int32 SlotId = 0;
+
+	/** Check if weapon is equipped */
+	bool IsEquipped() const { return CharacterEntityId != 0; }
+};
+
+// ═══════════════════════════════════════════════════════════════
+// TAG
+// ═══════════════════════════════════════════════════════════════
+
+/** Entity is a weapon */
+struct FTagWeapon {};

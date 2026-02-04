@@ -1,10 +1,18 @@
 
 #include "FlecsGameplayLibrary.h"
+#include "FlecsEntitySpawner.h"
 #include "FlecsArtillerySubsystem.h"
 #include "FlecsGameTags.h"
 #include "FlecsStaticComponents.h"
 #include "FlecsInstanceComponents.h"
+#include "FlecsWeaponComponents.h"
+#include "FlecsBarrageComponents.h"
 #include "FlecsProjectileDefinition.h"
+#include "FlecsEntityDefinition.h"
+#include "FlecsPhysicsProfile.h"
+#include "FlecsRenderProfile.h"
+#include "FlecsDamageProfile.h"
+#include "FlecsProjectileProfile.h"
 #include "FlecsConstrainedGroupDefinition.h"
 #include "Systems/BarrageEntitySpawner.h"
 #include "BarrageDispatch.h"
@@ -240,7 +248,24 @@ void UFlecsGameplayLibrary::ApplyDamageByBarrageKey(UObject* WorldContextObject,
 	FSkeletonKey CapturedKey = BarrageKey;
 	Subsystem->EnqueueCommand([Subsystem, CapturedKey, Damage]()
 	{
-		ApplyDamage_ArtilleryThread(Subsystem, CapturedKey, Damage);
+		Subsystem->QueueDamageByKey(CapturedKey, Damage);
+	});
+}
+
+void UFlecsGameplayLibrary::ApplyDamageWithType(UObject* WorldContextObject, FSkeletonKey BarrageKey, float Damage,
+                                                 FGameplayTag DamageType, bool bIgnoreArmor)
+{
+	UFlecsArtillerySubsystem* Subsystem = GetFlecsSubsystem(WorldContextObject);
+	if (!Subsystem || !BarrageKey.IsValid() || Damage <= 0.f) return;
+
+	FSkeletonKey CapturedKey = BarrageKey;
+	Subsystem->EnqueueCommand([Subsystem, CapturedKey, Damage, DamageType, bIgnoreArmor]()
+	{
+		flecs::entity Target = Subsystem->GetEntityForBarrageKey(CapturedKey);
+		if (Target.is_valid())
+		{
+			Subsystem->QueueDamage(Target, Damage, 0, DamageType, FVector::ZeroVector, bIgnoreArmor);
+		}
 	});
 }
 
@@ -286,26 +311,8 @@ void UFlecsGameplayLibrary::SetItemDespawnTimer(UObject* WorldContextObject, FSk
 
 bool UFlecsGameplayLibrary::ApplyDamage_ArtilleryThread(UFlecsArtillerySubsystem* Subsystem, FSkeletonKey BarrageKey, float Damage)
 {
-	flecs::entity Entity = GetFlecsEntityForKey(Subsystem, BarrageKey);
-	if (!Entity.is_valid() || !Entity.is_alive()) return false;
-
-	FHealthInstance* HealthInst = Entity.try_get_mut<FHealthInstance>();
-	if (!HealthInst) return false;
-
-	// Get armor from static (prefab or direct)
-	const FHealthStatic* HealthStatic = Entity.try_get<FHealthStatic>();
-	float Armor = HealthStatic ? HealthStatic->Armor : 0.f;
-
-	float ActualDamage = FMath::Max(0.f, Damage - Armor);
-	HealthInst->CurrentHP -= ActualDamage;
-
-	if (HealthInst->CurrentHP <= 0.f)
-	{
-		HealthInst->CurrentHP = 0.f;
-		Entity.add<FTagDead>();
-		return true;
-	}
-	return false;
+	// Use unified damage system via QueueDamage
+	return Subsystem->QueueDamageByKey(BarrageKey, Damage);
 }
 
 void UFlecsGameplayLibrary::Heal_ArtilleryThread(UFlecsArtillerySubsystem* Subsystem, FSkeletonKey BarrageKey, float Amount)
@@ -387,6 +394,50 @@ FSkeletonKey UFlecsGameplayLibrary::SpawnProjectileFromDefinition(
 		Definition->Friction,
 		Definition->MaxBounces
 	);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PROJECTILE SPAWNING (wrapper over unified UFlecsEntityLibrary::SpawnEntity)
+// ═══════════════════════════════════════════════════════════════
+
+FSkeletonKey UFlecsGameplayLibrary::SpawnProjectileFromEntityDef(
+	UObject* WorldContextObject,
+	UFlecsEntityDefinition* Definition,
+	FVector Location,
+	FVector Direction,
+	float SpeedOverride,
+	int64 OwnerEntityId)
+{
+	if (!Definition)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("SpawnProjectileFromEntityDef: Definition is null!"));
+		return FSkeletonKey();
+	}
+
+	// Validate required profiles
+	if (!Definition->ProjectileProfile)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("SpawnProjectileFromEntityDef: '%s' has no ProjectileProfile!"), *Definition->GetName());
+		return FSkeletonKey();
+	}
+
+	if (!Definition->RenderProfile || !Definition->RenderProfile->Mesh)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("SpawnProjectileFromEntityDef: '%s' has no RenderProfile or mesh!"), *Definition->GetName());
+		return FSkeletonKey();
+	}
+
+	// Calculate velocity
+	const float Speed = SpeedOverride > 0.f ? SpeedOverride : Definition->ProjectileProfile->DefaultSpeed;
+	FVector NormalizedDir = Direction.GetSafeNormal();
+	FVector Velocity = NormalizedDir * Speed;
+
+	// Use unified spawn API
+	FEntitySpawnRequest Request = FEntitySpawnRequest::FromDefinition(Definition, Location)
+		.WithVelocity(Velocity)
+		.WithOwnerEntity(OwnerEntityId);
+
+	return UFlecsEntityLibrary::SpawnEntity(WorldContextObject, Request);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -497,8 +548,12 @@ FSkeletonKey UFlecsGameplayLibrary::SpawnProjectile(
 	const uint32 Id = ++GProjectileCounter;
 	FSkeletonKey EntityKey = FSkeletonKey(FORGE_SKELETON_KEY(Id, SKELLY::SFIX_GUN_SHOT));
 
-	UE_LOG(LogTemp, Log, TEXT("PROJ_DEBUG SpawnProjectile START: Key=%llu Counter=%u Loc=%s Bouncing=%d"),
-		static_cast<uint64>(EntityKey), Id, *Location.ToString(), bIsBouncing);
+	// Determine if we need a dynamic body (physics simulation) or sensor (overlap detection only)
+	// Dynamic body needed for: bouncing OR gravity (sensors don't respond to gravity)
+	const bool bNeedsDynamicBody = bIsBouncing || GravityFactor > 0.f;
+
+	UE_LOG(LogTemp, Log, TEXT("PROJ_DEBUG SpawnProjectile START: Key=%llu Counter=%u Loc=%s Bouncing=%d Gravity=%.2f Dynamic=%d"),
+		static_cast<uint64>(EntityKey), Id, *Location.ToString(), bIsBouncing, GravityFactor, bNeedsDynamicBody);
 
 	// Normalize direction
 	Direction.Normalize();
@@ -508,14 +563,14 @@ FSkeletonKey UFlecsGameplayLibrary::SpawnProjectile(
 	FBSphereParams SphereParams = FBarrageBounder::GenerateSphereBounds(Location, CollisionRadius);
 
 	FBLet Body;
-	if (bIsBouncing)
+	if (bNeedsDynamicBody)
 	{
-		// Bouncing projectile - uses PROJECTILE layer for proper collision detection
+		// Dynamic sphere - responds to gravity and can bounce
 		Body = Barrage->CreateBouncingSphere(
 			SphereParams,
 			EntityKey,
 			static_cast<uint16>(EPhysicsLayer::PROJECTILE),
-			Restitution,
+			bIsBouncing ? Restitution : 0.f,  // No restitution if not bouncing
 			Friction
 		);
 		UE_LOG(LogTemp, Log, TEXT("PROJ_DEBUG CreateBouncingSphere: Key=%llu Body=%p"),
@@ -523,14 +578,14 @@ FSkeletonKey UFlecsGameplayLibrary::SpawnProjectile(
 	}
 	else
 	{
-		// Sensor projectile - destroyed on first hit
+		// Sensor - no gravity, no bounces, just overlap detection (laser-like)
 		Body = Barrage->CreatePrimitive(
 			SphereParams,
 			EntityKey,
 			static_cast<uint16>(EPhysicsLayer::PROJECTILE),
 			true // IsSensor
 		);
-		UE_LOG(LogTemp, Log, TEXT("PROJ_DEBUG CreatePrimitive: Key=%llu Body=%p"),
+		UE_LOG(LogTemp, Log, TEXT("PROJ_DEBUG CreatePrimitive (sensor): Key=%llu Body=%p"),
 			static_cast<uint64>(EntityKey), Body.Get());
 	}
 
@@ -1330,4 +1385,157 @@ FFlecsGroupSpawnResult UFlecsGameplayLibrary::SpawnChain(
 
 	Result.bSuccess = true;
 	return Result;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// WEAPON CONTROL
+// ═══════════════════════════════════════════════════════════════
+
+void UFlecsGameplayLibrary::StartFiring(UObject* WorldContextObject, int64 WeaponEntityId)
+{
+	UFlecsArtillerySubsystem* Subsystem = GetFlecsSubsystem(WorldContextObject);
+	if (!Subsystem || WeaponEntityId == 0) return;
+
+	Subsystem->EnqueueCommand([Subsystem, WeaponEntityId]()
+	{
+		flecs::world* World = Subsystem->GetFlecsWorld();
+		if (!World) return;
+
+		flecs::entity WeaponEntity = World->entity(static_cast<flecs::entity_t>(WeaponEntityId));
+		if (!WeaponEntity.is_valid() || !WeaponEntity.is_alive()) return;
+
+		FWeaponInstance* Weapon = WeaponEntity.try_get_mut<FWeaponInstance>();
+		if (Weapon)
+		{
+			Weapon->bFireRequested = true;
+		}
+	});
+}
+
+void UFlecsGameplayLibrary::StopFiring(UObject* WorldContextObject, int64 WeaponEntityId)
+{
+	UFlecsArtillerySubsystem* Subsystem = GetFlecsSubsystem(WorldContextObject);
+	if (!Subsystem || WeaponEntityId == 0) return;
+
+	Subsystem->EnqueueCommand([Subsystem, WeaponEntityId]()
+	{
+		flecs::world* World = Subsystem->GetFlecsWorld();
+		if (!World) return;
+
+		flecs::entity WeaponEntity = World->entity(static_cast<flecs::entity_t>(WeaponEntityId));
+		if (!WeaponEntity.is_valid() || !WeaponEntity.is_alive()) return;
+
+		FWeaponInstance* Weapon = WeaponEntity.try_get_mut<FWeaponInstance>();
+		if (Weapon)
+		{
+			Weapon->bFireRequested = false;
+		}
+	});
+}
+
+void UFlecsGameplayLibrary::ReloadWeapon(UObject* WorldContextObject, int64 WeaponEntityId)
+{
+	UFlecsArtillerySubsystem* Subsystem = GetFlecsSubsystem(WorldContextObject);
+	if (!Subsystem || WeaponEntityId == 0) return;
+
+	Subsystem->EnqueueCommand([Subsystem, WeaponEntityId]()
+	{
+		flecs::world* World = Subsystem->GetFlecsWorld();
+		if (!World) return;
+
+		flecs::entity WeaponEntity = World->entity(static_cast<flecs::entity_t>(WeaponEntityId));
+		if (!WeaponEntity.is_valid() || !WeaponEntity.is_alive()) return;
+
+		FWeaponInstance* Weapon = WeaponEntity.try_get_mut<FWeaponInstance>();
+		if (Weapon)
+		{
+			Weapon->bReloadRequested = true;
+		}
+	});
+}
+
+void UFlecsGameplayLibrary::SetAimDirection(UObject* WorldContextObject, int64 CharacterEntityId, FVector Direction)
+{
+	UFlecsArtillerySubsystem* Subsystem = GetFlecsSubsystem(WorldContextObject);
+	if (!Subsystem || CharacterEntityId == 0) return;
+
+	FVector NormalizedDir = Direction.GetSafeNormal();
+	if (NormalizedDir.IsNearlyZero())
+	{
+		NormalizedDir = FVector::ForwardVector;
+	}
+
+	Subsystem->EnqueueCommand([Subsystem, CharacterEntityId, NormalizedDir]()
+	{
+		flecs::world* World = Subsystem->GetFlecsWorld();
+		if (!World) return;
+
+		flecs::entity CharEntity = World->entity(static_cast<flecs::entity_t>(CharacterEntityId));
+		if (!CharEntity.is_valid() || !CharEntity.is_alive()) return;
+
+		FAimDirection AimDir;
+		AimDir.Direction = NormalizedDir;
+		CharEntity.set<FAimDirection>(AimDir);
+	});
+}
+
+int32 UFlecsGameplayLibrary::GetWeaponAmmo(UObject* WorldContextObject, int64 WeaponEntityId)
+{
+	UFlecsArtillerySubsystem* Subsystem = GetFlecsSubsystem(WorldContextObject);
+	if (!Subsystem || WeaponEntityId == 0) return -1;
+
+	flecs::world* FlecsWorld = Subsystem->GetFlecsWorld();
+	if (!FlecsWorld) return -1;
+
+	flecs::entity WeaponEntity = FlecsWorld->entity(static_cast<flecs::entity_t>(WeaponEntityId));
+	if (!WeaponEntity.is_valid() || !WeaponEntity.is_alive()) return -1;
+
+	const FWeaponInstance* Weapon = WeaponEntity.try_get<FWeaponInstance>();
+	if (!Weapon) return -1;
+
+	return Weapon->CurrentAmmo;
+}
+
+bool UFlecsGameplayLibrary::GetWeaponAmmoInfo(UObject* WorldContextObject, int64 WeaponEntityId,
+	int32& OutCurrentAmmo, int32& OutMagazineSize, int32& OutReserveAmmo)
+{
+	OutCurrentAmmo = 0;
+	OutMagazineSize = 0;
+	OutReserveAmmo = 0;
+
+	UFlecsArtillerySubsystem* Subsystem = GetFlecsSubsystem(WorldContextObject);
+	if (!Subsystem || WeaponEntityId == 0) return false;
+
+	flecs::world* FlecsWorld = Subsystem->GetFlecsWorld();
+	if (!FlecsWorld) return false;
+
+	flecs::entity WeaponEntity = FlecsWorld->entity(static_cast<flecs::entity_t>(WeaponEntityId));
+	if (!WeaponEntity.is_valid() || !WeaponEntity.is_alive()) return false;
+
+	const FWeaponInstance* Instance = WeaponEntity.try_get<FWeaponInstance>();
+	const FWeaponStatic* Static = WeaponEntity.try_get<FWeaponStatic>();
+	if (!Instance) return false;
+
+	OutCurrentAmmo = Instance->CurrentAmmo;
+	OutReserveAmmo = Instance->ReserveAmmo;
+	OutMagazineSize = Static ? Static->MagazineSize : 0;
+
+	return true;
+}
+
+bool UFlecsGameplayLibrary::IsWeaponReloading(UObject* WorldContextObject, int64 WeaponEntityId)
+{
+	UFlecsArtillerySubsystem* Subsystem = GetFlecsSubsystem(WorldContextObject);
+	if (!Subsystem || WeaponEntityId == 0) return false;
+
+	flecs::world* FlecsWorld = Subsystem->GetFlecsWorld();
+	if (!FlecsWorld) return false;
+
+	flecs::entity WeaponEntity = FlecsWorld->entity(static_cast<flecs::entity_t>(WeaponEntityId));
+	if (!WeaponEntity.is_valid() || !WeaponEntity.is_alive()) return false;
+
+	const FWeaponInstance* Weapon = WeaponEntity.try_get<FWeaponInstance>();
+	if (!Weapon) return false;
+
+	return Weapon->bIsReloading;
 }

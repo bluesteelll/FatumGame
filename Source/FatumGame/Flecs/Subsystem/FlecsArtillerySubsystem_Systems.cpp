@@ -6,6 +6,7 @@
 #include "FlecsGameTags.h"
 #include "FlecsStaticComponents.h"
 #include "FlecsInstanceComponents.h"
+#include "FlecsWeaponComponents.h"
 #include "EPhysicsLayer.h"
 #include "Systems/BarrageEntitySpawner.h"
 
@@ -42,6 +43,10 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 	World.component<FWorldItemInstance>();
 	World.component<FContainedIn>();
 
+	// Damage Event System
+	World.component<FDamageHit>();
+	World.component<FPendingDamage>();
+
 	// ─────────────────────────────────────────────────────────
 	// PHYSICS BRIDGE COMPONENTS
 	// ─────────────────────────────────────────────────────────
@@ -65,6 +70,15 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 	World.component<FTagConstrained>();
 
 	// ─────────────────────────────────────────────────────────
+	// WEAPON COMPONENTS
+	// ─────────────────────────────────────────────────────────
+	World.component<FAimDirection>();
+	World.component<FWeaponStatic>();
+	World.component<FWeaponInstance>();
+	World.component<FEquippedBy>();
+	World.component<FTagWeapon>();
+
+	// ─────────────────────────────────────────────────────────
 	// COLLISION PAIR SYSTEM COMPONENTS
 	// ─────────────────────────────────────────────────────────
 	World.component<FCollisionPair>();
@@ -80,6 +94,79 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 	// ─────────────────────────────────────────────────────────
 	World.component<FConstraintLink>();
 	World.component<FFlecsConstraintData>();
+
+	// ═══════════════════════════════════════════════════════════════
+	// OBSERVERS (Event-driven processing)
+	// ═══════════════════════════════════════════════════════════════
+
+	// ─────────────────────────────────────────────────────────
+	// DAMAGE OBSERVER
+	// Processes FPendingDamage when it's set/modified on any entity.
+	// This decouples damage sources from damage application:
+	// - Projectile collision → queues damage
+	// - Abilities/Spells → queue damage
+	// - Environment (fire) → queue damage
+	// - API calls → queue damage
+	// All processed uniformly here.
+	// ─────────────────────────────────────────────────────────
+	World.observer<FPendingDamage, FHealthInstance>("DamageObserver")
+		.event(flecs::OnSet)
+		.each([&World](flecs::entity Entity, FPendingDamage& Pending, FHealthInstance& Health)
+		{
+			if (!Pending.HasPendingDamage())
+			{
+				return;
+			}
+
+			// Get static health data (armor) from prefab via IsA
+			const FHealthStatic* HealthStatic = Entity.try_get<FHealthStatic>();
+			const float BaseArmor = HealthStatic ? HealthStatic->Armor : 0.f;
+			const float MaxHP = HealthStatic ? HealthStatic->MaxHP : 100.f;
+
+			float TotalDamageApplied = 0.f;
+
+			// Process each hit individually (armor applies per-hit)
+			for (const FDamageHit& Hit : Pending.Hits)
+			{
+				if (Entity.has<FTagDead>())
+				{
+					break; // Already dead, skip remaining hits
+				}
+
+				// Calculate effective armor (can be bypassed)
+				float EffectiveArmor = Hit.bIgnoreArmor ? 0.f : BaseArmor;
+
+				// TODO: Apply damage type resistances/weaknesses here
+				// if (Hit.DamageType.IsValid()) { ... }
+
+				// Calculate final damage
+				float FinalDamage = FMath::Max(0.f, Hit.Damage - EffectiveArmor);
+
+				// Apply critical multiplier
+				if (Hit.bIsCritical)
+				{
+					// TODO: Get crit multiplier from source or use default
+					FinalDamage *= 2.0f;
+				}
+
+				// Apply damage
+				Health.CurrentHP -= FinalDamage;
+				TotalDamageApplied += FinalDamage;
+
+				UE_LOG(LogTemp, Log, TEXT("DAMAGE: Entity %llu took %.1f damage (%.1f base, %.1f armor) HP: %.1f/%.1f"),
+					Entity.id(), FinalDamage, Hit.Damage, EffectiveArmor, Health.CurrentHP, MaxHP);
+			}
+
+			// Clear processed hits (keeps array capacity for reuse)
+			Pending.Clear();
+
+			// Log total if multiple hits
+			if (TotalDamageApplied > 0.f && Pending.Hits.Num() > 1)
+			{
+				UE_LOG(LogTemp, Log, TEXT("DAMAGE: Entity %llu total damage this tick: %.1f"),
+					Entity.id(), TotalDamageApplied);
+			}
+		});
 
 	// ═══════════════════════════════════════════════════════════════
 	// GAMEPLAY SYSTEMS
@@ -207,10 +294,10 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 
 	// ─────────────────────────────────────────────────────────
 	// DAMAGE COLLISION SYSTEM
+	// Queues damage to FPendingDamage (processed by DamageObserver).
 	// Uses Static/Instance architecture:
-	// - FDamageStatic (prefab): Damage, bAreaDamage, bDestroyOnHit
-	// - FHealthStatic (prefab): Armor
-	// - FHealthInstance (entity): CurrentHP
+	// - FDamageStatic (prefab): Damage, DamageType, bAreaDamage, CritChance
+	// - FPendingDamage (target): Queued damage hits
 	// ─────────────────────────────────────────────────────────
 	World.system<const FCollisionPair>("DamageCollisionSystem")
 		.with<FTagCollisionDamage>()
@@ -220,14 +307,18 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 			uint64 ProjectileId = Pair.GetProjectileEntityId();
 			uint64 TargetId = Pair.GetTargetEntityId();
 
-			float Damage = 25.f; // Default for Artillery projectiles
+			// Default damage for Artillery projectiles without FDamageStatic
+			float Damage = 25.f;
+			FGameplayTag DamageType;
 			bool bAreaDamage = false;
 			bool bDestroyOnHit = false;
+			float CritChance = 0.f;
+			float CritMultiplier = 2.f;
 			int32 MaxBounces = 0;
 
 			flecs::entity ProjectileEntity;
 
-			// Get damage data from projectile
+			// Get damage data from projectile's FDamageStatic (prefab)
 			if (ProjectileId != 0)
 			{
 				ProjectileEntity = World.entity(ProjectileId);
@@ -239,8 +330,11 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 					if (DmgStatic)
 					{
 						Damage = DmgStatic->Damage;
+						DamageType = DmgStatic->DamageType;
 						bAreaDamage = DmgStatic->bAreaDamage;
 						bDestroyOnHit = DmgStatic->bDestroyOnHit;
+						CritChance = DmgStatic->CritChance;
+						CritMultiplier = DmgStatic->CritMultiplier;
 					}
 
 					if (ProjStatic)
@@ -250,25 +344,36 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 				}
 			}
 
-			// Apply damage to target
+			// Queue damage to target via FPendingDamage
 			if (TargetId != 0)
 			{
 				flecs::entity Target = World.entity(TargetId);
 				if (Target.is_valid() && !Target.has<FTagDead>())
 				{
-					const FHealthStatic* HealthStatic = Target.try_get<FHealthStatic>();
-					FHealthInstance* HealthInstance = Target.try_get_mut<FHealthInstance>();
-
-					if (HealthInstance)
+					// Check if target can receive damage
+					if (Target.has<FHealthInstance>())
 					{
-						float Armor = HealthStatic ? HealthStatic->Armor : 0.f;
-						float MaxHP = HealthStatic ? HealthStatic->MaxHP : 100.f;
+						// Roll for critical hit
+						bool bIsCritical = (CritChance > 0.f && FMath::FRand() < CritChance);
 
-						float EffectiveDamage = FMath::Max(0.f, Damage - Armor);
-						HealthInstance->CurrentHP -= EffectiveDamage;
+						// Get or add FPendingDamage component - obtain() adds if missing and returns reference
+						FPendingDamage& Pending = Target.obtain<FPendingDamage>();
 
-						UE_LOG(LogTemp, Log, TEXT("COLLISION: Damage %.1f applied to Entity %llu (HP: %.1f/%.1f)"),
-							EffectiveDamage, TargetId, HealthInstance->CurrentHP, MaxHP);
+						// Queue the damage hit
+						Pending.AddHit(
+							Damage,
+							ProjectileId,
+							DamageType,
+							Pair.ContactPoint,
+							bIsCritical,
+							false  // bIgnoreArmor
+						);
+
+						// Trigger the observer
+						Target.modified<FPendingDamage>();
+
+						UE_LOG(LogTemp, Log, TEXT("COLLISION: Queued %.1f damage to Entity %llu (Crit=%d)"),
+							Damage, TargetId, bIsCritical);
 					}
 				}
 			}
@@ -410,6 +515,225 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 			TryDestroyDestructible(Pair.EntityId2);
 
 			PairEntity.add<FTagCollisionProcessed>();
+		});
+
+	// ═══════════════════════════════════════════════════════════════
+	// WEAPON SYSTEMS
+	// ═══════════════════════════════════════════════════════════════
+
+	// ─────────────────────────────────────────────────────────
+	// WEAPON TICK SYSTEM
+	// Updates timers for fire rate, burst cooldown, and semi-auto reset.
+	// ─────────────────────────────────────────────────────────
+	World.system<FWeaponInstance>("WeaponTickSystem")
+		.with<FTagWeapon>()
+		.without<FTagDead>()
+		.each([](flecs::entity Entity, FWeaponInstance& Weapon)
+		{
+			constexpr float DeltaTime = 1.f / 120.f;
+
+			// Update fire rate timer
+			Weapon.TimeSinceLastShot += DeltaTime;
+
+			// Update burst cooldown
+			if (Weapon.BurstCooldownRemaining > 0.f)
+			{
+				Weapon.BurstCooldownRemaining -= DeltaTime;
+			}
+
+			// Reset semi-auto flag when trigger released
+			if (!Weapon.bFireRequested && Weapon.bHasFiredSincePress)
+			{
+				Weapon.bHasFiredSincePress = false;
+			}
+		});
+
+	// ─────────────────────────────────────────────────────────
+	// WEAPON RELOAD SYSTEM
+	// Handles reload state machine.
+	// ─────────────────────────────────────────────────────────
+	World.system<FWeaponInstance>("WeaponReloadSystem")
+		.with<FTagWeapon>()
+		.without<FTagDead>()
+		.each([](flecs::entity Entity, FWeaponInstance& Weapon)
+		{
+			constexpr float DeltaTime = 1.f / 120.f;
+
+			const FWeaponStatic* Static = Entity.try_get<FWeaponStatic>();
+			if (!Static) return;
+
+			// Process reload request
+			if (Weapon.bReloadRequested && !Weapon.bIsReloading)
+			{
+				if (Weapon.CanReload(Static->MagazineSize, Static->bUnlimitedAmmo))
+				{
+					Weapon.bIsReloading = true;
+					Weapon.ReloadTimeRemaining = Static->ReloadTime;
+					UE_LOG(LogTemp, Log, TEXT("WEAPON: Reload started, %.2f sec"), Static->ReloadTime);
+				}
+				Weapon.bReloadRequested = false;
+			}
+
+			// Process reload timer
+			if (Weapon.bIsReloading)
+			{
+				Weapon.ReloadTimeRemaining -= DeltaTime;
+
+				if (Weapon.ReloadTimeRemaining <= 0.f)
+				{
+					// Complete reload
+					int32 AmmoNeeded = Static->MagazineSize - Weapon.CurrentAmmo;
+
+					if (Static->bUnlimitedAmmo)
+					{
+						Weapon.CurrentAmmo = Static->MagazineSize;
+					}
+					else
+					{
+						int32 AmmoToLoad = FMath::Min(AmmoNeeded, Weapon.ReserveAmmo);
+						Weapon.CurrentAmmo += AmmoToLoad;
+						Weapon.ReserveAmmo -= AmmoToLoad;
+					}
+
+					Weapon.bIsReloading = false;
+					UE_LOG(LogTemp, Log, TEXT("WEAPON: Reload complete, ammo=%d/%d reserve=%d"),
+						Weapon.CurrentAmmo, Static->MagazineSize, Weapon.ReserveAmmo);
+				}
+			}
+		});
+
+	// ─────────────────────────────────────────────────────────
+	// WEAPON FIRE SYSTEM
+	// Processes fire requests for equipped weapons.
+	// Queues projectile spawns for game thread processing.
+	// ─────────────────────────────────────────────────────────
+	World.system<FWeaponInstance, const FEquippedBy>("WeaponFireSystem")
+		.with<FTagWeapon>()
+		.without<FTagDead>()
+		.each([this, &World](flecs::entity WeaponEntity, FWeaponInstance& Weapon, const FEquippedBy& EquippedBy)
+		{
+			// Only process equipped weapons
+			if (!EquippedBy.IsEquipped()) return;
+
+			const FWeaponStatic* Static = WeaponEntity.try_get<FWeaponStatic>();
+			if (!Static || !Static->ProjectileDefinition) return;
+
+			// Check fire request
+			if (!Weapon.bFireRequested) return;
+
+			// Semi-auto: block if already fired while trigger held
+			if (!Static->bIsAutomatic && !Static->bIsBurst && Weapon.bHasFiredSincePress)
+			{
+				UE_LOG(LogTemp, Warning, TEXT("WEAPON: Blocked by semi-auto (bHasFiredSincePress=true)"));
+				return;
+			}
+
+			// Check if can fire (cooldown, ammo, not reloading)
+			if (!Weapon.CanFire(Static->FireInterval))
+			{
+				UE_LOG(LogTemp, Warning, TEXT("WEAPON: CanFire=false (Ammo=%d, Reloading=%d, TimeSince=%.3f, Interval=%.3f, BurstCD=%.3f)"),
+					Weapon.CurrentAmmo, Weapon.bIsReloading, Weapon.TimeSinceLastShot, Static->FireInterval, Weapon.BurstCooldownRemaining);
+				return;
+			}
+
+			// Get character entity
+			flecs::entity CharacterEntity = World.entity(static_cast<flecs::entity_t>(EquippedBy.CharacterEntityId));
+			if (!CharacterEntity.is_valid())
+			{
+				UE_LOG(LogTemp, Warning, TEXT("WEAPON: CharacterEntity invalid!"));
+				return;
+			}
+
+			const FBarrageBody* CharBody = CharacterEntity.try_get<FBarrageBody>();
+			if (!CharBody || !CharBody->IsValid())
+			{
+				UE_LOG(LogTemp, Warning, TEXT("WEAPON: CharBody null or invalid! HasComponent=%d"), CharBody != nullptr);
+				return;
+			}
+
+			// Get muzzle location from character transform
+			FVector MuzzleLocation = FVector::ZeroVector;
+			FVector FireDirection = FVector::ForwardVector;
+
+			if (CachedBarrageDispatch)
+			{
+				FBLet Prim = CachedBarrageDispatch->GetShapeRef(CharBody->BarrageKey);
+				if (FBarragePrimitive::IsNotNull(Prim))
+				{
+					FVector3f CharPos = FBarragePrimitive::GetPosition(Prim);
+					FQuat4f CharRot = FBarragePrimitive::OptimisticGetAbsoluteRotation(Prim);
+					FQuat CharRotD(CharRot.X, CharRot.Y, CharRot.Z, CharRot.W);
+					FVector CharPosD(CharPos.X, CharPos.Y, CharPos.Z);
+					FTransform CharTransform(CharRotD, CharPosD);
+					MuzzleLocation = CharTransform.TransformPosition(Static->MuzzleOffset);
+
+					// Use FAimDirection if available, otherwise use character forward
+					const FAimDirection* AimDir = CharacterEntity.try_get<FAimDirection>();
+					if (AimDir)
+					{
+						FireDirection = AimDir->Direction;
+					}
+					else
+					{
+						FireDirection = CharTransform.GetRotation().GetForwardVector();
+					}
+				}
+			}
+
+			// Queue projectile spawn for game thread
+			FPendingProjectileSpawn PendingSpawn;
+			PendingSpawn.ProjectileDefinition = Static->ProjectileDefinition;
+			PendingSpawn.Location = MuzzleLocation;
+			PendingSpawn.Direction = FireDirection;
+			PendingSpawn.SpeedMultiplier = Static->ProjectileSpeedMultiplier;
+			PendingSpawn.DamageMultiplier = Static->DamageMultiplier;
+			PendingSpawn.OwnerEntityId = EquippedBy.CharacterEntityId;
+			PendingSpawn.ProjectilesPerShot = Static->ProjectilesPerShot;
+
+			PendingProjectileSpawns.Enqueue(PendingSpawn);
+
+			UE_LOG(LogTemp, Log, TEXT("WEAPON: FIRED! Ammo=%d->%d, Auto=%d, Burst=%d"),
+				Weapon.CurrentAmmo + Static->AmmoPerShot, Weapon.CurrentAmmo + Static->AmmoPerShot - Static->AmmoPerShot,
+				Static->bIsAutomatic, Static->bIsBurst);
+
+			// Consume ammo
+			if (!Static->bUnlimitedAmmo)
+			{
+				Weapon.CurrentAmmo -= Static->AmmoPerShot;
+				Weapon.CurrentAmmo = FMath::Max(0, Weapon.CurrentAmmo);
+			}
+
+			// Reset fire rate timer
+			Weapon.TimeSinceLastShot = 0.f;
+
+			// Mark as fired for semi-auto
+			Weapon.bHasFiredSincePress = true;
+
+			// Handle burst mode
+			if (Static->bIsBurst)
+			{
+				if (Weapon.BurstShotsRemaining == 0)
+				{
+					// Starting new burst
+					Weapon.BurstShotsRemaining = Static->BurstCount - 1;
+				}
+				else
+				{
+					Weapon.BurstShotsRemaining--;
+					if (Weapon.BurstShotsRemaining == 0)
+					{
+						// Burst complete, enter cooldown
+						Weapon.BurstCooldownRemaining = Static->BurstDelay;
+						Weapon.bHasFiredSincePress = true; // Block until trigger release
+					}
+				}
+			}
+
+			// Auto-reload when empty
+			if (Weapon.CurrentAmmo == 0 && !Static->bUnlimitedAmmo && Weapon.ReserveAmmo > 0)
+			{
+				Weapon.bReloadRequested = true;
+			}
 		});
 
 	// ═══════════════════════════════════════════════════════════════

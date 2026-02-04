@@ -13,6 +13,7 @@ class UFlecsHealthProfile;
 class UFlecsDamageProfile;
 class UFlecsProjectileProfile;
 class UFlecsContainerProfile;
+class UFlecsWeaponProfile;
 
 /**
  * Unified entity definition - a preset combining multiple profiles.
@@ -89,6 +90,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Instanced, Category = "Profiles")
 	TObjectPtr<UFlecsContainerProfile> ContainerProfile;
 
+	/** Weapon - makes entity a weapon with firing and ammo */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Instanced, Category = "Profiles")
+	TObjectPtr<UFlecsWeaponProfile> WeaponProfile;
+
 	// ═══════════════════════════════════════════════════════════════
 	// DEFAULT TAGS
 	// ═══════════════════════════════════════════════════════════════
@@ -134,7 +139,8 @@ public:
 			|| HealthProfile != nullptr
 			|| DamageProfile != nullptr
 			|| ProjectileProfile != nullptr
-			|| ContainerProfile != nullptr;
+			|| ContainerProfile != nullptr
+			|| WeaponProfile != nullptr;
 	}
 
 	/** Check if this will create a world entity (physics or render) */
@@ -151,6 +157,9 @@ public:
 
 	/** Check if this is a container */
 	bool IsContainer() const { return ContainerProfile != nullptr; }
+
+	/** Check if this is a weapon */
+	bool IsWeapon() const { return WeaponProfile != nullptr; }
 
 	virtual FPrimaryAssetId GetPrimaryAssetId() const override
 	{

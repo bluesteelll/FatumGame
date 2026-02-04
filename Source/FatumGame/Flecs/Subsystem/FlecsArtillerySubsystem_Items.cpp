@@ -3,12 +3,14 @@
 #include "FlecsArtillerySubsystem.h"
 #include "FlecsStaticComponents.h"
 #include "FlecsInstanceComponents.h"
+#include "FlecsWeaponComponents.h"
 #include "FlecsItemDefinition.h"
 #include "FlecsEntityDefinition.h"
 #include "FlecsHealthProfile.h"
 #include "FlecsDamageProfile.h"
 #include "FlecsProjectileProfile.h"
 #include "FlecsContainerProfile.h"
+#include "FlecsWeaponProfile.h"
 
 // ═══════════════════════════════════════════════════════════════
 // ENTITY PREFAB REGISTRY IMPLEMENTATION
@@ -108,18 +110,60 @@ flecs::entity UFlecsArtillerySubsystem::GetOrCreateEntityPrefab(UFlecsEntityDefi
 		ItemPrefabs.Add(ItemStatic.TypeId, Prefab);
 	}
 
+	if (UFlecsWeaponProfile* WeaponProfile = EntityDefinition->WeaponProfile)
+	{
+		FWeaponStatic WeaponStatic;
+
+		// Firing
+		WeaponStatic.ProjectileDefinition = WeaponProfile->ProjectileDefinition;
+		WeaponStatic.FireInterval = WeaponProfile->GetFireInterval();
+		WeaponStatic.BurstCount = WeaponProfile->BurstCount;
+		WeaponStatic.BurstDelay = WeaponProfile->GetFireInterval() * 2.f; // Default: 2x fire interval
+		WeaponStatic.ProjectileSpeedMultiplier = WeaponProfile->ProjectileSpeedMultiplier;
+		WeaponStatic.DamageMultiplier = WeaponProfile->DamageMultiplier;
+		WeaponStatic.ProjectilesPerShot = WeaponProfile->ProjectilesPerShot;
+		WeaponStatic.bIsAutomatic = WeaponProfile->IsAutomatic();
+		WeaponStatic.bIsBurst = WeaponProfile->IsBurst();
+
+		// Ammo
+		WeaponStatic.MagazineSize = WeaponProfile->MagazineSize;
+		WeaponStatic.ReloadTime = WeaponProfile->ReloadTime;
+		WeaponStatic.MaxReserveAmmo = WeaponProfile->MaxReserveAmmo;
+		WeaponStatic.AmmoPerShot = WeaponProfile->AmmoPerShot;
+		WeaponStatic.bUnlimitedAmmo = WeaponProfile->HasUnlimitedAmmo();
+
+		// Muzzle
+		WeaponStatic.MuzzleOffset = WeaponProfile->MuzzleOffset;
+		WeaponStatic.MuzzleSocketName = WeaponProfile->MuzzleSocketName;
+
+		// Visuals
+		WeaponStatic.EquippedMesh = WeaponProfile->EquippedMesh;
+		WeaponStatic.DroppedMesh = WeaponProfile->DroppedMesh;
+		WeaponStatic.AttachSocket = WeaponProfile->AttachSocket;
+		WeaponStatic.AttachOffset = WeaponProfile->AttachOffset;
+		WeaponStatic.DroppedScale = WeaponProfile->DroppedScale;
+
+		// Animations
+		WeaponStatic.FireMontage = WeaponProfile->FireMontage;
+		WeaponStatic.ReloadMontage = WeaponProfile->ReloadMontage;
+		WeaponStatic.EquipMontage = WeaponProfile->EquipMontage;
+
+		Prefab.set<FWeaponStatic>(WeaponStatic);
+	}
+
 	// TODO: Add FLootStatic if needed
 
 	// Store in registry
 	EntityPrefabs.Add(EntityDefinition, Prefab);
 
-	UE_LOG(LogTemp, Log, TEXT("Created entity prefab: '%s' (Health=%d, Damage=%d, Projectile=%d, Container=%d, Item=%d)"),
+	UE_LOG(LogTemp, Log, TEXT("Created entity prefab: '%s' (Health=%d, Damage=%d, Projectile=%d, Container=%d, Item=%d, Weapon=%d)"),
 		*EntityDefinition->GetName(),
 		EntityDefinition->HealthProfile != nullptr,
 		EntityDefinition->DamageProfile != nullptr,
 		EntityDefinition->ProjectileProfile != nullptr,
 		EntityDefinition->ContainerProfile != nullptr,
-		EntityDefinition->ItemDefinition != nullptr);
+		EntityDefinition->ItemDefinition != nullptr,
+		EntityDefinition->WeaponProfile != nullptr);
 
 	return Prefab;
 }

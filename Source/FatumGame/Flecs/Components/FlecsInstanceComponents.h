@@ -5,6 +5,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "GameplayTagContainer.h"
 #include "FlecsInstanceComponents.generated.h"
 
 // ═══════════════════════════════════════════════════════════════
@@ -52,6 +53,98 @@ struct FHealthInstance
 };
 
 // ═══════════════════════════════════════════════════════════════
+// DAMAGE EVENT SYSTEM
+// ═══════════════════════════════════════════════════════════════
+//
+// FPendingDamage accumulates damage hits from ANY source:
+// - Projectile collision
+// - Abilities / Spells
+// - Environment (fire, poison)
+// - Fall damage
+// - DoT effects
+// - Direct API calls
+//
+// DamageObserver processes FPendingDamage via OnSet event.
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Single damage hit data.
+ * NOT a USTRUCT - pure C++ for Flecs performance.
+ */
+struct FDamageHit
+{
+	/** Base damage before armor/modifiers */
+	float Damage = 0.f;
+
+	/** Source entity ID (0 = environment/no source) */
+	uint64 SourceEntityId = 0;
+
+	/** Damage type for resistances/weaknesses */
+	FGameplayTag DamageType;
+
+	/** World location of hit (for effects, knockback direction) */
+	FVector HitLocation = FVector::ZeroVector;
+
+	/** Was this a critical hit? */
+	bool bIsCritical = false;
+
+	/** Bypass armor calculation? */
+	bool bIgnoreArmor = false;
+};
+
+/**
+ * Pending damage component - accumulates hits for processing.
+ * Added to entity when damage is queued, processed by DamageObserver.
+ * NOT a USTRUCT - pure C++ for Flecs performance.
+ *
+ * Usage:
+ *   // Queue damage from anywhere
+ *   UFlecsArtillerySubsystem::Get(World)->QueueDamage(TargetEntity, 50.f, SourceId);
+ *
+ *   // Or manually
+ *   auto* Pending = Target.get_mut<FPendingDamage>();
+ *   if (!Pending) { Target.add<FPendingDamage>(); Pending = Target.get_mut<FPendingDamage>(); }
+ *   Pending->Hits.Add({ 50.f, SourceId, DamageType });
+ *   Target.modified<FPendingDamage>();  // Triggers observer
+ */
+struct FPendingDamage
+{
+	/** Accumulated damage hits to process */
+	TArray<FDamageHit> Hits;
+
+	/** Add a hit to pending queue */
+	void AddHit(float Damage, uint64 SourceId = 0, FGameplayTag DamageType = FGameplayTag(),
+	            FVector HitLocation = FVector::ZeroVector, bool bCritical = false, bool bIgnoreArmor = false)
+	{
+		FDamageHit Hit;
+		Hit.Damage = Damage;
+		Hit.SourceEntityId = SourceId;
+		Hit.DamageType = DamageType;
+		Hit.HitLocation = HitLocation;
+		Hit.bIsCritical = bCritical;
+		Hit.bIgnoreArmor = bIgnoreArmor;
+		Hits.Add(Hit);
+	}
+
+	/** Clear all pending hits (keeps array capacity) */
+	void Clear() { Hits.Reset(); }
+
+	/** Check if there are pending hits */
+	bool HasPendingDamage() const { return Hits.Num() > 0; }
+
+	/** Get total pending damage (before armor) */
+	float GetTotalPendingDamage() const
+	{
+		float Total = 0.f;
+		for (const FDamageHit& Hit : Hits)
+		{
+			Total += Hit.Damage;
+		}
+		return Total;
+	}
+};
+
+// ═══════════════════════════════════════════════════════════════
 // PROJECTILE INSTANCE
 // ═══════════════════════════════════════════════════════════════
 
@@ -75,6 +168,10 @@ struct FProjectileInstance
 	/** Grace frames remaining before velocity check */
 	UPROPERTY(BlueprintReadWrite, Category = "Projectile")
 	int32 GraceFramesRemaining = 30;
+
+	/** Entity that spawned this projectile (for friendly fire, damage attribution) */
+	UPROPERTY(BlueprintReadWrite, Category = "Projectile")
+	int64 OwnerEntityId = 0;
 };
 
 // ═══════════════════════════════════════════════════════════════

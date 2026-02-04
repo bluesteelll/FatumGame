@@ -74,10 +74,6 @@ public:
 	// BEHAVIOR
 	// ═══════════════════════════════════════════════════════════════
 
-	/** If true, projectile is affected by gravity */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Behavior")
-	bool bAffectedByGravity = true;
-
 	/** If true, projectile rotates to face movement direction */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Behavior")
 	bool bOrientToVelocity = true;

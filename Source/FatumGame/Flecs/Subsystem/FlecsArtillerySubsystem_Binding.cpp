@@ -1,9 +1,13 @@
-// FlecsArtillerySubsystem - Bidirectional Binding API
+// FlecsArtillerySubsystem - Bidirectional Binding API + Damage System API
 
 #include "FlecsArtillerySubsystem.h"
 #include "BarrageDispatch.h"
 #include "FBarragePrimitive.h"
 #include "FlecsGameTags.h"
+#include "FlecsInstanceComponents.h"
+#include "FlecsGameplayLibrary.h"
+#include "FlecsEntityDefinition.h"
+#include "FlecsProjectileProfile.h"
 #include "Systems/BarrageEntitySpawner.h"
 
 // ═══════════════════════════════════════════════════════════════
@@ -113,6 +117,107 @@ UBarrageRenderManager* UFlecsArtillerySubsystem::GetRenderManager() const
 		return UBarrageRenderManager::Get(CachedBarrageDispatch->GetWorld());
 	}
 	return nullptr;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// DAMAGE SYSTEM API
+// ═══════════════════════════════════════════════════════════════
+
+bool UFlecsArtillerySubsystem::QueueDamage(flecs::entity Target, float Damage, uint64 SourceEntityId,
+                                            FGameplayTag DamageType, FVector HitLocation, bool bIgnoreArmor)
+{
+	if (!Target.is_valid() || !FlecsWorld)
+	{
+		return false;
+	}
+
+	// Target must have health to receive damage
+	if (!Target.has<FHealthInstance>())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("QueueDamage: Entity %llu has no FHealthInstance"), Target.id());
+		return false;
+	}
+
+	// Don't damage dead entities
+	if (Target.has<FTagDead>())
+	{
+		return false;
+	}
+
+	// Get or add FPendingDamage component - obtain() adds if missing and returns reference
+	FPendingDamage& Pending = Target.obtain<FPendingDamage>();
+
+	// Queue the damage hit
+	Pending.AddHit(Damage, SourceEntityId, DamageType, HitLocation, false, bIgnoreArmor);
+
+	// Trigger the observer
+	Target.modified<FPendingDamage>();
+
+	UE_LOG(LogTemp, Verbose, TEXT("QueueDamage: %.1f damage queued to Entity %llu from %llu"),
+		Damage, Target.id(), SourceEntityId);
+
+	return true;
+}
+
+bool UFlecsArtillerySubsystem::QueueDamageByKey(FSkeletonKey TargetKey, float Damage, uint64 SourceEntityId,
+                                                 FGameplayTag DamageType)
+{
+	flecs::entity Target = GetEntityForBarrageKey(TargetKey);
+	if (!Target.is_valid())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("QueueDamageByKey: No entity for key %llu"), static_cast<uint64>(TargetKey));
+		return false;
+	}
+
+	return QueueDamage(Target, Damage, SourceEntityId, DamageType);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// WEAPON SYSTEM - PROJECTILE SPAWNING
+// ═══════════════════════════════════════════════════════════════
+
+void UFlecsArtillerySubsystem::ProcessPendingProjectileSpawns()
+{
+	// Must be called on Game thread
+	check(IsInGameThread());
+
+	UWorld* World = GetWorld();
+	if (!World) return;
+
+	FPendingProjectileSpawn Spawn;
+	while (PendingProjectileSpawns.Dequeue(Spawn))
+	{
+		if (!Spawn.ProjectileDefinition) continue;
+
+		// Get speed from projectile profile
+		float Speed = 5000.f;  // Default
+		if (Spawn.ProjectileDefinition->ProjectileProfile)
+		{
+			Speed = Spawn.ProjectileDefinition->ProjectileProfile->DefaultSpeed;
+		}
+		Speed *= Spawn.SpeedMultiplier;
+
+		// Spawn projectile(s)
+		// TODO: Apply Spawn.DamageMultiplier to spawned projectile's FDamageStatic
+		// This requires either: (1) override component on entity, or (2) store multiplier in FProjectileInstance
+		for (int32 i = 0; i < Spawn.ProjectilesPerShot; ++i)
+		{
+			FSkeletonKey ProjectileKey = UFlecsGameplayLibrary::SpawnProjectileFromEntityDef(
+				World,
+				Spawn.ProjectileDefinition,
+				Spawn.Location,
+				Spawn.Direction,
+				Speed,
+				Spawn.OwnerEntityId
+			);
+
+			if (ProjectileKey.IsValid())
+			{
+				UE_LOG(LogTemp, Verbose, TEXT("WEAPON: Spawned projectile Key=%llu from definition %s"),
+					static_cast<uint64>(ProjectileKey), *Spawn.ProjectileDefinition->GetName());
+			}
+		}
+	}
 }
 
 // ═══════════════════════════════════════════════════════════════

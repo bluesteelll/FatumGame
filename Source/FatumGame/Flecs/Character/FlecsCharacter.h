@@ -7,7 +7,6 @@
 #include "SkeletonTypes.h"
 #include "FlecsCharacter.generated.h"
 
-class UFlecsProjectileDefinition;
 class UFlecsEntityDefinition;
 class UBarrageCharacterMovement;
 class UPlayerKeyCarry;
@@ -135,9 +134,9 @@ public:
 	// PROJECTILE
 	// ═══════════════════════════════════════════════════════════════
 
-	/** Projectile definition (create in Content Browser) */
+	/** Projectile definition (UFlecsEntityDefinition with ProjectileProfile + RenderProfile + optional DamageProfile) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flecs|Projectile")
-	TObjectPtr<UFlecsProjectileDefinition> ProjectileDefinition;
+	TObjectPtr<UFlecsEntityDefinition> ProjectileDefinition;
 
 	/** Muzzle offset from character origin */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flecs|Projectile")
@@ -184,6 +183,34 @@ public:
 	TArray<FSkeletonKey> GetSpawnedEntities() const { return SpawnedEntityKeys; }
 
 	// ═══════════════════════════════════════════════════════════════
+	// WEAPON TESTING
+	// ═══════════════════════════════════════════════════════════════
+
+	/** Weapon definition for testing (must have WeaponProfile with ProjectileDefinition) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flecs|Weapon")
+	TObjectPtr<UFlecsEntityDefinition> TestWeaponDefinition;
+
+	/** Flecs entity ID of spawned test weapon (0 = not spawned) */
+	UPROPERTY(BlueprintReadOnly, Category = "Flecs|Weapon")
+	int64 TestWeaponEntityId = 0;
+
+	/** Spawn test weapon and equip it to character */
+	UFUNCTION(BlueprintCallable, Category = "Flecs|Weapon")
+	void SpawnAndEquipTestWeapon();
+
+	/** Start firing test weapon (hold) */
+	UFUNCTION(BlueprintCallable, Category = "Flecs|Weapon")
+	void StartFiringWeapon();
+
+	/** Stop firing test weapon (release) */
+	UFUNCTION(BlueprintCallable, Category = "Flecs|Weapon")
+	void StopFiringWeapon();
+
+	/** Reload test weapon */
+	UFUNCTION(BlueprintCallable, Category = "Flecs|Weapon")
+	void ReloadTestWeapon();
+
+	// ═══════════════════════════════════════════════════════════════
 	// CONTAINER TESTING
 	// ═══════════════════════════════════════════════════════════════
 
@@ -218,6 +245,10 @@ public:
 	/** Get SkeletonKey for this character */
 	UFUNCTION(BlueprintPure, Category = "Flecs")
 	FSkeletonKey GetEntityKey() const;
+
+	/** Get Flecs entity ID for this character */
+	UFUNCTION(BlueprintPure, Category = "Flecs")
+	int64 GetCharacterEntityId() const;
 
 	// ═══════════════════════════════════════════════════════════════
 	// EVENTS
@@ -264,6 +295,9 @@ protected:
 
 	/** Called when Fire is pressed */
 	void StartFire(const FInputActionValue& Value);
+
+	/** Called when Fire is released */
+	void StopFire(const FInputActionValue& Value);
 
 	/** Called when SpawnItem (E) is pressed */
 	void OnSpawnItem(const FInputActionValue& Value);

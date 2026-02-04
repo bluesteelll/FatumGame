@@ -14,6 +14,7 @@
 #include "FlecsInstanceComponents.h"
 #include "BarrageDispatch.h"
 #include "FBarragePrimitive.h"
+#include "FBShapeParams.h"
 #include "Systems/BarrageEntitySpawner.h"
 #include "Skeletonize.h"
 #include "flecs.h"
@@ -173,56 +174,148 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 	// ─────────────────────────────────────────────────────────────
 	if (EffectivePhysics || EffectiveRender)
 	{
-		// Validate that we have a mesh (required by FBarrageSpawnUtils)
+		// Validate that we have a mesh (required for ISM rendering)
 		if (!EffectiveRender || !EffectiveRender->Mesh)
 		{
 			UE_LOG(LogFlecsEntity, Warning, TEXT("SpawnEntity: World entity requires RenderProfile with Mesh!"));
 			return FSkeletonKey();
 		}
 
-		// Generate unique entity key using GLOBAL counter (shared with all spawners)
-		EntityKey = FBarrageSpawnUtils::GenerateUniqueKey();
-
-		FBarrageSpawnParams Params;
-		Params.EntityKey = EntityKey;
-		Params.WorldTransform = FTransform(Request.Rotation, Request.Location);
-		Params.InitialVelocity = Request.InitialVelocity;
-		Params.bIsMovable = true;
-
-		// Physics profile settings
-		if (EffectivePhysics)
+		UBarrageDispatch* Barrage = World->GetSubsystem<UBarrageDispatch>();
+		UBarrageRenderManager* Renderer = UBarrageRenderManager::Get(World);
+		if (!Barrage)
 		{
-			Params.PhysicsLayer = ToBarrageLayer(EffectivePhysics->Layer);
-			Params.bIsSensor = EffectivePhysics->bIsSensor;
-			Params.GravityFactor = EffectivePhysics->GravityFactor;
-			Params.Friction = EffectivePhysics->Friction;
-			Params.Restitution = EffectivePhysics->Restitution;
-			// Note: CollisionRadius, Mass, Damping are set via shape creation
-		}
-		else
-		{
-			// Default physics for render-only entities
-			Params.PhysicsLayer = EPhysicsLayer::MOVING;
-			Params.bIsSensor = true;  // No collision, just render
-		}
-
-		// Render profile settings (already validated above)
-		Params.Mesh = EffectiveRender->Mesh;
-		Params.Material = EffectiveRender->MaterialOverride;
-		Params.MeshScale = EffectiveRender->Scale;
-		Params.bAutoCollider = true;
-
-		// Spawn physics body and ISM instance
-		FBarrageSpawnResult Result = FBarrageSpawnUtils::SpawnEntity(World, Params);
-		if (!Result.bSuccess)
-		{
-			UE_LOG(LogFlecsEntity, Warning, TEXT("SpawnEntity: Failed to spawn Barrage entity (Key=%llu)"),
-				static_cast<uint64>(EntityKey));
+			UE_LOG(LogFlecsEntity, Error, TEXT("SpawnEntity: No UBarrageDispatch!"));
 			return FSkeletonKey();
 		}
 
-		UE_LOG(LogFlecsEntity, Log, TEXT("SpawnEntity: Spawned world entity Key=%llu at %s"),
-			static_cast<uint64>(EntityKey), *Request.Location.ToString());
+		// ─────────────────────────────────────────────────────────
+		// Determine physics shape type and settings
+		// ─────────────────────────────────────────────────────────
+		const bool bIsProjectile = EffectiveProjectile != nullptr;
+		const bool bIsBouncing = bIsProjectile && EffectiveProjectile->IsBouncing();
+		const float GravityFactor = EffectivePhysics ? EffectivePhysics->GravityFactor : 0.f;
+		const float Friction = EffectivePhysics ? EffectivePhysics->Friction : 0.2f;
+		const float Restitution = EffectivePhysics ? EffectivePhysics->Restitution : 0.3f;
+		const float CollisionRadius = EffectivePhysics ? EffectivePhysics->CollisionRadius : 30.f;
+
+		// Generate unique entity key
+		if (bIsProjectile)
+		{
+			EntityKey = FBarrageSpawnUtils::GenerateUniqueKey(SKELLY::SFIX_GUN_SHOT);
+		}
+		else
+		{
+			EntityKey = FBarrageSpawnUtils::GenerateUniqueKey();
+		}
+
+		FBLet Body;
+
+		if (bIsProjectile)
+		{
+			// ═══════════════════════════════════════════════════════
+			// PROJECTILE: Use sphere collision
+			// Dynamic body if: bouncing OR has gravity
+			// Sensor if: no bouncing AND no gravity (laser-like)
+			// ═══════════════════════════════════════════════════════
+			const bool bNeedsDynamicBody = bIsBouncing || GravityFactor > 0.f;
+
+			FBSphereParams SphereParams = FBarrageBounder::GenerateSphereBounds(Request.Location, CollisionRadius);
+
+			if (bNeedsDynamicBody)
+			{
+				Body = Barrage->CreateBouncingSphere(
+					SphereParams,
+					EntityKey,
+					static_cast<uint16>(EPhysicsLayer::PROJECTILE),
+					bIsBouncing ? Restitution : 0.f,  // No restitution = stops on contact
+					Friction
+				);
+			}
+			else
+			{
+				Body = Barrage->CreatePrimitive(
+					SphereParams,
+					EntityKey,
+					static_cast<uint16>(EPhysicsLayer::PROJECTILE),
+					true  // IsSensor - laser-like, no physics
+				);
+			}
+
+			UE_LOG(LogFlecsEntity, Log, TEXT("SpawnEntity: Projectile Key=%llu Bouncing=%d Gravity=%.2f Dynamic=%d"),
+				static_cast<uint64>(EntityKey), bIsBouncing, GravityFactor, bNeedsDynamicBody);
+		}
+		else
+		{
+			// ═══════════════════════════════════════════════════════
+			// NON-PROJECTILE: Use box collision (auto from mesh bounds)
+			// ═══════════════════════════════════════════════════════
+			FBarrageSpawnParams Params;
+			Params.EntityKey = EntityKey;
+			Params.WorldTransform = FTransform(Request.Rotation, Request.Location);
+			Params.InitialVelocity = Request.InitialVelocity;
+			Params.bIsMovable = true;
+
+			if (EffectivePhysics)
+			{
+				Params.PhysicsLayer = ToBarrageLayer(EffectivePhysics->Layer);
+				Params.bIsSensor = EffectivePhysics->bIsSensor;
+				Params.GravityFactor = GravityFactor;
+				Params.Friction = Friction;
+				Params.Restitution = Restitution;
+			}
+			else
+			{
+				Params.PhysicsLayer = EPhysicsLayer::MOVING;
+				Params.bIsSensor = true;
+			}
+
+			Params.Mesh = EffectiveRender->Mesh;
+			Params.Material = EffectiveRender->MaterialOverride;
+			Params.MeshScale = EffectiveRender->Scale;
+			Params.bAutoCollider = true;
+
+			FBarrageSpawnResult Result = FBarrageSpawnUtils::SpawnEntity(World, Params);
+			if (!Result.bSuccess)
+			{
+				UE_LOG(LogFlecsEntity, Warning, TEXT("SpawnEntity: Failed to spawn box entity (Key=%llu)"),
+					static_cast<uint64>(EntityKey));
+				return FSkeletonKey();
+			}
+
+			// FBarrageSpawnUtils already added ISM, so skip manual ISM add below
+			Body = Barrage->GetShapeRef(EntityKey);
+		}
+
+		// For projectiles, we need to manually set velocity/gravity and add ISM
+		if (bIsProjectile)
+		{
+			if (!FBarragePrimitive::IsNotNull(Body))
+			{
+				UE_LOG(LogFlecsEntity, Error, TEXT("SpawnEntity: Failed to create projectile physics body!"));
+				return FSkeletonKey();
+			}
+
+			// Set velocity and gravity
+			if (!Request.InitialVelocity.IsNearlyZero())
+			{
+				FBarragePrimitive::SetVelocity(Request.InitialVelocity, Body);
+			}
+			FBarragePrimitive::SetGravityFactor(GravityFactor, Body);
+
+			// Add ISM render instance
+			if (Renderer)
+			{
+				FTransform RenderTransform;
+				RenderTransform.SetLocation(Request.Location);
+				RenderTransform.SetRotation(Request.Rotation.Quaternion() * EffectiveRender->RotationOffset.Quaternion());
+				RenderTransform.SetScale3D(EffectiveRender->Scale);
+				Renderer->AddInstance(EffectiveRender->Mesh, EffectiveRender->MaterialOverride, RenderTransform, EntityKey);
+			}
+		}
+
+		UE_LOG(LogFlecsEntity, Log, TEXT("SpawnEntity: Spawned world entity Key=%llu at %s (Projectile=%d)"),
+			static_cast<uint64>(EntityKey), *Request.Location.ToString(), bIsProjectile);
 	}
 	else
 	{
@@ -273,6 +366,7 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 
 		// Owner
 		FSkeletonKey OwnerKey;
+		int64 OwnerEntityId;  // For projectiles (friendly fire check)
 
 		// Profile flags (for entities without EntityDefinition)
 		bool bHasHealth;
@@ -323,6 +417,7 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 	Data.bHasLoot = bHasLoot;
 	Data.bIsCharacter = bIsCharacter;
 	Data.OwnerKey = Request.OwnerKey;
+	Data.OwnerEntityId = Request.OwnerEntityId;
 
 	// Enqueue Flecs entity creation
 	FlecsSubsystem->EnqueueCommand([FlecsSubsystem, Data]()
@@ -409,6 +504,7 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 			ProjInst.LifetimeRemaining = Data.Lifetime;
 			ProjInst.BounceCount = 0;
 			ProjInst.GraceFramesRemaining = Data.GraceFrames;
+			ProjInst.OwnerEntityId = Data.OwnerEntityId;
 			Entity.set<FProjectileInstance>(ProjInst);
 			Entity.add<FTagProjectile>();
 		}

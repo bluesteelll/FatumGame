@@ -119,9 +119,13 @@ struct FATUMGAME_API FEntitySpawnRequest
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Overrides")
 	float DespawnTime = -1.f;
 
-	/** Owner entity key (for containers, projectiles) */
+	/** Owner entity key (for containers) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Overrides")
 	FSkeletonKey OwnerKey;
+
+	/** Owner Flecs entity ID (for projectiles - friendly fire check) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Overrides")
+	int64 OwnerEntityId = 0;
 
 	// ═══════════════════════════════════════════════════════════════
 	// TAGS
@@ -247,10 +251,17 @@ struct FATUMGAME_API FEntitySpawnRequest
 		return *this;
 	}
 
-	/** Set owner */
+	/** Set owner (SkeletonKey, for containers) */
 	FEntitySpawnRequest& WithOwner(FSkeletonKey Owner)
 	{
 		OwnerKey = Owner;
+		return *this;
+	}
+
+	/** Set owner entity ID (Flecs ID, for projectiles - friendly fire) */
+	FEntitySpawnRequest& WithOwnerEntity(int64 OwnerId)
+	{
+		OwnerEntityId = OwnerId;
 		return *this;
 	}
 

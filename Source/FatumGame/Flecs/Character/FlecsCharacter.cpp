@@ -1,14 +1,17 @@
 
 #include "FlecsCharacter.h"
 #include "FlecsGameplayLibrary.h"
-#include "FlecsProjectileDefinition.h"
 #include "FlecsEntitySpawner.h"
 #include "FlecsEntityDefinition.h"
+#include "FlecsRenderProfile.h"
+#include "FlecsProjectileProfile.h"
+#include "FlecsWeaponProfile.h"
 #include "FlecsItemDefinition.h"
 #include "FlecsArtillerySubsystem.h"
 #include "FlecsGameTags.h"
 #include "FlecsStaticComponents.h"
 #include "FlecsInstanceComponents.h"
+#include "FlecsWeaponComponents.h"
 #include "Engine/Engine.h"  // For GEngine->AddOnScreenDebugMessage
 #include "EssentialTypes/PlayerKeyCarry.h"
 #include "PhysicsTypes/BarrageCharacterMovement.h"
@@ -19,6 +22,7 @@
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
 #include "InputActionValue.h"
+#include "Async/Async.h"
 
 AFlecsCharacter::AFlecsCharacter(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
@@ -201,6 +205,7 @@ void AFlecsCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 		if (FireAction)
 		{
 			EnhancedInputComponent->BindAction(FireAction, ETriggerEvent::Started, this, &AFlecsCharacter::StartFire);
+			EnhancedInputComponent->BindAction(FireAction, ETriggerEvent::Completed, this, &AFlecsCharacter::StopFire);
 		}
 
 		// Spawn Item (E)
@@ -257,7 +262,21 @@ void AFlecsCharacter::Look(const FInputActionValue& Value)
 
 void AFlecsCharacter::StartFire(const FInputActionValue& Value)
 {
-	FireProjectile();
+	// If we have a weapon, use the weapon system
+	if (TestWeaponDefinition)
+	{
+		// Spawn weapon if not yet spawned
+		if (TestWeaponEntityId == 0)
+		{
+			SpawnAndEquipTestWeapon();
+		}
+		StartFiringWeapon();
+	}
+	else
+	{
+		// Fallback to direct projectile spawning
+		FireProjectile();
+	}
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -363,20 +382,38 @@ FSkeletonKey AFlecsCharacter::FireProjectile()
 
 FSkeletonKey AFlecsCharacter::FireProjectileInDirection(FVector Direction)
 {
-	if (!ProjectileDefinition || !ProjectileDefinition->Mesh)
+	if (!ProjectileDefinition || !ProjectileDefinition->RenderProfile || !ProjectileDefinition->RenderProfile->Mesh)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("FlecsCharacter::FireProjectile - No ProjectileDefinition or mesh!"));
+		UE_LOG(LogTemp, Warning, TEXT("FlecsCharacter::FireProjectile - No ProjectileDefinition or RenderProfile with mesh!"));
+		return FSkeletonKey();
+	}
+
+	if (!ProjectileDefinition->ProjectileProfile)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("FlecsCharacter::FireProjectile - No ProjectileProfile!"));
 		return FSkeletonKey();
 	}
 
 	Direction.Normalize();
 
-	return UFlecsGameplayLibrary::SpawnProjectileFromDefinition(
+	// Get owner entity ID for friendly fire prevention
+	int64 OwnerEntityId = 0;
+	if (UFlecsArtillerySubsystem* Subsystem = GetWorld()->GetSubsystem<UFlecsArtillerySubsystem>())
+	{
+		flecs::entity OwnerEntity = Subsystem->GetEntityForBarrageKey(GetEntityKey());
+		if (OwnerEntity.is_valid())
+		{
+			OwnerEntityId = static_cast<int64>(OwnerEntity.id());
+		}
+	}
+
+	return UFlecsGameplayLibrary::SpawnProjectileFromEntityDef(
 		GetWorld(),
 		ProjectileDefinition,
 		GetMuzzleLocation(),
 		Direction,
-		ProjectileSpeedOverride
+		ProjectileSpeedOverride,
+		OwnerEntityId
 	);
 }
 
@@ -384,9 +421,25 @@ TArray<FSkeletonKey> AFlecsCharacter::FireProjectileSpread(int32 Count, float Sp
 {
 	TArray<FSkeletonKey> Keys;
 
-	if (!ProjectileDefinition || !ProjectileDefinition->Mesh)
+	if (!ProjectileDefinition || !ProjectileDefinition->RenderProfile || !ProjectileDefinition->RenderProfile->Mesh)
 	{
 		return Keys;
+	}
+
+	if (!ProjectileDefinition->ProjectileProfile)
+	{
+		return Keys;
+	}
+
+	// Get owner entity ID for friendly fire prevention
+	int64 OwnerEntityId = 0;
+	if (UFlecsArtillerySubsystem* Subsystem = GetWorld()->GetSubsystem<UFlecsArtillerySubsystem>())
+	{
+		flecs::entity OwnerEntity = Subsystem->GetEntityForBarrageKey(GetEntityKey());
+		if (OwnerEntity.is_valid())
+		{
+			OwnerEntityId = static_cast<int64>(OwnerEntity.id());
+		}
 	}
 
 	FVector Direction = GetFiringDirection();
@@ -401,12 +454,13 @@ TArray<FSkeletonKey> AFlecsCharacter::FireProjectileSpread(int32 Count, float Sp
 		SpreadRotation.Yaw += AngleOffset;
 		SpreadRotation.Pitch += FMath::RandRange(-SpreadAngle * 0.25f, SpreadAngle * 0.25f);
 
-		FSkeletonKey Key = UFlecsGameplayLibrary::SpawnProjectileFromDefinition(
+		FSkeletonKey Key = UFlecsGameplayLibrary::SpawnProjectileFromEntityDef(
 			GetWorld(),
 			ProjectileDefinition,
 			SpawnLocation,
 			SpreadRotation.Vector(),
-			ProjectileSpeedOverride
+			ProjectileSpeedOverride,
+			OwnerEntityId
 		);
 
 		if (Key.IsValid())
@@ -635,4 +689,139 @@ void AFlecsCharacter::RemoveAllItemsFromTestContainer()
 FSkeletonKey AFlecsCharacter::GetEntityKey() const
 {
 	return KeyCarry ? KeyCarry->GetMyKey() : FSkeletonKey();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// WEAPON TESTING
+// ═══════════════════════════════════════════════════════════════════════════
+
+void AFlecsCharacter::StopFire(const FInputActionValue& Value)
+{
+	if (TestWeaponEntityId != 0)
+	{
+		StopFiringWeapon();
+	}
+}
+
+void AFlecsCharacter::SpawnAndEquipTestWeapon()
+{
+	if (!TestWeaponDefinition || !TestWeaponDefinition->WeaponProfile)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("FlecsCharacter: TestWeaponDefinition is null or has no WeaponProfile!"));
+		return;
+	}
+
+	UFlecsArtillerySubsystem* FlecsSubsystem = GetWorld()->GetSubsystem<UFlecsArtillerySubsystem>();
+	if (!FlecsSubsystem) return;
+
+	// Get character's BarrageKey (from KeyCarry component)
+	FSkeletonKey CharKey = GetEntityKey();
+	if (!CharKey.IsValid())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("FlecsCharacter: Character has no valid entity key!"));
+		return;
+	}
+
+	// Create weapon entity via EnqueueCommand
+	// IMPORTANT: Look up CharEntityId INSIDE the command, on Artillery thread,
+	// to ensure BeginPlay's entity binding has already been processed.
+	FlecsSubsystem->EnqueueCommand([this, FlecsSubsystem, CharKey]()
+	{
+		flecs::world* World = FlecsSubsystem->GetFlecsWorld();
+		if (!World) return;
+
+		// Look up character entity on Artillery thread (after BeginPlay binding)
+		flecs::entity CharEntity = FlecsSubsystem->GetEntityForBarrageKey(CharKey);
+		if (!CharEntity.is_valid())
+		{
+			UE_LOG(LogTemp, Warning, TEXT("FlecsCharacter: No Flecs entity for character key %llu!"),
+				static_cast<uint64>(CharKey));
+			return;
+		}
+		int64 CharEntityId = static_cast<int64>(CharEntity.id());
+		UE_LOG(LogTemp, Log, TEXT("FlecsCharacter: Found character entity %lld for key %llu"),
+			CharEntityId, static_cast<uint64>(CharKey));
+
+		// Get or create prefab for weapon
+		flecs::entity Prefab = FlecsSubsystem->GetOrCreateEntityPrefab(TestWeaponDefinition);
+		if (!Prefab.is_valid())
+		{
+			UE_LOG(LogTemp, Warning, TEXT("FlecsCharacter: Failed to create weapon prefab!"));
+			return;
+		}
+
+		// Create weapon entity from prefab
+		flecs::entity WeaponEntity = World->entity()
+			.is_a(Prefab)
+			.add<FTagWeapon>();
+
+		// Initialize FWeaponInstance
+		const FWeaponStatic* Static = WeaponEntity.try_get<FWeaponStatic>();
+		if (Static)
+		{
+			FWeaponInstance Instance;
+			Instance.CurrentAmmo = Static->MagazineSize;
+			Instance.ReserveAmmo = Static->MaxReserveAmmo;
+			WeaponEntity.set<FWeaponInstance>(Instance);
+		}
+
+		// Equip to character
+		FEquippedBy Equipped;
+		Equipped.CharacterEntityId = CharEntityId;
+		Equipped.SlotId = 0;
+		WeaponEntity.set<FEquippedBy>(Equipped);
+
+		// Store weapon entity ID (thread-safe assignment via main thread later)
+		int64 WeaponId = static_cast<int64>(WeaponEntity.id());
+
+		// Use AsyncTask to update TestWeaponEntityId on game thread
+		AsyncTask(ENamedThreads::GameThread, [this, WeaponId]()
+		{
+			TestWeaponEntityId = WeaponId;
+			UE_LOG(LogTemp, Log, TEXT("FlecsCharacter: Weapon spawned and equipped (EntityId=%lld)"), WeaponId);
+			if (GEngine)
+			{
+				GEngine->AddOnScreenDebugMessage(-1, 3.f, FColor::Green,
+					FString::Printf(TEXT("Weapon equipped! Ammo: %d"), 30));
+			}
+		});
+	});
+}
+
+void AFlecsCharacter::StartFiringWeapon()
+{
+	if (TestWeaponEntityId == 0) return;
+
+	// Update aim direction based on camera
+	FVector AimDir = GetFiringDirection();
+	UFlecsGameplayLibrary::SetAimDirection(this, GetCharacterEntityId(), AimDir);
+
+	// Start firing
+	UFlecsGameplayLibrary::StartFiring(this, TestWeaponEntityId);
+}
+
+void AFlecsCharacter::StopFiringWeapon()
+{
+	if (TestWeaponEntityId == 0) return;
+	UFlecsGameplayLibrary::StopFiring(this, TestWeaponEntityId);
+}
+
+void AFlecsCharacter::ReloadTestWeapon()
+{
+	if (TestWeaponEntityId == 0) return;
+	UFlecsGameplayLibrary::ReloadWeapon(this, TestWeaponEntityId);
+}
+
+int64 AFlecsCharacter::GetCharacterEntityId() const
+{
+	UFlecsArtillerySubsystem* FlecsSubsystem = GetWorld()->GetSubsystem<UFlecsArtillerySubsystem>();
+	if (!FlecsSubsystem) return 0;
+
+	FSkeletonKey CharKey = GetEntityKey();
+	if (!CharKey.IsValid()) return 0;
+
+	flecs::entity CharEntity = FlecsSubsystem->GetEntityForBarrageKey(CharKey);
+	if (!CharEntity.is_valid()) return 0;
+
+	return static_cast<int64>(CharEntity.id());
 }

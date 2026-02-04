@@ -6,6 +6,7 @@
 #include "Subsystems/WorldSubsystem.h"
 #include "ArtilleryActorControllerConcepts.h"
 #include "SkeletonTypes.h"
+#include "GameplayTagContainer.h"
 #include "ORDIN.h"
 #include "flecs.h"
 #include "HAL/ThreadSafeBool.h"
@@ -19,6 +20,21 @@ class UFlecsEntityDefinition;
 class UFlecsItemDefinition;
 struct BarrageContactEvent;
 struct FItemStaticData;
+
+/**
+ * Pending projectile spawn request.
+ * Queued by WeaponFireSystem (Artillery thread), processed on Game thread.
+ */
+struct FPendingProjectileSpawn
+{
+	UFlecsEntityDefinition* ProjectileDefinition = nullptr;
+	FVector Location = FVector::ZeroVector;
+	FVector Direction = FVector::ForwardVector;
+	float SpeedMultiplier = 1.0f;
+	float DamageMultiplier = 1.0f;
+	int64 OwnerEntityId = 0;
+	int32 ProjectilesPerShot = 1;
+};
 
 /**
  * Bridge subsystem that runs the Flecs ECS world on the Artillery busy worker thread (~120Hz).
@@ -137,6 +153,38 @@ public:
 	bool HasEntityForBarrageKey(FSkeletonKey BarrageKey) const;
 
 	// ═══════════════════════════════════════════════════════════════
+	// DAMAGE SYSTEM API
+	// Queue damage from any source - processed by DamageObserver.
+	// ═══════════════════════════════════════════════════════════════
+
+	/**
+	 * Queue damage to an entity. Processed by DamageObserver on next tick.
+	 * Can be called from any damage source: collision, ability, environment, API.
+	 *
+	 * @param Target Target Flecs entity (must have FHealthInstance).
+	 * @param Damage Base damage amount (before armor/modifiers).
+	 * @param SourceEntityId Source entity (0 = environment/no source).
+	 * @param DamageType Damage type tag for resistances (optional).
+	 * @param HitLocation World location for effects/knockback (optional).
+	 * @param bIgnoreArmor Bypass armor calculation.
+	 * @return true if damage was queued successfully.
+	 */
+	bool QueueDamage(flecs::entity Target, float Damage, uint64 SourceEntityId = 0,
+	                 FGameplayTag DamageType = FGameplayTag(), FVector HitLocation = FVector::ZeroVector,
+	                 bool bIgnoreArmor = false);
+
+	/**
+	 * Queue damage to an entity by BarrageKey. Convenience wrapper.
+	 * @param TargetKey BarrageKey of target entity.
+	 * @param Damage Base damage amount.
+	 * @param SourceEntityId Source entity (0 = environment).
+	 * @param DamageType Damage type tag (optional).
+	 * @return true if damage was queued successfully.
+	 */
+	bool QueueDamageByKey(FSkeletonKey TargetKey, float Damage, uint64 SourceEntityId = 0,
+	                      FGameplayTag DamageType = FGameplayTag());
+
+	// ═══════════════════════════════════════════════════════════════
 	// ENTITY PREFAB REGISTRY
 	// Prefabs store shared static data for entity types.
 	// Each UFlecsEntityDefinition gets one prefab with:
@@ -170,6 +218,24 @@ public:
 	 * @return Prefab entity or invalid.
 	 */
 	flecs::entity GetItemPrefab(int32 TypeId) const;
+
+	// ═══════════════════════════════════════════════════════════════
+	// WEAPON SYSTEM API
+	// Pending projectile spawns from WeaponFireSystem.
+	// ═══════════════════════════════════════════════════════════════
+
+	/**
+	 * Process pending projectile spawns from weapon fire.
+	 * Must be called on Game thread (e.g., from Tick or callback).
+	 * Spawns actual Barrage bodies and Flecs entities.
+	 */
+	void ProcessPendingProjectileSpawns();
+
+	/**
+	 * Get pending projectile spawn queue.
+	 * For internal use by weapon systems.
+	 */
+	TQueue<FPendingProjectileSpawn, EQueueMode::Mpsc>& GetPendingProjectileSpawns() { return PendingProjectileSpawns; }
 
 	/**
 	 * Get EntityDefinition from an item entity (via its prefab).
@@ -213,6 +279,9 @@ public:
 	{
 		RETURN_QUICK_DECLARE_CYCLE_STAT(UFlecsArtillerySubsystem, STATGROUP_Tickables);
 	}
+
+	// UTickableWorldSubsystem - Game thread tick
+	virtual void Tick(float DeltaTime) override;
 
 private:
 	/** Set up Flecs systems that run on the Artillery thread. */
@@ -263,4 +332,12 @@ private:
 
 	/** TypeId → Prefab entity. Item-specific prefabs (for lookup by TypeId). */
 	TMap<int32, flecs::entity> ItemPrefabs;
+
+	// ═══════════════════════════════════════════════════════════════
+	// WEAPON SYSTEM
+	// Pending projectile spawns queued by WeaponFireSystem.
+	// ═══════════════════════════════════════════════════════════════
+
+	/** Queue of projectile spawns from weapon fire. Artillery → Game thread. */
+	TQueue<FPendingProjectileSpawn, EQueueMode::Mpsc> PendingProjectileSpawns;
 };
