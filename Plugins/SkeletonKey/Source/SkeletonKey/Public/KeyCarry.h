@@ -100,7 +100,7 @@ public:
 		IsReady = false;
 	}
 
-	//todo: switch this to an artillery tick
+	//todo: switch this to a simulation tick
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType,
 	                           FActorComponentTickFunction* ThisTickFunction) override
 	{

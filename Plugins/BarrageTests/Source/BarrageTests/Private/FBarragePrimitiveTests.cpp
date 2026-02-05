@@ -7,7 +7,7 @@
 * and the static global pointer to the dispatch is required for many of the static functions to work.
 **/
 
-BEGIN_DEFINE_SPEC(FBarragePrimitiveTests, "Artillery.Barrage.Barrage Primitive Tests", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+BEGIN_DEFINE_SPEC(FBarragePrimitiveTests, "Barrage.Barrage Primitive Tests", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 END_DEFINE_SPEC(FBarragePrimitiveTests)
 void FBarragePrimitiveTests::Define()
 {

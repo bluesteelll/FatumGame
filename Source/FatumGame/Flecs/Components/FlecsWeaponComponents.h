@@ -31,6 +31,15 @@ struct FAimDirection
 {
 	/** Normalized aim direction in world space */
 	FVector Direction = FVector::ForwardVector;
+
+	/** Muzzle offset from character center (capsule center) in local space.
+	 *  Set by character, read by WeaponFireSystem. */
+	FVector MuzzleOffset = FVector::ZeroVector;
+
+	/** Character world position (from UE actor, NOT from physics body).
+	 *  Physics body position drifts due to gravity between SetPosition updates.
+	 *  WeaponFireSystem uses this instead of FBarragePrimitive::GetPosition(). */
+	FVector CharacterPosition = FVector::ZeroVector;
 };
 
 // ═══════════════════════════════════════════════════════════════
@@ -167,11 +176,13 @@ struct FWeaponInstance
 	int32 ReserveAmmo = 300;
 
 	// ─────────────────────────────────────────────────────────
-	// FIRING STATE
+	// FIRING STATE (countdown timers - subtract dt, fire when <= 0)
 	// ─────────────────────────────────────────────────────────
 
-	/** Time since last shot in seconds */
-	float TimeSinceLastShot = 999.f;
+	/** Countdown: seconds until weapon can fire again. <= 0 means ready.
+	 *  Initialized to 0 so weapon can fire immediately after creation.
+	 *  On fire: set to FireInterval. Each tick: -= DeltaTime. */
+	float FireCooldownRemaining = 0.f;
 
 	/** Remaining shots in current burst */
 	int32 BurstShotsRemaining = 0;
@@ -194,12 +205,16 @@ struct FWeaponInstance
 	float ReloadTimeRemaining = 0.f;
 
 	// ─────────────────────────────────────────────────────────
-	// INPUT FLAGS (Game Thread → Artillery Thread)
+	// INPUT FLAGS (Game Thread → Simulation Thread)
 	// Set by game thread via EnqueueCommand, consumed by systems.
 	// ─────────────────────────────────────────────────────────
 
-	/** Fire button is held */
+	/** Fire button is held (continuous: true while pressed, false on release) */
 	bool bFireRequested = false;
+
+	/** Latched fire trigger: set on press, consumed only after successful fire.
+	 *  Survives Start+Stop command batching in the command queue. */
+	bool bFireTriggerPending = false;
 
 	/** Reload was requested */
 	bool bReloadRequested = false;
@@ -208,12 +223,12 @@ struct FWeaponInstance
 	// HELPERS
 	// ─────────────────────────────────────────────────────────
 
-	/** Check if weapon can fire (cooldown ready, has ammo, not reloading) */
-	bool CanFire(float FireInterval) const
+	/** Check if weapon can fire (cooldown expired, has ammo, not reloading) */
+	bool CanFire() const
 	{
 		return !bIsReloading
 			&& CurrentAmmo > 0
-			&& TimeSinceLastShot >= FireInterval
+			&& FireCooldownRemaining <= 0.f
 			&& BurstCooldownRemaining <= 0.f;
 	}
 

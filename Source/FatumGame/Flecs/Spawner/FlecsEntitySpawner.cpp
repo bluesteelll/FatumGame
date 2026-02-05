@@ -15,7 +15,8 @@
 #include "BarrageDispatch.h"
 #include "FBarragePrimitive.h"
 #include "FBShapeParams.h"
-#include "Systems/BarrageEntitySpawner.h"
+#include "BarrageSpawnUtils.h"
+#include "FlecsRenderManager.h"
 #include "Skeletonize.h"
 #include "flecs.h"
 
@@ -182,7 +183,7 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 		}
 
 		UBarrageDispatch* Barrage = World->GetSubsystem<UBarrageDispatch>();
-		UBarrageRenderManager* Renderer = UBarrageRenderManager::Get(World);
+		UFlecsRenderManager* Renderer = UFlecsRenderManager::Get(World);
 		if (!Barrage)
 		{
 			UE_LOG(LogFlecsEntity, Error, TEXT("SpawnEntity: No UBarrageDispatch!"));
@@ -273,6 +274,7 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 			Params.Mesh = EffectiveRender->Mesh;
 			Params.Material = EffectiveRender->MaterialOverride;
 			Params.MeshScale = EffectiveRender->Scale;
+
 			Params.bAutoCollider = true;
 
 			FBarrageSpawnResult Result = FBarrageSpawnUtils::SpawnEntity(World, Params);
@@ -328,7 +330,7 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 	}
 
 	// ─────────────────────────────────────────────────────────────
-	// PHASE 2: Create Flecs entity with components (on Artillery thread)
+	// PHASE 2: Create Flecs entity with components (on simulation thread)
 	// Uses NEW prefab architecture: Static components on prefab, Instance on entity.
 	// ─────────────────────────────────────────────────────────────
 
@@ -679,7 +681,7 @@ void UFlecsEntityLibrary::DestroyEntity(
 						static_cast<uint64>(EntityKey));
 
 					// Remove ISM
-					if (UBarrageRenderManager* Renderer = UBarrageRenderManager::Get(Barrage->GetWorld()))
+					if (UFlecsRenderManager* Renderer = UFlecsRenderManager::Get(Barrage->GetWorld()))
 					{
 						Renderer->RemoveInstance(EntityKey);
 					}
@@ -1297,7 +1299,7 @@ bool UFlecsEntityLibrary::PickupItem(
 		return false;
 	}
 
-	// TODO: Implement via Artillery thread
+	// TODO: Implement via simulation thread
 	UE_LOG(LogFlecsEntity, Warning, TEXT("PickupItem: Not yet implemented"));
 	return false;
 }
@@ -1314,7 +1316,7 @@ FSkeletonKey UFlecsEntityLibrary::DropItem(
 		return FSkeletonKey();
 	}
 
-	// TODO: Implement via Artillery thread
+	// TODO: Implement via simulation thread
 	UE_LOG(LogFlecsEntity, Warning, TEXT("DropItem: Not yet implemented"));
 	return FSkeletonKey();
 }

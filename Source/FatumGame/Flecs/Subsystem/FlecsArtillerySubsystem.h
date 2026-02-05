@@ -1,117 +1,110 @@
-// Artillery-Flecs Bridge: Runs Flecs ECS world on the Artillery 120Hz thread.
+// FlecsArtillerySubsystem: Owns the simulation thread (physics + ECS).
 
 #pragma once
 
 #include "CoreMinimal.h"
 #include "Subsystems/WorldSubsystem.h"
-#include "ArtilleryActorControllerConcepts.h"
 #include "SkeletonTypes.h"
+#include "KeyedConcept.h"
 #include "GameplayTagContainer.h"
-#include "ORDIN.h"
 #include "flecs.h"
-#include "HAL/ThreadSafeBool.h"
+#include "FSimulationWorker.h"
 #include <atomic>
 #include "FlecsArtillerySubsystem.generated.h"
 
 class UBarrageDispatch;
-class UArtilleryDispatch;
-class UBarrageRenderManager;
+class UFlecsRenderManager;
 class UFlecsEntityDefinition;
 class UFlecsItemDefinition;
 struct BarrageContactEvent;
 struct FItemStaticData;
 
 /**
- * Pending projectile spawn request.
- * Queued by WeaponFireSystem (Artillery thread), processed on Game thread.
+ * Pending ISM render instance for a projectile.
+ * Physics body + Flecs entity are created on sim thread.
+ * Only ISM registration needs game thread (UE rendering).
  */
 struct FPendingProjectileSpawn
 {
-	UFlecsEntityDefinition* ProjectileDefinition = nullptr;
+	UStaticMesh* Mesh = nullptr;
+	UMaterialInterface* Material = nullptr;
+	FVector Scale = FVector::OneVector;
+	FRotator RotationOffset = FRotator::ZeroRotator;
 	FVector Location = FVector::ZeroVector;
 	FVector Direction = FVector::ForwardVector;
-	float SpeedMultiplier = 1.0f;
-	float DamageMultiplier = 1.0f;
-	int64 OwnerEntityId = 0;
-	int32 ProjectilesPerShot = 1;
+	FSkeletonKey EntityKey;
 };
 
 /**
- * Bridge subsystem that runs the Flecs ECS world on the Artillery busy worker thread (~120Hz).
+ * Owns the simulation thread that drives Barrage physics + Flecs ECS.
  *
- * This subsystem:
- * - Owns the tick lifecycle of the Flecs world (calls world.progress from ArtilleryTick)
- * - Provides a thread-safe command queue for game thread -> artillery thread operations
- * - Provides LOCK-FREE bidirectional binding between Flecs entities and Barrage physics bodies
+ * Architecture:
+ * - Game thread: Tick() processes cosmetics, pending spawns, EnqueueCommand()
+ * - Simulation thread (FSimulationWorker): DrainCommandQueue → StackUp → StepWorld → BroadcastContactEvents → progress()
+ * - Flecs worker threads: parallel system execution during progress()
  *
- * BIDIRECTIONAL BINDING ARCHITECTURE (Lock-Free):
- * ═══════════════════════════════════════════════════════════════════════════════════════
- * Forward lookup (Entity → BarrageKey):
- *   - Flecs sparse set: entity.get<FBarrageBody>()->BarrageKey  [O(1)]
- *
- * Reverse lookup (BarrageKey → Entity):
- *   - libcuckoo map:    UBarrageDispatch::GetShapeRef(Key)      [O(1)]
- *   - atomic load:      FBLet->GetFlecsEntity()                 [O(1)]
- *
- * Both directions are lock-free. No mutexes, no RWLocks.
- * Thread safety via atomics (FBarragePrimitive::FlecsEntityId) and
- * concurrent data structures (libcuckoo, Flecs sparse set).
- * ═══════════════════════════════════════════════════════════════════════════════════════
- *
- * FLECS STAGES (for future multi-threaded collision processing):
- * Stages are thread-local command queues. Each thread uses its own stage to buffer
- * commands (add/remove/set), which are merged atomically during sync points.
- * Currently all collision processing runs on Artillery thread (stage 0).
- * Future: Barrage collision threads will use their own stages.
- *
- * IMPORTANT: The Flecs world must NOT have any auto-progressing game loops imported.
- * All progress is driven exclusively from ArtilleryTick on the busy worker thread.
+ * Lock-free bidirectional binding (Entity ↔ BarrageKey):
+ *   Forward: entity.get<FBarrageBody>()->BarrageKey  [O(1) Flecs sparse set]
+ *   Reverse: FBLet->GetFlecsEntity()                 [O(1) atomic in FBarragePrimitive]
  */
 UCLASS()
-class UFlecsArtillerySubsystem : public UTickableWorldSubsystem, public ISkeletonLord, public ITickHeavy
+class UFlecsArtillerySubsystem : public UTickableWorldSubsystem, public ISkeletonLord
 {
 	GENERATED_BODY()
 
-	using ICanReady = ITickHeavy;
-
 public:
 	static inline UFlecsArtillerySubsystem* SelfPtr = nullptr;
-	constexpr static int OrdinateSeqKey = ORDIN::E_D_C::FlecsSystem;
 
 	/** Max number of Flecs stages (for future multi-threaded collision processing). */
 	static constexpr int32 MaxStages = 8;
 
 	// ═══════════════════════════════════════════════════════════════
-	// ITickHeavy - Called on Artillery busy worker thread (~120Hz)
+	// SIMULATION THREAD API (called by FSimulationWorker)
 	// ═══════════════════════════════════════════════════════════════
 
-	virtual void ArtilleryTick() override;
-	virtual bool RegistrationImplementation() override;
+	/** Drain MPSC command queue. Called by SimWorker before Flecs progress(). */
+	void DrainCommandQueue();
+
+	/** Progress the Flecs world by DeltaTime seconds. Called by SimWorker. */
+	void ProgressWorld(float DeltaTime);
+
+	/** Ensure the calling thread has Barrage physics access. Call from Flecs worker systems that touch physics. */
+	void EnsureBarrageAccess();
+
+	// ═══════════════════════════════════════════════════════════════
+	// LOCAL PLAYER REGISTRATION (local player cache)
+	// ═══════════════════════════════════════════════════════════════
+
+	static inline TWeakObjectPtr<AActor> CachedLocalPlayerActor;
+	static inline FSkeletonKey CachedLocalPlayerKey;
+
+	static void RegisterLocalPlayer(AActor* Player, FSkeletonKey Key);
+	static void UnregisterLocalPlayer();
 
 	// ═══════════════════════════════════════════════════════════════
 	// THREAD-SAFE API (callable from any thread)
 	// ═══════════════════════════════════════════════════════════════
 
-	/** Queue a command to execute on the Artillery thread next tick. MPSC-safe. */
+	/** Queue a command to execute on the simulation thread next tick. MPSC-safe. */
 	void EnqueueCommand(TFunction<void()>&& Command);
 
 	// ═══════════════════════════════════════════════════════════════
-	// BIDIRECTIONAL BINDING API (Artillery thread only)
+	// BIDIRECTIONAL BINDING API (simulation thread only)
 	// Lock-free O(1) lookups in both directions.
 	// ═══════════════════════════════════════════════════════════════
 
-	/** Get the Flecs world. Only safe from Artillery thread. */
+	/** Get the Flecs world. Only safe from simulation thread. */
 	flecs::world* GetFlecsWorld() const { return FlecsWorld.Get(); }
 
 	/** Get the cached Barrage dispatch (for render manager access). */
 	UBarrageDispatch* GetBarrageDispatch() const { return CachedBarrageDispatch; }
 
 	/** Get the render manager (convenience). */
-	class UBarrageRenderManager* GetRenderManager() const;
+	class UFlecsRenderManager* GetRenderManager() const;
 
 	/**
 	 * Get a Flecs stage for thread-safe deferred commands.
-	 * @param ThreadIndex Thread index (0 = main Artillery thread). Use 0 for now.
+	 * @param ThreadIndex Thread index (0 = main simulation thread). Use 0 for now.
 	 * @return Flecs stage for deferred command buffering.
 	 */
 	flecs::world GetStage(int32 ThreadIndex = 0) const;
@@ -225,9 +218,9 @@ public:
 	// ═══════════════════════════════════════════════════════════════
 
 	/**
-	 * Process pending projectile spawns from weapon fire.
-	 * Must be called on Game thread (e.g., from Tick or callback).
-	 * Spawns actual Barrage bodies and Flecs entities.
+	 * Process pending projectile ISM render instances from weapon fire.
+	 * Must be called on Game thread (UE rendering requires it).
+	 * Physics bodies + Flecs entities are created on sim thread in WeaponFireSystem.
 	 */
 	void ProcessPendingProjectileSpawns();
 
@@ -284,47 +277,42 @@ public:
 	virtual void Tick(float DeltaTime) override;
 
 private:
-	/** Set up Flecs systems that run on the Artillery thread. */
+	/** Set up Flecs systems that run on the simulation thread. */
 	void SetupFlecsSystems();
 
 	/** Subscribe to Barrage collision events. */
 	void SubscribeToBarrageEvents();
 
-	/** Handle collision event from Barrage. Called on Artillery thread. */
+	/** Handle collision event from Barrage. Called on simulation thread. */
 	void OnBarrageContact(const BarrageContactEvent& Event);
 
 	/** Direct flecs::world - no UFlecsWorld wrapper, no plugin tick functions, no worker threads. */
 	TUniquePtr<flecs::world> FlecsWorld;
 
-	/** MPSC command queue: game thread producers -> artillery thread consumer. */
+	/** MPSC command queue: game thread producers -> simulation thread consumer. */
 	TQueue<TFunction<void()>, EQueueMode::Mpsc> CommandQueue;
 
 	/** Delegate handle for Barrage contact events (for cleanup). */
 	FDelegateHandle ContactEventHandle;
 
 	// ═══════════════════════════════════════════════════════════════
-	// CACHED SUBSYSTEM POINTERS (set during RegistrationImplementation)
-	// Avoids repeated SelfPtr lookups on hot paths.
+	// CACHED SUBSYSTEM POINTERS
 	// ═══════════════════════════════════════════════════════════════
 	UBarrageDispatch* CachedBarrageDispatch = nullptr;
-	UArtilleryDispatch* CachedArtilleryDispatch = nullptr;
 
 	// ═══════════════════════════════════════════════════════════════
-	// DEINITIALIZATION SYNCHRONIZATION
-	// Prevents use-after-free when Game thread destroys FlecsWorld
-	// while Artillery thread is inside ArtilleryTick().
+	// SIMULATION THREAD (simulation thread)
 	// ═══════════════════════════════════════════════════════════════
+	FSimulationWorker SimWorker;
+	FRunnableThread* SimThread = nullptr;
 
-	/** Set to true when Deinitialize() starts. ArtilleryTick() checks this and exits early. */
-	std::atomic<bool> bDeinitializing{false};
-
-	/** Set to true while inside ArtilleryTick(). Deinitialize() waits for this to become false. */
-	std::atomic<bool> bInArtilleryTick{false};
+	void StartSimulationThread();
+	void StopSimulationThread();
 
 	// ═══════════════════════════════════════════════════════════════
 	// PREFAB STORAGE
 	// Maps definition pointers → Flecs prefab entities.
-	// Only accessed from Artillery thread.
+	// Only accessed from simulation thread.
 	// ═══════════════════════════════════════════════════════════════
 
 	/** EntityDefinition* → Prefab entity. General entity prefabs. */
@@ -338,6 +326,6 @@ private:
 	// Pending projectile spawns queued by WeaponFireSystem.
 	// ═══════════════════════════════════════════════════════════════
 
-	/** Queue of projectile spawns from weapon fire. Artillery → Game thread. */
+	/** Queue of projectile spawns from weapon fire. Sim → Game thread. */
 	TQueue<FPendingProjectileSpawn, EQueueMode::Mpsc> PendingProjectileSpawns;
 };

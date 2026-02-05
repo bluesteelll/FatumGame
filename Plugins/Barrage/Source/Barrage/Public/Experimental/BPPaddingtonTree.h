@@ -55,7 +55,7 @@ JPH_NAMESPACE_BEGIN
 		const BroadPhaseLayerInterface* mBroadPhaseLayerInterface = nullptr;
 
 		/// One tree per object layer. Update swaps. Rather than locking queries for update or framesync, we allow a query to hold
-		/// a ref per the holdopen pattern used throughout barrage and artillery. this is _significantly_ faster.
+		/// a ref per the holdopen pattern used throughout barrage. this is _significantly_ faster.
 		std::shared_ptr<PaddingtonTree> mLayers[mNumLayers];
 
 		/// UpdateState implementation for this tree used during UpdatePrepare/Finalize()
@@ -129,7 +129,7 @@ public:
 				mLayers[l].DiscardOldTree();
 		}
 
-		//this is paired with the artillery busy worker, which always optimizes once every 128 ticks, and never while a step is running.
+		//this is paired with the simulation worker, which always optimizes once every 128 ticks, and never while a step is running.
 		//you may need to revisit guarantees here around memory allocators or you'll probably get EFFED in the allocator. 
 		virtual void BPPaddingtonTree::Optimize() override
 		{

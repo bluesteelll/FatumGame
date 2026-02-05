@@ -5,7 +5,7 @@
 #include "PhysicsFilters/FastObjectLayerFilters.h"
 #include "Jolt/Physics/Body/BodyFilter.h"
 
-BEGIN_DEFINE_SPEC(FWorldSimOwnerTests, "Artillery.Barrage.World Sim Owner Tests", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+BEGIN_DEFINE_SPEC(FWorldSimOwnerTests, "Barrage.World Sim Owner Tests", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 TSharedPtr<FWorldSimOwner> ClassUnderTest = MakeShared<FWorldSimOwner>(0.016f, [this](int threadId)
 	{
 		if (ClassUnderTest.IsValid())
@@ -120,7 +120,7 @@ void FWorldSimOwnerTests::Define()
 									JPH::EActivation::Activate);
 
 								ClassUnderTest->OptimizeBroadPhase();
-								ClassUnderTest->StepSimulation();
+								ClassUnderTest->StepSimulation(1.0f / 128.0f);
 							}
 						});
 

@@ -365,7 +365,7 @@ public:
 
 	//This'll be trouble.
 	//https://www.youtube.com/watch?v=KKC3VePrBOY&lc=Ugw9YRxHjcywQKH5LO54AaABAg
-	void StepSimulation();
+	void StepSimulation(float InDeltaTime);
 
 	//Broad Phase is the first pass in the engine's cycle, and the optimization used to accelerate it breaks down as objects are added. As a result, when you have time after adding objects,
 	//you should call optimize broad phase. You should also batch object creation whenever possible, but we don't support that well yet.

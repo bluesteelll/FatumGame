@@ -5,7 +5,8 @@
 #include "FlecsGameTags.h"
 #include "FlecsStaticComponents.h"
 #include "FlecsInstanceComponents.h"
-#include "Systems/BarrageEntitySpawner.h"
+#include "BarrageSpawnUtils.h"
+#include "FlecsRenderManager.h"
 #include "BarrageDispatch.h"
 #include "Components/BillboardComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -61,7 +62,7 @@ FFlecsGroupSpawnResult AFlecsConstrainedGroupSpawner::SpawnGroup()
 	if (!World) return SpawnResult;
 
 	UBarrageDispatch* Barrage = World->GetSubsystem<UBarrageDispatch>();
-	UBarrageRenderManager* Renderer = UBarrageRenderManager::Get(World);
+	UFlecsRenderManager* Renderer = UFlecsRenderManager::Get(World);
 	UFlecsArtillerySubsystem* FlecsSubsystem = World->GetSubsystem<UFlecsArtillerySubsystem>();
 
 	if (!Barrage || !FlecsSubsystem)

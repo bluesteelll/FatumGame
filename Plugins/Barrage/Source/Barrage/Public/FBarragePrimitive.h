@@ -46,9 +46,7 @@ public:
 	
 	//you cannot safely reorder these or it will change the pack width.
 	FBarrageKey KeyIntoBarrage; 
-	//This breaks our type dependency by using the underlying hashkey instead of the artillery type.
-	//this is pretty risky, but it's basically necessary to avoid a dependency on artillery until we factor our types
-	//into a type plugin, which is a wild but not unexpected thing to do.
+	//Uses the underlying hashkey to avoid external type dependencies.
 	FSkeletonKey KeyOutOfBarrage;
 
 	//Tombstone state. Used to ensure that we don't nullity sliced. 
@@ -58,7 +56,7 @@ public:
 	// BarrageDispatch::TombstoneInitialMinimum cycles before it is released, so this can safely be
 	// used in conjunction with null checks to ensure that short tasks can finish safely without
 	// worrying about the exact structure of our lifecycles. it is also used for pool and rollback handling,
-	// and the implementation will change as those come online in artillery.
+	// and the implementation will change as pool/rollback handling comes online.
 	uint32 tombstone = 0; //4b
 	FBShape Me; //4b
 

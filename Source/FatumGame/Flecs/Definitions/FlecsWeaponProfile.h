@@ -30,7 +30,7 @@ enum class EWeaponFireMode : uint8
  * - Create UFlecsEntityDefinition with WeaponProfile
  * - WeaponProfile.ProjectileDefinition = what to spawn when firing
  * - Spawn weapon entity, equip to character
- * - WeaponFireSystem handles firing logic on Artillery thread
+ * - WeaponFireSystem handles firing logic on simulation thread
  */
 UCLASS(BlueprintType, EditInlineNew)
 class FATUMGAME_API UFlecsWeaponProfile : public UDataAsset
@@ -153,7 +153,7 @@ public:
 	/** Get fire interval in seconds */
 	float GetFireInterval() const { return 60.f / FMath::Max(1.f, FireRate); }
 
-	/** Get fire interval in frames (120Hz Artillery tick) */
+	/** Get fire interval in frames (60Hz simulation tick) */
 	int32 GetFireIntervalFrames() const { return FMath::RoundToInt(GetFireInterval() * 120.f); }
 
 	/** Get reload time in frames (120Hz) */

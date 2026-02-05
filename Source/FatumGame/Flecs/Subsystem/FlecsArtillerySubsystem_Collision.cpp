@@ -103,12 +103,15 @@ void UFlecsArtillerySubsystem::OnBarrageContact(const BarrageContactEvent& Event
 	{
 		bIsDamageCollision = true;
 	}
-	// Artillery projectile (bIsProjectile flag, not in Flecs) hits Flecs target with health
-	else if (bBody1IsProjectile && bEntity2HasHealth)
+	// Physics projectile hits Flecs target with health.
+	// REQUIRE valid Flecs entity (FlecsId != 0): if PHASE2 hasn't run yet,
+	// we can't check OwnerEntityId (self-damage) or get FDamageStatic (damage amount).
+	// By the time PHASE2 creates the entity, the projectile has left the owner's collision volume.
+	else if (bBody1IsProjectile && bEntity2HasHealth && FlecsId1 != 0)
 	{
 		bIsDamageCollision = true;
 	}
-	else if (bBody2IsProjectile && bEntity1HasHealth)
+	else if (bBody2IsProjectile && bEntity1HasHealth && FlecsId2 != 0)
 	{
 		bIsDamageCollision = true;
 	}

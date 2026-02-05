@@ -40,7 +40,7 @@ class UFlecsEntityDefinition;
  * Static health data - lives in PREFAB, shared by all entities of this type.
  * Contains immutable health rules.
  *
- * Instance data (CurrentHP) is in FHealthInstance.
+ * Instance data (CurrentHP) is in FHealthInц stance.
  */
 struct FHealthStatic
 {

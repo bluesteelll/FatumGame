@@ -20,8 +20,8 @@ class UFlecsConstrainedGroupDefinition;
  * Blueprint-callable functions for Flecs ECS gameplay operations.
  *
  * Thread safety:
- * - Functions with WorldContext parameter are game-thread safe (operations enqueued to Artillery thread)
- * - Static functions taking UFlecsArtillerySubsystem* are Artillery-thread only (for collision handlers)
+ * - Functions with WorldContext parameter are game-thread safe (operations enqueued to simulation thread)
+ * - Static functions taking UFlecsArtillerySubsystem* are simulation-thread only (for collision handlers)
  */
 UCLASS()
 class UFlecsGameplayLibrary : public UBlueprintFunctionLibrary
@@ -32,7 +32,7 @@ public:
 	// ═══════════════════════════════════════════════════════════════
 	// SPAWN (game-thread safe)
 	// Creates Barrage body + ISM render on game thread,
-	// then enqueues Flecs entity creation to Artillery thread.
+	// then enqueues Flecs entity creation to simulation thread.
 	// ═══════════════════════════════════════════════════════════════
 
 	/**
@@ -181,7 +181,7 @@ public:
 	);
 
 	// ═══════════════════════════════════════════════════════════════
-	// ENTITY LIFECYCLE (game-thread safe, enqueued to Artillery thread)
+	// ENTITY LIFECYCLE (game-thread safe, enqueued to simulation thread)
 	// ═══════════════════════════════════════════════════════════════
 
 	/** Mark an entity as dead by its Barrage SkeletonKey. Cleaned up next tick. */
@@ -189,7 +189,7 @@ public:
 	static void KillEntityByBarrageKey(UObject* WorldContextObject, FSkeletonKey BarrageKey);
 
 	// ═══════════════════════════════════════════════════════════════
-	// DAMAGE & HEALING (game-thread safe, enqueued to Artillery thread)
+	// DAMAGE & HEALING (game-thread safe, enqueued to simulation thread)
 	// ═══════════════════════════════════════════════════════════════
 
 	/** Apply damage to an entity by its Barrage SkeletonKey. */
@@ -212,7 +212,7 @@ public:
 	static void HealEntityByBarrageKey(UObject* WorldContextObject, FSkeletonKey BarrageKey, float Amount);
 
 	// ═══════════════════════════════════════════════════════════════
-	// ITEM OPERATIONS (game-thread safe, enqueued to Artillery thread)
+	// ITEM OPERATIONS (game-thread safe, enqueued to simulation thread)
 	// ═══════════════════════════════════════════════════════════════
 
 	/** Set despawn timer on an item entity. -1 = never despawns. */
@@ -220,29 +220,29 @@ public:
 	static void SetItemDespawnTimer(UObject* WorldContextObject, FSkeletonKey BarrageKey, float Timer);
 
 	// ═══════════════════════════════════════════════════════════════
-	// ARTILLERY THREAD API (C++ only, for collision handlers)
+	// SIMULATION THREAD API (C++ only, for collision handlers)
 	// These operate directly on Flecs entities. NOT thread-safe
-	// from game thread. Use from ArtilleryTick / collision handlers.
+	// from game thread. Use from SimTick / collision handlers.
 	// ═══════════════════════════════════════════════════════════════
 
-	/** Apply damage directly on Artillery thread. Returns true if entity died. */
+	/** Apply damage directly on simulation thread. Returns true if entity died. */
 	static bool ApplyDamage_ArtilleryThread(UFlecsArtillerySubsystem* Subsystem, FSkeletonKey BarrageKey, float Damage);
 
-	/** Heal directly on Artillery thread. */
+	/** Heal directly on simulation thread. */
 	static void Heal_ArtilleryThread(UFlecsArtillerySubsystem* Subsystem, FSkeletonKey BarrageKey, float Amount);
 
-	/** Check if an entity is alive. Artillery thread only. */
+	/** Check if an entity is alive. simulation thread only. */
 	static bool IsAlive_ArtilleryThread(UFlecsArtillerySubsystem* Subsystem, FSkeletonKey BarrageKey);
 
-	/** Get entity health data. Returns false if entity has no FHealthInstance. Artillery thread only. */
+	/** Get entity health data. Returns false if entity has no FHealthInstance. simulation thread only. */
 	static bool GetHealth_ArtilleryThread(UFlecsArtillerySubsystem* Subsystem, FSkeletonKey BarrageKey,
 		float& OutCurrentHP, float& OutMaxHP);
 
 	// ═══════════════════════════════════════════════════════════════
 	// QUERY (game-thread) - CROSS-THREAD READ
-	// These read from Flecs which runs on Artillery thread (~120Hz).
+	// These read from Flecs which runs on simulation thread (~120Hz).
 	// Values may be stale by 1-2 frames. Safe for UI/cosmetics.
-	// For critical gameplay decisions, use _ArtilleryThread variants
+	// For critical gameplay decisions, use _SimThread variants
 	// via EnqueueCommand().
 	// ═══════════════════════════════════════════════════════════════
 
@@ -268,7 +268,7 @@ public:
 	static bool IsEntityAlive(UObject* WorldContextObject, FSkeletonKey BarrageKey);
 
 	// ═══════════════════════════════════════════════════════════════
-	// CONSTRAINTS (game-thread safe, enqueued to Artillery thread)
+	// CONSTRAINTS (game-thread safe, enqueued to simulation thread)
 	// Create breakable physics connections between Flecs entities.
 	// ═══════════════════════════════════════════════════════════════
 
@@ -397,7 +397,7 @@ public:
 	static bool GetConstraintStressRatio(UObject* WorldContextObject, int64 ConstraintKey, float& OutStressRatio);
 
 	// ═══════════════════════════════════════════════════════════════
-	// WEAPON CONTROL (game-thread safe, enqueued to Artillery thread)
+	// WEAPON CONTROL (game-thread safe, enqueued to simulation thread)
 	// ═══════════════════════════════════════════════════════════════
 
 	/**
@@ -436,7 +436,7 @@ public:
 	 * @param Direction Aim direction (will be normalized)
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Flecs|Weapon", meta = (WorldContext = "WorldContextObject"))
-	static void SetAimDirection(UObject* WorldContextObject, int64 CharacterEntityId, FVector Direction);
+	static void SetAimDirection(UObject* WorldContextObject, int64 CharacterEntityId, FVector Direction, FVector MuzzleOffset = FVector::ZeroVector, FVector CharacterPosition = FVector::ZeroVector);
 
 	/**
 	 * Get current ammo in weapon magazine.

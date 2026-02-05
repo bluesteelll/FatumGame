@@ -13,8 +13,12 @@
 #include "FlecsInstanceComponents.h"
 #include "FlecsWeaponComponents.h"
 #include "Engine/Engine.h"  // For GEngine->AddOnScreenDebugMessage
-#include "EssentialTypes/PlayerKeyCarry.h"
-#include "PhysicsTypes/BarrageCharacterMovement.h"
+#include "BarrageDispatch.h"
+#include "FBarragePrimitive.h"
+#include "FBShapeParams.h"
+#include "EPhysicsLayer.h"
+#include "Skeletonize.h"
+#include "Components/CapsuleComponent.h"
 #include "GameFramework/Controller.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/SpringArmComponent.h"
@@ -27,10 +31,6 @@
 AFlecsCharacter::AFlecsCharacter(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
 {
-	// Create Artillery/Flecs components
-	KeyCarry = CreateDefaultSubobject<UPlayerKeyCarry>(TEXT("KeyCarry"));
-	BarrageMovement = CreateDefaultSubobject<UBarrageCharacterMovement>(TEXT("BarrageMovement"));
-
 	// Create camera boom (used in third-person mode)
 	CameraBoom = CreateDefaultSubobject<USpringArmComponent>(TEXT("CameraBoom"));
 	CameraBoom->SetupAttachment(RootComponent);
@@ -91,13 +91,19 @@ void AFlecsCharacter::BeginPlay()
 	}
 
 	// ─────────────────────────────────────────────────────────────
+	// IDENTITY: Generate key from actor pointer hash
+	// Replaces UPlayerKeyCarry component
+	// ─────────────────────────────────────────────────────────────
+	CharacterKey = MAKE_ACTORKEY(this);
+
+	// ─────────────────────────────────────────────────────────────
 	// FLECS: Register character entity
 	// Uses NEW Static/Instance architecture
 	// ─────────────────────────────────────────────────────────────
 	float InitialHealth = StartingHealth > 0.f ? StartingHealth : MaxHealth;
 	CachedHealth = InitialHealth;
 
-	FSkeletonKey Key = GetEntityKey();
+	FSkeletonKey Key = CharacterKey;
 	if (Key.IsValid())
 	{
 		UFlecsArtillerySubsystem* FlecsSubsystem = GetWorld()->GetSubsystem<UFlecsArtillerySubsystem>();
@@ -106,20 +112,49 @@ void AFlecsCharacter::BeginPlay()
 			float CapturedMaxHealth = MaxHealth;
 			float CapturedInitialHealth = InitialHealth;
 			float CapturedArmor = Armor;
+			FVector SpawnLocation = GetActorLocation();
+			float CapsuleRadius = GetCapsuleComponent()->GetScaledCapsuleRadius();
+			float CapsuleHalfHeight = GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
 
-			FlecsSubsystem->EnqueueCommand([FlecsSubsystem, Key, CapturedMaxHealth, CapturedInitialHealth, CapturedArmor]()
+			FlecsSubsystem->EnqueueCommand([FlecsSubsystem, Key, CapturedMaxHealth, CapturedInitialHealth,
+				CapturedArmor, SpawnLocation, CapsuleRadius, CapsuleHalfHeight]()
 			{
 				flecs::world* FlecsWorld = FlecsSubsystem->GetFlecsWorld();
 				if (!FlecsWorld) return;
 
-				// Static data (could be shared via prefab in future)
+				// Create Barrage physics body for character (sensor for collision detection).
+				// This body mirrors the UE actor position — real movement/gravity is handled
+				// by UCharacterMovementComponent. GravityFactor=0 prevents Jolt from
+				// pulling the sensor body down between SetPosition updates.
+				UBarrageDispatch* Physics = UBarrageDispatch::SelfPtr;
+				if (Physics)
+				{
+					FBBoxParams BoxParams = FBarrageBounder::GenerateBoxBounds(
+						SpawnLocation,
+						CapsuleRadius * 2.0, CapsuleRadius * 2.0, CapsuleHalfHeight * 2.0,
+						FVector3d::ZeroVector, FMassByCategory::MostEnemies);
+
+					FBLet Body = Physics->CreatePrimitive(
+						BoxParams, Key,
+						static_cast<uint16>(EPhysicsLayer::MOVING),
+						true,  // sensor - collision detection only
+						false, // not force dynamic
+						true); // movable
+
+					if (FBarragePrimitive::IsNotNull(Body))
+					{
+						FBarragePrimitive::SetGravityFactor(0.0f, Body);
+					}
+				}
+
+				// Static data
 				FHealthStatic HealthStatic;
 				HealthStatic.MaxHP = CapturedMaxHealth;
 				HealthStatic.Armor = CapturedArmor;
 				HealthStatic.RegenPerSecond = 0.f;
-				HealthStatic.bDestroyOnDeath = false;  // Characters handle death differently
+				HealthStatic.bDestroyOnDeath = false;
 
-				// Instance data (per-entity mutable state)
+				// Instance data
 				FHealthInstance HealthInstance;
 				HealthInstance.CurrentHP = CapturedInitialHealth;
 				HealthInstance.RegenAccumulator = 0.f;
@@ -136,11 +171,15 @@ void AFlecsCharacter::BeginPlay()
 					static_cast<uint64>(Key), CapturedInitialHealth, CapturedMaxHealth);
 			});
 		}
+
+		UFlecsArtillerySubsystem::RegisterLocalPlayer(this, Key);
 	}
 }
 
 void AFlecsCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	UFlecsArtillerySubsystem::UnregisterLocalPlayer();
+
 	// Unregister from Flecs
 	FSkeletonKey Key = GetEntityKey();
 	if (Key.IsValid())
@@ -169,6 +208,35 @@ void AFlecsCharacter::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
 	CheckHealthChanges();
+
+	// Sync UE actor position → Barrage physics body
+	if (CharacterKey.IsValid())
+	{
+		if (UFlecsArtillerySubsystem* FlecsSubsystem = GetWorld()->GetSubsystem<UFlecsArtillerySubsystem>())
+		{
+			FVector Pos = GetActorLocation();
+			FlecsSubsystem->EnqueueCommand([Key = CharacterKey, Pos]()
+			{
+				UBarrageDispatch* Physics = UBarrageDispatch::SelfPtr;
+				if (Physics)
+				{
+					FBLet Body = Physics->GetShapeRef(Key);
+					if (FBarragePrimitive::IsNotNull(Body))
+					{
+						FBarragePrimitive::SetPosition(Pos, Body);
+					}
+				}
+			});
+		}
+	}
+
+	// Continuously update aim direction, muzzle offset, and position so WeaponFireSystem has fresh data.
+	// Position comes from UE actor directly — NOT from Barrage physics body which drifts due to gravity.
+	int64 CharId = GetCharacterEntityId();
+	if (CharId != 0)
+	{
+		UFlecsGameplayLibrary::SetAimDirection(this, CharId, GetFiringDirection(), MuzzleOffset, GetActorLocation());
+	}
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -269,6 +337,10 @@ void AFlecsCharacter::StartFire(const FInputActionValue& Value)
 		if (TestWeaponEntityId == 0)
 		{
 			SpawnAndEquipTestWeapon();
+			// Weapon spawns async — fire request would be lost.
+			// Set flag so SpawnAndEquipTestWeapon fires after weapon is ready.
+			bPendingFireAfterSpawn = true;
+			return;
 		}
 		StartFiringWeapon();
 	}
@@ -688,7 +760,7 @@ void AFlecsCharacter::RemoveAllItemsFromTestContainer()
 
 FSkeletonKey AFlecsCharacter::GetEntityKey() const
 {
-	return KeyCarry ? KeyCarry->GetMyKey() : FSkeletonKey();
+	return CharacterKey;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -697,6 +769,7 @@ FSkeletonKey AFlecsCharacter::GetEntityKey() const
 
 void AFlecsCharacter::StopFire(const FInputActionValue& Value)
 {
+	bPendingFireAfterSpawn = false;
 	if (TestWeaponEntityId != 0)
 	{
 		StopFiringWeapon();
@@ -723,14 +796,14 @@ void AFlecsCharacter::SpawnAndEquipTestWeapon()
 	}
 
 	// Create weapon entity via EnqueueCommand
-	// IMPORTANT: Look up CharEntityId INSIDE the command, on Artillery thread,
+	// IMPORTANT: Look up CharEntityId INSIDE the command, on simulation thread,
 	// to ensure BeginPlay's entity binding has already been processed.
 	FlecsSubsystem->EnqueueCommand([this, FlecsSubsystem, CharKey]()
 	{
 		flecs::world* World = FlecsSubsystem->GetFlecsWorld();
 		if (!World) return;
 
-		// Look up character entity on Artillery thread (after BeginPlay binding)
+		// Look up character entity on simulation thread (after BeginPlay binding)
 		flecs::entity CharEntity = FlecsSubsystem->GetEntityForBarrageKey(CharKey);
 		if (!CharEntity.is_valid())
 		{
@@ -784,6 +857,13 @@ void AFlecsCharacter::SpawnAndEquipTestWeapon()
 				GEngine->AddOnScreenDebugMessage(-1, 3.f, FColor::Green,
 					FString::Printf(TEXT("Weapon equipped! Ammo: %d"), 30));
 			}
+
+			// If fire was requested before weapon was ready, apply now
+			if (bPendingFireAfterSpawn)
+			{
+				bPendingFireAfterSpawn = false;
+				StartFiringWeapon();
+			}
 		});
 	});
 }
@@ -792,9 +872,9 @@ void AFlecsCharacter::StartFiringWeapon()
 {
 	if (TestWeaponEntityId == 0) return;
 
-	// Update aim direction based on camera
+	// Update aim direction, muzzle offset, and position based on camera
 	FVector AimDir = GetFiringDirection();
-	UFlecsGameplayLibrary::SetAimDirection(this, GetCharacterEntityId(), AimDir);
+	UFlecsGameplayLibrary::SetAimDirection(this, GetCharacterEntityId(), AimDir, MuzzleOffset, GetActorLocation());
 
 	// Start firing
 	UFlecsGameplayLibrary::StartFiring(this, TestWeaponEntityId);

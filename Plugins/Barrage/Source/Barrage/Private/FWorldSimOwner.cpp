@@ -599,7 +599,7 @@ FBLet FWorldSimOwner::LoadComplexStaticMesh(FBTransform& MeshTransform,
 	return nullptr;
 }
 
-void FWorldSimOwner::StepSimulation()
+void FWorldSimOwner::StepSimulation(float InDeltaTime)
 {
 	// Step the world
 	TSharedPtr<JPH::TempAllocatorImpl> AllocHoldOpen = Allocator;
@@ -608,13 +608,12 @@ void FWorldSimOwner::StepSimulation()
 
 	TRACE_CPUPROFILER_EVENT_SCOPE_STR("Physics Update");
 	// If you take larger steps than 1 / 60th of a second you need to do multiple collision steps in order to keep the simulation stable
-	// we run pretty fast, so... normally fine.
 	constexpr int cCollisionSteps = 1;
 	if (AllocHoldOpen && JobHoldOpen)
 	{
 		TRACE_CPUPROFILER_EVENT_SCOPE_STR("Physics Update");
 
-		PhysicsHoldOpen->Update(DeltaTime, cCollisionSteps, AllocHoldOpen.Get(), JobHoldOpen.Get());
+		PhysicsHoldOpen->Update(InDeltaTime, cCollisionSteps, AllocHoldOpen.Get(), JobHoldOpen.Get());
 	}
 
 }

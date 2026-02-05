@@ -26,15 +26,16 @@ void BlockingWaitOnAsyncWorldSimulation(UBarrageDispatch* Dispatch)
 			// This runs in a separate thread
 			// Perform the step world sequence
 			Dispatch->StackUp();
-			Dispatch->StepWorld(333, 0);
-			Dispatch->StepWorld(333, 1);
-			Dispatch->StepWorld(333, 2);
-			Dispatch->StepWorld(1000, 0);
-			Dispatch->StepWorld(1000, 1);
-			Dispatch->StepWorld(1000, 2);
-			Dispatch->StepWorld(2000, 0);
-			Dispatch->StepWorld(2000, 1);
-			Dispatch->StepWorld(2000, 2);
+			constexpr float TestDt = 1.0f / 128.0f;
+			Dispatch->StepWorld(TestDt, 0);
+			Dispatch->StepWorld(TestDt, 1);
+			Dispatch->StepWorld(TestDt, 2);
+			Dispatch->StepWorld(TestDt, 3);
+			Dispatch->StepWorld(TestDt, 4);
+			Dispatch->StepWorld(TestDt, 5);
+			Dispatch->StepWorld(TestDt, 6);
+			Dispatch->StepWorld(TestDt, 7);
+			Dispatch->StepWorld(TestDt, 8);
 			Dispatch->BroadcastContactEvents();
 		});
 
@@ -42,7 +43,7 @@ void BlockingWaitOnAsyncWorldSimulation(UBarrageDispatch* Dispatch)
 	return;
 }
 
-BEGIN_DEFINE_SPEC(FBarrageBounderTests, "Artillery.Barrage.Barrage Bounder Tests",
+BEGIN_DEFINE_SPEC(FBarrageBounderTests, "Barrage.Barrage Bounder Tests",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 END_DEFINE_SPEC(FBarrageBounderTests)
 void FBarrageBounderTests::Define()
@@ -97,7 +98,7 @@ void FBarrageBounderTests::Define()
 		});
 }
 
-BEGIN_DEFINE_SPEC(FBarrageDispatchTests, "Artillery.Barrage.Barrage Dispatch Tests",
+BEGIN_DEFINE_SPEC(FBarrageDispatchTests, "Barrage.Barrage Dispatch Tests",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 	UBarrageDispatch* BarrageDispatch;
 	UWorld* DummyWorldOuter;
@@ -698,7 +699,7 @@ void FBarrageDispatchTests::Define()
 		});
 }
 
-BEGIN_DEFINE_SPEC(FBarrageDispatchWorldDependentTests, "Artillery.Barrage.Barrage Dispatch with World Tests",
+BEGIN_DEFINE_SPEC(FBarrageDispatchWorldDependentTests, "Barrage.Barrage Dispatch with World Tests",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 	UWorld* TestWorld;
 UBarrageDispatch* BarrageDispatch;
@@ -749,7 +750,7 @@ void FBarrageDispatchWorldDependentTests::Define()
 					FSkeletonKey OutKey;
 					AActor* TestActor = TestWorld->SpawnActor<AActor>();
 					UStaticMeshComponent* MeshComponent = NewObject<UStaticMeshComponent>(TestActor);
-					MeshComponent->SetStaticMesh(LoadObject<UStaticMesh>(MeshComponent, TEXT("/Artillery/TestMeshes/SM_Chair.SM_Chair")));
+					MeshComponent->SetStaticMesh(LoadObject<UStaticMesh>(MeshComponent, TEXT("/Engine/BasicShapes/Cube.Cube")));
 					MeshComponent->RegisterComponent();
 					TestActor->AddInstanceComponent(MeshComponent);
 

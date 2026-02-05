@@ -7,8 +7,7 @@
 #include "MashFunctions.h"
 #include "SkeletonTypes.generated.h"
 
-using BristleTime = long; //this will become uint32. don't bitbash this.
-using ArtilleryTime = BristleTime;
+using SimTime = long; //this will become uint32. don't bitbash this.
 typedef uint32_t InputStreamKey;
 
 struct FBoneKey;

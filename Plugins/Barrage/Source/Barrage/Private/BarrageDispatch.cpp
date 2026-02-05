@@ -314,7 +314,7 @@ FBLet UBarrageDispatch::LoadEnemyHitboxFromStaticMesh(FBTransform& MeshTransform
 	return nullptr;
 }
 
-//unlike our other ecs components in artillery, barrage dispatch does not maintain the mappings directly.
+//barrage dispatch does not maintain the mappings directly.
 //this is because we may have _many_ jolt sims running if we choose to do deterministic rollback in certain ways.
 //This is a copy by value return on purpose, as we want the ref count to rise.
 FBLet UBarrageDispatch::GetShapeRef(FBarrageKey Existing) const
@@ -636,7 +636,7 @@ bool UBarrageDispatch::UpdateCharacter(FBPhysicsInput& CharacterInput) const
 	return JoltGameSim->UpdateCharacter(CharacterInput);
 }
 
-void UBarrageDispatch::StepWorld(uint64 Time, uint64_t TickCount)
+void UBarrageDispatch::StepWorld(float InDeltaTime, uint64_t TickCount)
 {
 	TSharedPtr<FWorldSimOwner> PinSim = JoltGameSim;
 
@@ -650,7 +650,7 @@ void UBarrageDispatch::StepWorld(uint64 Time, uint64_t TickCount)
 		}
 
 		CleanTombs();
-		PinSim->StepSimulation();
+		PinSim->StepSimulation(InDeltaTime);
 		TSharedPtr<TMap<FBarrageKey, TSharedPtr<FBCharacterBase>>> HoldOpenCharacters = PinSim->CharacterToJoltMapping;
 		if (HoldOpenCharacters)
 		{
@@ -666,6 +666,7 @@ void UBarrageDispatch::StepWorld(uint64 Time, uint64_t TickCount)
 						CharacterKeyAndBase.Value->mCharacter->SetPosition(CharacterKeyAndBase.Value->mInitialPosition);
 						CharacterKeyAndBase.Value->mForcesUpdate = CharacterKeyAndBase.Value->World->GetGravity();
 					}
+					CharacterKeyAndBase.Value->mDeltaTime = InDeltaTime;
 					CharacterKeyAndBase.Value->StepCharacter();
 				}
 			}
@@ -688,7 +689,7 @@ void UBarrageDispatch::StepWorld(uint64 Time, uint64_t TickCount)
 						//in other words, this checks != null && !tombstoned
 						if (FBarragePrimitive::IsNotNull(HoldOpenFBP))
 						{
-							FBarragePrimitive::TryUpdateTransformFromJolt(HoldOpenFBP, Time);
+							FBarragePrimitive::TryUpdateTransformFromJolt(HoldOpenFBP, TickCount);
 							//returns a bool that can be used for debug.
 						} //This checks for != null && tombstoned
 						else if (HoldOpenFBP && HoldOpenFBP->tombstone != 0 && Tombs[TombOffset])

@@ -159,7 +159,7 @@ void UOrdinatePillar::PostInitialize()
 	}
 	else
 	{
-		//if we are NOT in a game world, we'll set it up so we cannot engage with the Artillery Machinery.
+		//if we are NOT in a game world, we'll set it up so we cannot engage with the simulation machinery.
 		MyWorld = std::make_shared<WorldRecord>(false, true, true);
 		Super::PostInitialize();
 		for (ORDIN::SubsystemKey Register : Data.Subsystems)

@@ -14,7 +14,8 @@
 #include "FlecsDamageProfile.h"
 #include "FlecsProjectileProfile.h"
 #include "FlecsConstrainedGroupDefinition.h"
-#include "Systems/BarrageEntitySpawner.h"
+#include "BarrageSpawnUtils.h"
+#include "FlecsRenderManager.h"
 #include "BarrageDispatch.h"
 #include "BarrageConstraintSystem.h"
 #include "FWorldSimOwner.h"
@@ -74,7 +75,7 @@ void UFlecsGameplayLibrary::SpawnWorldItem(
 	FBarrageSpawnResult Result = FBarrageSpawnUtils::SpawnEntity(World, Params);
 	if (!Result.bSuccess) return;
 
-	// Enqueue Flecs entity creation to Artillery thread
+	// Enqueue Flecs entity creation to simulation thread
 	FSkeletonKey EntityKey = Result.EntityKey;
 	Subsystem->EnqueueCommand([Subsystem, EntityKey, Mesh, Count, DespawnTime]()
 	{
@@ -306,7 +307,7 @@ void UFlecsGameplayLibrary::SetItemDespawnTimer(UObject* WorldContextObject, FSk
 }
 
 // ═══════════════════════════════════════════════════════════════
-// ARTILLERY THREAD API (direct Flecs access)
+// SIMULATION THREAD API (direct Flecs access)
 // ═══════════════════════════════════════════════════════════════
 
 bool UFlecsGameplayLibrary::ApplyDamage_ArtilleryThread(UFlecsArtillerySubsystem* Subsystem, FSkeletonKey BarrageKey, float Damage)
@@ -443,7 +444,7 @@ FSkeletonKey UFlecsGameplayLibrary::SpawnProjectileFromEntityDef(
 // ═══════════════════════════════════════════════════════════════
 // QUERY (game-thread) - CROSS-THREAD READ WARNING
 //
-// These functions read Flecs data from Game thread while Artillery
+// These functions read Flecs data from Game thread while simulation
 // thread (~120Hz) may be modifying it. This is a KNOWN RACE CONDITION
 // with the following mitigations:
 //
@@ -452,7 +453,7 @@ FSkeletonKey UFlecsGameplayLibrary::SpawnProjectileFromEntityDef(
 // 3. Entity validity checked before access
 // 4. Subsystem deinitialize check prevents UAF
 //
-// For CRITICAL health checks (damage, death), use the _ArtilleryThread
+// For CRITICAL health checks (damage, death), use the _SimThread
 // variants via EnqueueCommand() instead.
 //
 // Future improvement: Add thread-safe health cache updated each tick.
@@ -535,7 +536,7 @@ FSkeletonKey UFlecsGameplayLibrary::SpawnProjectile(
 	}
 
 	UBarrageDispatch* Barrage = World->GetSubsystem<UBarrageDispatch>();
-	UBarrageRenderManager* Renderer = UBarrageRenderManager::Get(World);
+	UFlecsRenderManager* Renderer = UFlecsRenderManager::Get(World);
 	UFlecsArtillerySubsystem* Subsystem = World->GetSubsystem<UFlecsArtillerySubsystem>();
 
 	if (!Barrage)
@@ -616,7 +617,7 @@ FSkeletonKey UFlecsGameplayLibrary::SpawnProjectile(
 			static_cast<uint64>(EntityKey));
 	}
 
-	// Create Flecs entity on Artillery thread
+	// Create Flecs entity on simulation thread
 	if (Subsystem)
 	{
 		Subsystem->EnqueueCommand([Subsystem, EntityKey, Mesh, Damage, LifetimeSeconds, VisualScale, MaxBounces]()
@@ -717,7 +718,7 @@ int64 UFlecsGameplayLibrary::CreateFixedConstraint(
 		return 0;
 	}
 
-	// Update FFlecsConstraintData on both Flecs entities (via Artillery thread)
+	// Update FFlecsConstraintData on both Flecs entities (via simulation thread)
 	int64 KeyValue = ConstraintKey.Key;
 	FlecsSubsystem->EnqueueCommand([FlecsSubsystem, Entity1Key, Entity2Key, KeyValue, BreakForce, BreakTorque]()
 	{
@@ -1060,7 +1061,7 @@ FFlecsGroupSpawnResult UFlecsGameplayLibrary::SpawnConstrainedGroup(
 	if (!World) return Result;
 
 	UBarrageDispatch* Barrage = World->GetSubsystem<UBarrageDispatch>();
-	UBarrageRenderManager* Renderer = UBarrageRenderManager::Get(World);
+	UFlecsRenderManager* Renderer = UFlecsRenderManager::Get(World);
 	UFlecsArtillerySubsystem* FlecsSubsystem = World->GetSubsystem<UFlecsArtillerySubsystem>();
 
 	if (!Barrage || !FlecsSubsystem)
@@ -1297,7 +1298,7 @@ FFlecsGroupSpawnResult UFlecsGameplayLibrary::SpawnChain(
 	if (!World) return Result;
 
 	UBarrageDispatch* Barrage = World->GetSubsystem<UBarrageDispatch>();
-	UBarrageRenderManager* Renderer = UBarrageRenderManager::Get(World);
+	UFlecsRenderManager* Renderer = UFlecsRenderManager::Get(World);
 	UFlecsArtillerySubsystem* FlecsSubsystem = World->GetSubsystem<UFlecsArtillerySubsystem>();
 
 	if (!Barrage || !FlecsSubsystem)
@@ -1408,6 +1409,7 @@ void UFlecsGameplayLibrary::StartFiring(UObject* WorldContextObject, int64 Weapo
 		if (Weapon)
 		{
 			Weapon->bFireRequested = true;
+			Weapon->bFireTriggerPending = true;
 		}
 	});
 }
@@ -1454,7 +1456,7 @@ void UFlecsGameplayLibrary::ReloadWeapon(UObject* WorldContextObject, int64 Weap
 	});
 }
 
-void UFlecsGameplayLibrary::SetAimDirection(UObject* WorldContextObject, int64 CharacterEntityId, FVector Direction)
+void UFlecsGameplayLibrary::SetAimDirection(UObject* WorldContextObject, int64 CharacterEntityId, FVector Direction, FVector MuzzleOffset, FVector CharacterPosition)
 {
 	UFlecsArtillerySubsystem* Subsystem = GetFlecsSubsystem(WorldContextObject);
 	if (!Subsystem || CharacterEntityId == 0) return;
@@ -1465,7 +1467,7 @@ void UFlecsGameplayLibrary::SetAimDirection(UObject* WorldContextObject, int64 C
 		NormalizedDir = FVector::ForwardVector;
 	}
 
-	Subsystem->EnqueueCommand([Subsystem, CharacterEntityId, NormalizedDir]()
+	Subsystem->EnqueueCommand([Subsystem, CharacterEntityId, NormalizedDir, MuzzleOffset, CharacterPosition]()
 	{
 		flecs::world* World = Subsystem->GetFlecsWorld();
 		if (!World) return;
@@ -1475,6 +1477,8 @@ void UFlecsGameplayLibrary::SetAimDirection(UObject* WorldContextObject, int64 C
 
 		FAimDirection AimDir;
 		AimDir.Direction = NormalizedDir;
+		AimDir.MuzzleOffset = MuzzleOffset;
+		AimDir.CharacterPosition = CharacterPosition;
 		CharEntity.set<FAimDirection>(AimDir);
 	});
 }

@@ -8,7 +8,8 @@
 #include "FlecsGameplayLibrary.h"
 #include "FlecsEntityDefinition.h"
 #include "FlecsProjectileProfile.h"
-#include "Systems/BarrageEntitySpawner.h"
+#include "BarrageSpawnUtils.h"
+#include "FlecsRenderManager.h"
 
 // ═══════════════════════════════════════════════════════════════
 // BIDIRECTIONAL BINDING API (Lock-Free)
@@ -27,7 +28,10 @@ void UFlecsArtillerySubsystem::BindEntityToBarrage(flecs::entity Entity, FSkelet
 	if (!Entity.is_valid() || !BarrageKey.IsValid()) return;
 
 	// Forward binding: set FBarrageBody component on Flecs entity
-	Entity.set<FBarrageBody>({ BarrageKey });
+	// NOTE: Cannot use aggregate init { BarrageKey } with USTRUCT that has GENERATED_BODY()
+	FBarrageBody Body;
+	Body.BarrageKey = BarrageKey;
+	Entity.set<FBarrageBody>(Body);
 
 	// Reverse binding: store Flecs entity ID in FBarragePrimitive (atomic)
 	if (CachedBarrageDispatch)
@@ -110,11 +114,11 @@ bool UFlecsArtillerySubsystem::HasEntityForBarrageKey(FSkeletonKey BarrageKey) c
 	return false;
 }
 
-UBarrageRenderManager* UFlecsArtillerySubsystem::GetRenderManager() const
+UFlecsRenderManager* UFlecsArtillerySubsystem::GetRenderManager() const
 {
 	if (CachedBarrageDispatch && CachedBarrageDispatch->GetWorld())
 	{
-		return UBarrageRenderManager::Get(CachedBarrageDispatch->GetWorld());
+		return UFlecsRenderManager::Get(CachedBarrageDispatch->GetWorld());
 	}
 	return nullptr;
 }
@@ -178,45 +182,27 @@ bool UFlecsArtillerySubsystem::QueueDamageByKey(FSkeletonKey TargetKey, float Da
 
 void UFlecsArtillerySubsystem::ProcessPendingProjectileSpawns()
 {
-	// Must be called on Game thread
+	// Must be called on Game thread.
+	// Physics body + Flecs entity are created on sim thread (WeaponFireSystem).
+	// This only registers the ISM render instance (UE rendering requires game thread).
 	check(IsInGameThread());
 
-	UWorld* World = GetWorld();
-	if (!World) return;
+	UFlecsRenderManager* Renderer = GetRenderManager();
+	if (!Renderer) return;
 
 	FPendingProjectileSpawn Spawn;
 	while (PendingProjectileSpawns.Dequeue(Spawn))
 	{
-		if (!Spawn.ProjectileDefinition) continue;
+		if (!Spawn.Mesh || !Spawn.EntityKey.IsValid()) continue;
 
-		// Get speed from projectile profile
-		float Speed = 5000.f;  // Default
-		if (Spawn.ProjectileDefinition->ProjectileProfile)
-		{
-			Speed = Spawn.ProjectileDefinition->ProjectileProfile->DefaultSpeed;
-		}
-		Speed *= Spawn.SpeedMultiplier;
+		FQuat DirQuat = FRotationMatrix::MakeFromX(Spawn.Direction).ToQuat();
 
-		// Spawn projectile(s)
-		// TODO: Apply Spawn.DamageMultiplier to spawned projectile's FDamageStatic
-		// This requires either: (1) override component on entity, or (2) store multiplier in FProjectileInstance
-		for (int32 i = 0; i < Spawn.ProjectilesPerShot; ++i)
-		{
-			FSkeletonKey ProjectileKey = UFlecsGameplayLibrary::SpawnProjectileFromEntityDef(
-				World,
-				Spawn.ProjectileDefinition,
-				Spawn.Location,
-				Spawn.Direction,
-				Speed,
-				Spawn.OwnerEntityId
-			);
+		FTransform RenderTransform;
+		RenderTransform.SetLocation(Spawn.Location);
+		RenderTransform.SetRotation(DirQuat * Spawn.RotationOffset.Quaternion());
+		RenderTransform.SetScale3D(Spawn.Scale);
 
-			if (ProjectileKey.IsValid())
-			{
-				UE_LOG(LogTemp, Verbose, TEXT("WEAPON: Spawned projectile Key=%llu from definition %s"),
-					static_cast<uint64>(ProjectileKey), *Spawn.ProjectileDefinition->GetName());
-			}
-		}
+		Renderer->AddInstance(Spawn.Mesh, Spawn.Material, RenderTransform, Spawn.EntityKey);
 	}
 }
 

@@ -51,15 +51,15 @@ namespace ORDIN
 	enum E_D_C
 	{
 		LastSubstrateKey		= Step * Step * Step,
-		ArtilleryOnline = LastSubstrateKey + LastSubstrateKey,
-		EnemyTagState = ArtilleryOnline + ORDIN::Step,
+		SimOnline = LastSubstrateKey + LastSubstrateKey,
+		EnemyTagState = SimOnline + ORDIN::Step,
 		SecondaryEnemyDispatch = EnemyTagState + 1,
 		ParticleSystem = EnemyTagState + ORDIN::Step,
 		ProjectileSystem = ParticleSystem + ORDIN::Step,
 		UIECSSystem = ProjectileSystem + ORDIN::Step,
 		EventLogSystem = UIECSSystem + ORDIN::Step,
 		FlecsSystem = EventLogSystem + ORDIN::Step,
-		LastSuperstructureKey = ArtilleryOnline + LastSubstrateKey
+		LastSuperstructureKey = SimOnline + LastSubstrateKey
 	};
 }
 

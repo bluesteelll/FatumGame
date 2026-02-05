@@ -20,8 +20,8 @@ THIRD_PARTY_INCLUDES_END
 
 /**
  * Transform dispatch is the core use case of the skeleton key system. It allows you to assign a key to an arbitrary
- * transform, effectively letting you create implicit objects and actors. This also lets you later use Artillery to bind
- * attributes to any of these transforms. I recognize that this is a strange model compared to the UE norm, but it's actually
+ * transform, effectively letting you create implicit objects and actors. This also lets you bind
+ * attributes to any of these transforms via ECS. I recognize that this is a strange model compared to the UE norm, but it's actually
  * not particularly different from the mesh managers, lightweight instances, and proxies, and in fact,
  * I expect we'll integrate with said systems.
  *

@@ -197,6 +197,9 @@ void free_region(Region *r)
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+// Prevent Windows.h min/max macros from conflicting with std::min/std::max
+#undef min
+#undef max
 
 #define INV_HANDLE(x)       (((x) == NULL) || ((x) == INVALID_HANDLE_VALUE))
 

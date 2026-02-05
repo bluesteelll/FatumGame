@@ -27,11 +27,9 @@ public class FatumGame : ModuleRules
 				"Engine",
 				"InputCore",
 				"EnhancedInput",
-				// Artillery ecosystem
-				"ArtilleryRuntime",
+				// Physics + Identity
 				"Barrage",
 				"SkeletonKey",
-				"Cabling",
 				// ECS (Flecs integration)
 				"UnrealFlecs",
 				"FlecsLibrary",

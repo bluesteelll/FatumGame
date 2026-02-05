@@ -37,14 +37,6 @@
 			"Enabled": true
 		},
 		{
-			"Name": "Cabling",
-			"Enabled": true
-		},
-		{
-			"Name": "Bristlecone",
-			"Enabled": true
-		},
-		{
 			"Name": "Barrage",
 			"Enabled": true
 		},
@@ -57,19 +49,7 @@
 			"Enabled": true
 		},
 		{
-			"Name": "Artillery",
-			"Enabled": true
-		},
-		{
 			"Name": "NiagaraUIRenderer",
-			"Enabled": true
-		},
-		{
-			"Name": "Thistle",
-			"Enabled": true
-		},
-		{
-			"Name": "Sunflower",
 			"Enabled": true
 		},
 		{

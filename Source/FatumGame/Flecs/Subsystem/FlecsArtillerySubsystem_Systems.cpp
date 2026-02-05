@@ -8,7 +8,15 @@
 #include "FlecsInstanceComponents.h"
 #include "FlecsWeaponComponents.h"
 #include "EPhysicsLayer.h"
-#include "Systems/BarrageEntitySpawner.h"
+#include "BarrageSpawnUtils.h"
+#include "FlecsRenderManager.h"
+#include "FlecsEntityDefinition.h"
+#include "FlecsPhysicsProfile.h"
+#include "FlecsProjectileProfile.h"
+#include "FlecsRenderProfile.h"
+#include "FlecsDamageProfile.h"
+#include "FBShapeParams.h"
+#include "Skeletonize.h"
 
 void UFlecsArtillerySubsystem::SetupFlecsSystems()
 {
@@ -185,7 +193,7 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 		{
 			if (WorldItem.DespawnTimer > 0.f)
 			{
-				constexpr float DeltaTime = 1.f / 120.f;
+				const float DeltaTime = Entity.world().get_info()->delta_time;
 				WorldItem.DespawnTimer -= DeltaTime;
 				if (WorldItem.DespawnTimer <= 0.f)
 				{
@@ -206,7 +214,7 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 		{
 			if (WorldItem.PickupGraceTimer > 0.f)
 			{
-				constexpr float DeltaTime = 1.f / 120.f;
+				const float DeltaTime = Entity.world().get_info()->delta_time;
 				WorldItem.PickupGraceTimer -= DeltaTime;
 				if (WorldItem.PickupGraceTimer <= 0.f)
 				{
@@ -231,10 +239,12 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 		.without<FTagDead>()
 		.each([this](flecs::entity Entity, FProjectileInstance& ProjInstance, const FBarrageBody& Body)
 		{
+			EnsureBarrageAccess();
+
 			// Get static data from prefab (via IsA inheritance)
 			const FProjectileStatic* ProjStatic = Entity.try_get<FProjectileStatic>();
 
-			constexpr float DeltaTime = 1.f / 120.f;
+			const float DeltaTime = Entity.world().get_info()->delta_time;
 			ProjInstance.LifetimeRemaining -= DeltaTime;
 			if (ProjInstance.LifetimeRemaining <= 0.f)
 			{
@@ -307,7 +317,7 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 			uint64 ProjectileId = Pair.GetProjectileEntityId();
 			uint64 TargetId = Pair.GetTargetEntityId();
 
-			// Default damage for Artillery projectiles without FDamageStatic
+			// Default damage for projectiles without FDamageStatic
 			float Damage = 25.f;
 			FGameplayTag DamageType;
 			bool bAreaDamage = false;
@@ -350,6 +360,18 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 				flecs::entity Target = World.entity(TargetId);
 				if (Target.is_valid() && !Target.has<FTagDead>())
 				{
+					// Skip self-damage: don't let projectiles damage their owner
+					if (ProjectileEntity.is_valid())
+					{
+						const FProjectileInstance* ProjInst = ProjectileEntity.try_get<FProjectileInstance>();
+						if (ProjInst && ProjInst->OwnerEntityId != 0
+							&& static_cast<uint64>(ProjInst->OwnerEntityId) == TargetId)
+						{
+							PairEntity.add<FTagCollisionProcessed>();
+							return;
+						}
+					}
+
 					// Check if target can receive damage
 					if (Target.has<FHealthInstance>())
 					{
@@ -403,7 +425,7 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 		.without<FTagCollisionProcessed>()
 		.each([&World](flecs::entity PairEntity, const FCollisionPair& Pair)
 		{
-			auto ProcessBounce = [&World](uint64 EntityId) -> bool
+			auto ProcessBounce = [&World](uint64 EntityId, uint64 OtherId) -> bool
 			{
 				if (EntityId == 0) return false;
 
@@ -412,6 +434,16 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 
 				FProjectileInstance* ProjInstance = Entity.try_get_mut<FProjectileInstance>();
 				if (!ProjInstance) return false;
+
+				// Skip bounce during grace period (newly spawned, hasn't left spawn area)
+				if (ProjInstance->GraceFramesRemaining > 0) return true;
+
+				// Skip bounce with own owner
+				if (ProjInstance->OwnerEntityId != 0
+					&& static_cast<uint64>(ProjInstance->OwnerEntityId) == OtherId)
+				{
+					return true;
+				}
 
 				const FProjectileStatic* ProjStatic = Entity.try_get<FProjectileStatic>();
 				const int32 GracePeriodFrames = ProjStatic ? ProjStatic->GracePeriodFrames : 30;
@@ -432,9 +464,9 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 				return true;
 			};
 
-			if (!ProcessBounce(Pair.EntityId1))
+			if (!ProcessBounce(Pair.EntityId1, Pair.EntityId2))
 			{
-				ProcessBounce(Pair.EntityId2);
+				ProcessBounce(Pair.EntityId2, Pair.EntityId1);
 			}
 
 			PairEntity.add<FTagCollisionProcessed>();
@@ -530,10 +562,13 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 		.without<FTagDead>()
 		.each([](flecs::entity Entity, FWeaponInstance& Weapon)
 		{
-			constexpr float DeltaTime = 1.f / 120.f;
+			const float DeltaTime = Entity.world().get_info()->delta_time;
 
-			// Update fire rate timer
-			Weapon.TimeSinceLastShot += DeltaTime;
+			// Countdown fire cooldown (subtract from clean value, no accumulation error)
+			if (Weapon.FireCooldownRemaining > 0.f)
+			{
+				Weapon.FireCooldownRemaining -= DeltaTime;
+			}
 
 			// Update burst cooldown
 			if (Weapon.BurstCooldownRemaining > 0.f)
@@ -557,7 +592,7 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 		.without<FTagDead>()
 		.each([](flecs::entity Entity, FWeaponInstance& Weapon)
 		{
-			constexpr float DeltaTime = 1.f / 120.f;
+			const float DeltaTime = Entity.world().get_info()->delta_time;
 
 			const FWeaponStatic* Static = Entity.try_get<FWeaponStatic>();
 			if (!Static) return;
@@ -612,14 +647,17 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 		.without<FTagDead>()
 		.each([this, &World](flecs::entity WeaponEntity, FWeaponInstance& Weapon, const FEquippedBy& EquippedBy)
 		{
+			// Flecs worker threads need Barrage access for physics lookups
+			EnsureBarrageAccess();
+
 			// Only process equipped weapons
 			if (!EquippedBy.IsEquipped()) return;
 
 			const FWeaponStatic* Static = WeaponEntity.try_get<FWeaponStatic>();
 			if (!Static || !Static->ProjectileDefinition) return;
 
-			// Check fire request
-			if (!Weapon.bFireRequested) return;
+			// Check fire request: continuous hold OR pending trigger (survives Start+Stop batching)
+			if (!Weapon.bFireRequested && !Weapon.bFireTriggerPending) return;
 
 			// Semi-auto: block if already fired while trigger held
 			if (!Static->bIsAutomatic && !Static->bIsBurst && Weapon.bHasFiredSincePress)
@@ -628,19 +666,18 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 				return;
 			}
 
-			// Check if can fire (cooldown, ammo, not reloading)
-			if (!Weapon.CanFire(Static->FireInterval))
+			// Check if can fire (cooldown expired, has ammo, not reloading)
+			if (!Weapon.CanFire())
 			{
-				UE_LOG(LogTemp, Warning, TEXT("WEAPON: CanFire=false (Ammo=%d, Reloading=%d, TimeSince=%.3f, Interval=%.3f, BurstCD=%.3f)"),
-					Weapon.CurrentAmmo, Weapon.bIsReloading, Weapon.TimeSinceLastShot, Static->FireInterval, Weapon.BurstCooldownRemaining);
 				return;
 			}
 
-			// Get character entity
+			// Get character entity - if dead or invalid, stop firing
 			flecs::entity CharacterEntity = World.entity(static_cast<flecs::entity_t>(EquippedBy.CharacterEntityId));
-			if (!CharacterEntity.is_valid())
+			if (!CharacterEntity.is_valid() || !CharacterEntity.is_alive() || CharacterEntity.has<FTagDead>())
 			{
-				UE_LOG(LogTemp, Warning, TEXT("WEAPON: CharacterEntity invalid!"));
+				Weapon.bFireRequested = false;
+				Weapon.bFireTriggerPending = false;
 				return;
 			}
 
@@ -651,60 +688,176 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 				return;
 			}
 
-			// Get muzzle location from character transform
+			// MUZZLE CALCULATION — reads aim state from FAimDirection
+			// (authoritative: set by game thread from UE actor each Tick)
 			FVector MuzzleLocation = FVector::ZeroVector;
 			FVector FireDirection = FVector::ForwardVector;
 
-			if (CachedBarrageDispatch)
 			{
-				FBLet Prim = CachedBarrageDispatch->GetShapeRef(CharBody->BarrageKey);
-				if (FBarragePrimitive::IsNotNull(Prim))
-				{
-					FVector3f CharPos = FBarragePrimitive::GetPosition(Prim);
-					FQuat4f CharRot = FBarragePrimitive::OptimisticGetAbsoluteRotation(Prim);
-					FQuat CharRotD(CharRot.X, CharRot.Y, CharRot.Z, CharRot.W);
-					FVector CharPosD(CharPos.X, CharPos.Y, CharPos.Z);
-					FTransform CharTransform(CharRotD, CharPosD);
-					MuzzleLocation = CharTransform.TransformPosition(Static->MuzzleOffset);
+				FVector CharPosD = FVector::ZeroVector;
+				FVector UseMuzzleOffset = Static->MuzzleOffset;
 
-					// Use FAimDirection if available, otherwise use character forward
-					const FAimDirection* AimDir = CharacterEntity.try_get<FAimDirection>();
-					if (AimDir)
+				const FAimDirection* AimDir = CharacterEntity.try_get<FAimDirection>();
+				if (AimDir)
+				{
+					if (!AimDir->Direction.IsNearlyZero())
 					{
 						FireDirection = AimDir->Direction;
 					}
-					else
+					if (!AimDir->MuzzleOffset.IsNearlyZero())
 					{
-						FireDirection = CharTransform.GetRotation().GetForwardVector();
+						UseMuzzleOffset = AimDir->MuzzleOffset;
 					}
+					CharPosD = AimDir->CharacterPosition;
 				}
+
+				FQuat AimQuat = FRotationMatrix::MakeFromX(FireDirection).ToQuat();
+				FTransform MuzzleTransform(AimQuat, CharPosD);
+				MuzzleLocation = MuzzleTransform.TransformPosition(UseMuzzleOffset);
+
 			}
 
-			// Queue projectile spawn for game thread
-			FPendingProjectileSpawn PendingSpawn;
-			PendingSpawn.ProjectileDefinition = Static->ProjectileDefinition;
-			PendingSpawn.Location = MuzzleLocation;
-			PendingSpawn.Direction = FireDirection;
-			PendingSpawn.SpeedMultiplier = Static->ProjectileSpeedMultiplier;
-			PendingSpawn.DamageMultiplier = Static->DamageMultiplier;
-			PendingSpawn.OwnerEntityId = EquippedBy.CharacterEntityId;
-			PendingSpawn.ProjectilesPerShot = Static->ProjectilesPerShot;
+			// ─────────────────────────────────────────────────────
+			// PROJECTILE CREATION (on sim thread — no game thread round-trip)
+			// Creates Barrage body + Flecs entity immediately.
+			// Only ISM render queued for game thread.
+			// ─────────────────────────────────────────────────────
+			UFlecsEntityDefinition* ProjDef = Static->ProjectileDefinition;
+			UFlecsProjectileProfile* ProjProfile = ProjDef->ProjectileProfile;
+			if (!ProjProfile)
+			{
+				UE_LOG(LogTemp, Error, TEXT("WEAPON: ProjectileDefinition '%s' has no ProjectileProfile!"),
+					*ProjDef->EntityName.ToString());
+				return;
+			}
+			UFlecsPhysicsProfile* PhysProfile = ProjDef->PhysicsProfile;
+			UFlecsRenderProfile* RenderProfile = ProjDef->RenderProfile;
 
-			PendingProjectileSpawns.Enqueue(PendingSpawn);
+			const float CollisionRadius = PhysProfile ? PhysProfile->CollisionRadius : 30.f;
+			const float GravityFactor = PhysProfile ? PhysProfile->GravityFactor : 0.f;
+			const float ProjFriction = PhysProfile ? PhysProfile->Friction : 0.2f;
+			const float ProjRestitution = PhysProfile ? PhysProfile->Restitution : 0.3f;
+			const bool bIsBouncing = ProjProfile->IsBouncing();
+			const bool bNeedsDynamic = bIsBouncing || GravityFactor > 0.f;
 
-			UE_LOG(LogTemp, Log, TEXT("WEAPON: FIRED! Ammo=%d->%d, Auto=%d, Burst=%d"),
-				Weapon.CurrentAmmo + Static->AmmoPerShot, Weapon.CurrentAmmo + Static->AmmoPerShot - Static->AmmoPerShot,
-				Static->bIsAutomatic, Static->bIsBurst);
+			float Speed = ProjProfile->DefaultSpeed * Static->ProjectileSpeedMultiplier;
+			FVector Velocity = FireDirection * Speed;
+
+			for (int32 i = 0; i < Static->ProjectilesPerShot; ++i)
+			{
+				FSkeletonKey ProjectileKey = FBarrageSpawnUtils::GenerateUniqueKey(SKELLY::SFIX_GUN_SHOT);
+
+				// Create Barrage physics body
+				FBSphereParams SphereParams = FBarrageBounder::GenerateSphereBounds(MuzzleLocation, CollisionRadius);
+				FBLet Body;
+
+				if (bNeedsDynamic)
+				{
+					Body = CachedBarrageDispatch->CreateBouncingSphere(
+						SphereParams, ProjectileKey,
+						static_cast<uint16>(EPhysicsLayer::PROJECTILE),
+						bIsBouncing ? ProjRestitution : 0.f, ProjFriction);
+				}
+				else
+				{
+					Body = CachedBarrageDispatch->CreatePrimitive(
+						SphereParams, ProjectileKey,
+						static_cast<uint16>(EPhysicsLayer::PROJECTILE), true);
+				}
+
+				if (!FBarragePrimitive::IsNotNull(Body))
+				{
+					UE_LOG(LogTemp, Error, TEXT("WEAPON: Failed to create projectile body!"));
+					continue;
+				}
+
+				FBarragePrimitive::SetVelocity(Velocity, Body);
+				FBarragePrimitive::SetGravityFactor(GravityFactor, Body);
+
+				// Create Flecs entity with components (no prefab — avoids deferred timing issues)
+				flecs::entity ProjEntity = World.entity();
+
+				FBarrageBody BarrageComp;
+				BarrageComp.BarrageKey = ProjectileKey;
+				ProjEntity.set<FBarrageBody>(BarrageComp);
+
+				// Reverse binding (atomic in FBarragePrimitive)
+				Body->SetFlecsEntity(ProjEntity.id());
+
+				FProjectileInstance ProjInst;
+				ProjInst.LifetimeRemaining = ProjProfile->Lifetime;
+				ProjInst.BounceCount = 0;
+				ProjInst.GraceFramesRemaining = ProjProfile->GetGraceFrames();
+				ProjInst.OwnerEntityId = EquippedBy.CharacterEntityId;
+				ProjEntity.set<FProjectileInstance>(ProjInst);
+				ProjEntity.add<FTagProjectile>();
+
+				// Static data directly on entity (projectile-specific, no prefab sharing needed)
+				if (ProjProfile)
+				{
+					FProjectileStatic ProjStatic;
+					ProjStatic.MaxLifetime = ProjProfile->Lifetime;
+					ProjStatic.MaxBounces = ProjProfile->MaxBounces;
+					ProjStatic.GracePeriodFrames = ProjProfile->GetGraceFrames();
+					ProjStatic.MinVelocity = ProjProfile->MinVelocity;
+					ProjEntity.set<FProjectileStatic>(ProjStatic);
+				}
+
+				if (ProjDef->DamageProfile)
+				{
+					FDamageStatic DmgStatic;
+					DmgStatic.Damage = ProjDef->DamageProfile->Damage;
+					DmgStatic.DamageType = ProjDef->DamageProfile->DamageType;
+					DmgStatic.bAreaDamage = ProjDef->DamageProfile->bAreaDamage;
+					DmgStatic.AreaRadius = ProjDef->DamageProfile->AreaRadius;
+					DmgStatic.bDestroyOnHit = ProjDef->DamageProfile->bDestroyOnHit;
+					DmgStatic.CritChance = ProjDef->DamageProfile->CriticalChance;
+					DmgStatic.CritMultiplier = ProjDef->DamageProfile->CriticalMultiplier;
+					ProjEntity.set<FDamageStatic>(DmgStatic);
+				}
+
+				if (RenderProfile && RenderProfile->Mesh)
+				{
+					FISMRender Render;
+					Render.Mesh = RenderProfile->Mesh;
+					Render.Scale = RenderProfile->Scale;
+					ProjEntity.set<FISMRender>(Render);
+
+					// Queue ISM render for game thread
+					FPendingProjectileSpawn RenderSpawn;
+					RenderSpawn.Mesh = RenderProfile->Mesh;
+					RenderSpawn.Material = RenderProfile->MaterialOverride;
+					RenderSpawn.Scale = RenderProfile->Scale;
+					RenderSpawn.RotationOffset = RenderProfile->RotationOffset;
+					RenderSpawn.Location = MuzzleLocation;
+					RenderSpawn.Direction = FireDirection;
+					RenderSpawn.EntityKey = ProjectileKey;
+					PendingProjectileSpawns.Enqueue(RenderSpawn);
+				}
+
+				UE_LOG(LogTemp, Log, TEXT("WEAPON: Projectile created Key=%llu Entity=%llu (sim thread)"),
+					static_cast<uint64>(ProjectileKey), ProjEntity.id());
+			}
 
 			// Consume ammo
+			int32 AmmoBefore = Weapon.CurrentAmmo;
 			if (!Static->bUnlimitedAmmo)
 			{
 				Weapon.CurrentAmmo -= Static->AmmoPerShot;
 				Weapon.CurrentAmmo = FMath::Max(0, Weapon.CurrentAmmo);
 			}
 
-			// Reset fire rate timer
-			Weapon.TimeSinceLastShot = 0.f;
+			UE_LOG(LogTemp, Log, TEXT("WEAPON: FIRED! Ammo=%d->%d, Auto=%d, Burst=%d"),
+				AmmoBefore, Weapon.CurrentAmmo,
+				Static->bIsAutomatic, Static->bIsBurst);
+
+			// Carry-over overshoot for consistent average fire rate.
+			// If cooldown was -0.003 when we fire, += FireInterval gives 0.097
+			// instead of 0.1, compensating for the overshoot.
+			Weapon.FireCooldownRemaining += Static->FireInterval;
+
+			// Consume pending trigger (one shot per click guaranteed)
+			Weapon.bFireTriggerPending = false;
 
 			// Mark as fired for semi-auto
 			Weapon.bHasFiredSincePress = true;
@@ -766,6 +919,8 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 		.with<FTagDead>()
 		.each([this](flecs::entity Entity)
 		{
+			EnsureBarrageAccess();
+
 			const FBarrageBody* Body = Entity.try_get<FBarrageBody>();
 			const bool bIsProjectile = Entity.has<FTagProjectile>();
 
@@ -782,7 +937,7 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 				// Remove ISM render instance
 				if (CachedBarrageDispatch && CachedBarrageDispatch->GetWorld())
 				{
-					if (UBarrageRenderManager* Renderer = UBarrageRenderManager::Get(CachedBarrageDispatch->GetWorld()))
+					if (UFlecsRenderManager* Renderer = UFlecsRenderManager::Get(CachedBarrageDispatch->GetWorld()))
 					{
 						Renderer->RemoveInstance(Key);
 					}

@@ -19,9 +19,8 @@ public class FlecsBarrage : ModuleRules
 			"UnrealFlecs",
 			"SolidMacros",
 
-			// Barrage/Artillery
+			// Barrage
 			"Barrage",
-			"Cabling",
 			"SkeletonKey"
 		});
 

@@ -68,10 +68,8 @@ class BARRAGE_API UBarrageDispatch : public UTickableWorldSubsystem, public ISke
 	GENERATED_BODY()
 	
 	friend class FWorldSimOwner;
-	friend class UArtilleryLibrary;
 
 public:
-	//minimize use of this outside of artillery blueprint library (UArtilleryLibrary)
 	static inline UBarrageDispatch* SelfPtr = nullptr;
 	constexpr static int OrdinateSeqKey = ORDIN::LastSubstrateKey;
 	virtual bool RegistrationImplementation() override;
@@ -231,7 +229,7 @@ public:
 	bool UpdateCharacter(FBPhysicsInput& CharacterInput) const;
 	
 	//ONLY call this from a thread OTHER than gamethread, or you will experience untold sorrow.
-	void StepWorld(uint64 Time, uint64_t TickCount);
+	void StepWorld(float InDeltaTime, uint64_t TickCount);
 
 	//TODO: oh dear I'm doing the same thing as the TransformQueue... Also probably want to check back on this.
 	bool BroadcastContactEvents() const;
@@ -323,7 +321,7 @@ private:
 	//clean tombs must only ever be called from step world which must only ever be called from one thread.
 	//this reserves as little memory as possible, but it could be quite a lot (megs) of reserved memory if you expire
 	//tons and tons of bodies in one frame. if that's a bottleneck for you, you may wish to shorten the tombstone promise
-	//or optimize this for memory better. In general, Barrage and Artillery trade memory for speed and elegance.
+	//or optimize this for memory better. In general, Barrage trades memory for speed and elegance.
 	TSharedPtr<TArray<FBLet>> Tombs[TombstoneInitialMinimum + 1];
 
 	void CleanTombs()

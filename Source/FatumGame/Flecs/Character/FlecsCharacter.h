@@ -8,8 +8,6 @@
 #include "FlecsCharacter.generated.h"
 
 class UFlecsEntityDefinition;
-class UBarrageCharacterMovement;
-class UPlayerKeyCarry;
 class UInputAction;
 class UInputMappingContext;
 class USpringArmComponent;
@@ -41,14 +39,6 @@ public:
 	// ═══════════════════════════════════════════════════════════════
 	// COMPONENTS
 	// ═══════════════════════════════════════════════════════════════
-
-	/** Key carrier for Artillery/Flecs identity */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Flecs")
-	TObjectPtr<UPlayerKeyCarry> KeyCarry;
-
-	/** Barrage physics movement */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Flecs")
-	TObjectPtr<UBarrageCharacterMovement> BarrageMovement;
 
 	/** Camera boom (only used in third-person mode) */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Camera")
@@ -306,10 +296,16 @@ protected:
 	void OnDestroyItem(const FInputActionValue& Value);
 
 private:
+	/** SkeletonKey generated from actor pointer hash (replaces UPlayerKeyCarry) */
+	FSkeletonKey CharacterKey;
+
 	/** Keys of spawned test entities (for cleanup) */
 	TArray<FSkeletonKey> SpawnedEntityKeys;
 	/** Cached health for change detection */
 	float CachedHealth = 0.f;
+
+	/** Fire was requested before weapon finished spawning — apply after spawn completes. */
+	bool bPendingFireAfterSpawn = false;
 
 	/** Check for health changes from Flecs and fire events */
 	void CheckHealthChanges();
