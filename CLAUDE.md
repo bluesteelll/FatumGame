@@ -20,16 +20,14 @@ Extract to functions/templates. Use auto, range-based for, structured bindings.
 | **Engine** | UE 5.7 |
 | **Physics** | Jolt (Barrage) |
 | **ECS** | Flecs (FlecsIntegration) |
-| **Networking** | Bristlecone (deterministic rollback) |
-| **Simulation** | 120Hz Artillery thread |
+| **Simulation** | 60Hz simulation thread (FSimulationWorker) |
 
 ```
-Bristlecone -> Network inputs (UDP)
-Cabling     -> Local inputs
-Artillery   -> Core simulation (120Hz, separate thread)
+FSimulationWorker -> Simulation thread (60Hz)
+  DrainCommandQueue -> StackUp -> StepWorld -> BroadcastContactEvents -> progress()
 Barrage     -> Jolt Physics
 Flecs       -> Gameplay data (health, damage, items)
-Game Thread -> Cosmetics, rendering
+Game Thread -> Cosmetics, rendering, ISM spawns
 ```
 
 ---
@@ -46,11 +44,14 @@ Game Thread -> Cosmetics, rendering
 | `FlecsInstanceComponents.h/cpp` | Instance components (FHealthInstance, etc.) |
 | `FlecsGameTags.h/cpp` | Tags + ENUMs (FTagItem, FTagCharacter) |
 | `FlecsGameplayLibrary.h/cpp` | Blueprint API (wrappers over UFlecsEntityLibrary) |
-| `FlecsArtillerySubsystem.h/cpp` | Artillery-Flecs bridge, collisions |
+| `FlecsArtillerySubsystem.h/cpp` | Simulation subsystem: sim thread, collisions, binding |
+| `FSimulationWorker.h/cpp` | Simulation thread (~60Hz, lock-free) |
+| `BarrageSpawnUtils.h/cpp` | Barrage spawn utilities |
+| `FlecsRenderManager.h/cpp` | ISM component manager |
 | **Plugin:** `FlecsBarrageComponents.h/cpp` | Bridge: FBarrageBody, FISMRender, FCollisionPair |
 | **Plugin:** `FBarragePrimitive.h` | Atomic FlecsEntityId for reverse binding |
 
-**Profiles:** PhysicsProfile, RenderProfile, HealthProfile, DamageProfile, ProjectileProfile, ContainerProfile, ItemDefinition
+**Profiles:** PhysicsProfile, RenderProfile, HealthProfile, DamageProfile, ProjectileProfile, ContainerProfile, ItemDefinition, WeaponProfile
 
 ---
 
@@ -97,7 +98,8 @@ OnBarrageContact → FCollisionPair + Tags → Systems process by tag → Collis
 ### System Execution Order
 1. WorldItemDespawnSystem → 2. PickupGraceSystem → 3. ProjectileLifetimeSystem
 4. DamageCollisionSystem → 5. BounceCollisionSystem → 6. PickupCollisionSystem → 7. DestructibleCollisionSystem
-8. DeathCheckSystem → 9. DeadEntityCleanupSystem → 10. CollisionPairCleanupSystem (LAST)
+8. WeaponTickSystem → 9. WeaponReloadSystem → 10. WeaponFireSystem
+11. DeathCheckSystem → 12. DeadEntityCleanupSystem → 13. CollisionPairCleanupSystem (LAST)
 
 ---
 
@@ -152,7 +154,7 @@ UFlecsGameplayLibrary::SpawnProjectileFromEntityDef(World, Definition, Location,
 ## Blueprint API
 
 ```cpp
-// Damage/Heal (thread-safe, enqueues to Artillery)
+// Damage/Heal (thread-safe, enqueues to simulation thread)
 UFlecsGameplayLibrary::ApplyDamageByBarrageKey(World, TargetKey, 25.f);
 UFlecsGameplayLibrary::HealEntityByBarrageKey(World, TargetKey, 50.f);
 UFlecsGameplayLibrary::KillEntityByBarrageKey(World, EntityKey);
@@ -181,15 +183,15 @@ Content Browser → Data Asset → **FlecsEntityDefinition** → `DA_Bullet`
 
 | Property | Default | Description |
 |----------|---------|-------------|
-| `EntityDefinition` | — | Data Asset с профилями (обязательно) |
-| `InitialVelocity` | (0,0,0) | Начальная скорость |
-| `bOverrideScale` | false | Переопределить масштаб из RenderProfile |
-| `ScaleOverride` | (1,1,1) | Масштаб если bOverrideScale=true |
-| `bSpawnOnBeginPlay` | true | Спавнить при старте |
-| `bDestroyAfterSpawn` | true | Удалить актор после спавна |
-| `bShowPreview` | true | Preview меша в редакторе |
+| `EntityDefinition` | — | Data Asset with profiles (required) |
+| `InitialVelocity` | (0,0,0) | Initial velocity |
+| `bOverrideScale` | false | Override scale from RenderProfile |
+| `ScaleOverride` | (1,1,1) | Scale if bOverrideScale=true |
+| `bSpawnOnBeginPlay` | true | Spawn on play start |
+| `bDestroyAfterSpawn` | true | Destroy actor after spawning entity |
+| `bShowPreview` | true | Show mesh preview in editor |
 
-**Для ручного спавна:** `bSpawnOnBeginPlay=false`, затем вызвать `SpawnEntity()` из Blueprint/C++.
+**Manual spawn:** Set `bSpawnOnBeginPlay=false`, then call `SpawnEntity()` from Blueprint/C++.
 
 ### Create Character
 Blueprint Class → **FlecsCharacter** → `BP_Player`
@@ -213,7 +215,7 @@ CachedBarrageDispatch->SuggestTombstone(Prim);  // Safe deferred destroy (~19 se
 ### Subsystem Init
 ```cpp
 void UMySubsystem::Initialize(FSubsystemCollectionBase& Collection) {
-    Collection.InitializeDependency<UArtilleryDispatch>();  // BEFORE Super!
+    Collection.InitializeDependency<UBarrageDispatch>();  // BEFORE Super!
     Super::Initialize(Collection);
 }
 void UMySubsystem::OnWorldBeginPlay(UWorld& InWorld) {
@@ -222,7 +224,7 @@ void UMySubsystem::OnWorldBeginPlay(UWorld& InWorld) {
 ```
 
 ### Thread Safety
-Game thread → `EnqueueCommand()` → Artillery executes before `progress()`
+Game thread → `EnqueueCommand()` → Simulation thread executes before `progress()`
 
 ---
 
@@ -293,7 +295,6 @@ entity.set<FItemInstance>(Instance);
 - Git LFS
 
 ## Detailed Docs
-- `.claude/ARTILLERY_BARRAGE_DOCUMENTATION.md`
 - `.claude/BARRAGE_BLUEPRINT_INTEGRATION.md`
 
 ## Broken Assets (cleanup needed)

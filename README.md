@@ -22,12 +22,11 @@ Open `FatumGame.uproject` in Unreal Engine 5.7.
 ## Architecture
 
 ```
-Bristlecone   -> Network inputs (UDP, deterministic rollback)
-Cabling       -> Local inputs & keymapping
-Artillery     -> Core simulation (~120Hz, separate thread)
-Barrage       -> Jolt Physics integration
-Flecs         -> Gameplay ECS (health, damage, items, containers)
-Game Thread   -> Cosmetics, rendering (non-deterministic)
+FSimulationWorker -> Simulation thread (60Hz, lock-free)
+  DrainCommandQueue -> StackUp -> StepWorld -> BroadcastContactEvents -> progress()
+Barrage            -> Jolt Physics integration
+Flecs              -> Gameplay ECS (health, damage, items, weapons)
+Game Thread        -> Cosmetics, rendering, ISM spawns
 ```
 
 ### Key Technologies
@@ -36,28 +35,28 @@ Game Thread   -> Cosmetics, rendering (non-deterministic)
 |-----------|-------------|
 | **Flecs** | High-performance ECS via UnrealFlecs plugin |
 | **Jolt Physics** | Fast physics via Barrage plugin |
-| **Artillery** | 120Hz deterministic simulation thread |
-| **Bristlecone** | Deterministic rollback networking |
+| **FSimulationWorker** | 60Hz simulation thread (physics + ECS) |
+| **SkeletonKey** | Type-safe entity identity system |
 
 ## Project Structure
 
 ```
 Source/FatumGame/
   Flecs/
-    Subsystem/      - FlecsArtillerySubsystem (ECS-Physics bridge)
-    Components/     - ECS components (health, damage, items)
+    Subsystem/      - Simulation subsystem (sim thread, collisions, binding)
+    Components/     - ECS components (health, damage, items, weapons)
     Definitions/    - Entity definitions and profiles
-    Spawner/        - Unified entity spawning API
+    Spawner/        - Unified entity spawning API + render manager
     Character/      - FlecsCharacter implementation
     Library/        - Blueprint function libraries
 
 Plugins/
-    Artillery/      - 120Hz simulation core
     Barrage/        - Jolt Physics wrapper
-    Bristlecone/    - Deterministic networking
-    Cabling/        - Input handling
+    FlecsBarrage/   - Flecs-Barrage bridge (bidirectional binding)
+    FlecsIntegration/ - UnrealFlecs, SolidMacros, FlecsLibrary
     SkeletonKey/    - Entity identity system
-    UnrealFlecs/    - Flecs ECS integration
+    LocomoCore/     - Spatial utilities
+    BarrageTests/   - Physics test suite
 ```
 
 ## Features
@@ -67,6 +66,7 @@ Plugins/
 - **Collision Pair System** - Data-driven collision handling via ECS
 - **Item Prefab System** - Shared static data for items via Flecs prefabs
 - **Container System** - Grid/Slot/List containers for inventory
+- **Weapon System** - Fire rate, burst, reload, ammo with sim-thread firing
 
 ## Documentation
 
@@ -79,6 +79,6 @@ See [CLAUDE.md](CLAUDE.md) for detailed technical documentation including:
 
 ## Credits
 
-- **Artillery/Barrage/Bristlecone:** Hedra, Breach Dogs, Oversized Sun Inc.
+- **Barrage:** Hedra, Breach Dogs, Oversized Sun Inc.
 - **Jolt Physics:** Jorrit Rouwe
 - **Flecs ECS:** Sander Mertens
