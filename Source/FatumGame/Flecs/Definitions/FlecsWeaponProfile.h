@@ -114,9 +114,9 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Visuals|Equipped")
 	FName AttachSocket = TEXT("weapon_r");
 
-	/** Local offset when attached */
+	/** Local offset when attached (relative to camera in FPS mode) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Visuals|Equipped")
-	FTransform AttachOffset;
+	FTransform AttachOffset = FTransform(FRotator::ZeroRotator, FVector(30.f, 15.f, -15.f));
 
 	// ═══════════════════════════════════════════════════════════════
 	// VISUALS - DROPPED

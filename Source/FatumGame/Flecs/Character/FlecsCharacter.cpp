@@ -26,6 +26,7 @@
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
 #include "InputActionValue.h"
+#include "Components/SkeletalMeshComponent.h"
 #include "Async/Async.h"
 
 AFlecsCharacter::AFlecsCharacter(const FObjectInitializer& ObjectInitializer)
@@ -42,6 +43,13 @@ AFlecsCharacter::AFlecsCharacter(const FObjectInitializer& ObjectInitializer)
 	// Default: first-person - attach to root, will be reconfigured in BeginPlay
 	FollowCamera->SetupAttachment(RootComponent);
 	FollowCamera->bUsePawnControlRotation = true;
+
+	// Create weapon mesh component (attached to camera for FPS view)
+	WeaponMeshComponent = CreateDefaultSubobject<USkeletalMeshComponent>(TEXT("WeaponMesh"));
+	WeaponMeshComponent->SetupAttachment(FollowCamera);
+	WeaponMeshComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	WeaponMeshComponent->CastShadow = false;
+	WeaponMeshComponent->SetVisibility(false);
 
 	PrimaryActorTick.bCanEverTick = true;
 }
@@ -174,10 +182,17 @@ void AFlecsCharacter::BeginPlay()
 
 		UFlecsArtillerySubsystem::RegisterLocalPlayer(this, Key);
 	}
+
+	// Auto-equip weapon if TestWeaponDefinition is set
+	if (TestWeaponDefinition && TestWeaponDefinition->WeaponProfile)
+	{
+		SpawnAndEquipTestWeapon();
+	}
 }
 
 void AFlecsCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	DetachWeaponVisual();
 	UFlecsArtillerySubsystem::UnregisterLocalPlayer();
 
 	// Unregister from Flecs
@@ -431,6 +446,17 @@ void AFlecsCharacter::HandleDeath()
 
 FVector AFlecsCharacter::GetMuzzleLocation() const
 {
+	// Prefer weapon mesh socket if available
+	if (WeaponMeshComponent && WeaponMeshComponent->GetSkeletalMeshAsset())
+	{
+		static const FName MuzzleSocketName(TEXT("Muzzle"));
+		if (WeaponMeshComponent->DoesSocketExist(MuzzleSocketName))
+		{
+			return WeaponMeshComponent->GetSocketLocation(MuzzleSocketName);
+		}
+	}
+
+	// Fallback: character position + offset
 	FVector Location = GetActorLocation();
 	Location += GetActorForwardVector() * MuzzleOffset.X;
 	Location += GetActorRightVector() * MuzzleOffset.Y;
@@ -764,6 +790,33 @@ FSkeletonKey AFlecsCharacter::GetEntityKey() const
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// WEAPON VISUAL
+// ═══════════════════════════════════════════════════════════════════════════
+
+void AFlecsCharacter::AttachWeaponVisual(USkeletalMesh* InMesh, const FTransform& AttachOffset)
+{
+	check(IsInGameThread());
+	if (!InMesh)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("AttachWeaponVisual: null mesh"));
+		return;
+	}
+	check(WeaponMeshComponent);
+	WeaponMeshComponent->SetSkeletalMesh(InMesh);
+	WeaponMeshComponent->SetRelativeTransform(AttachOffset);
+	WeaponMeshComponent->SetVisibility(true);
+	UE_LOG(LogTemp, Log, TEXT("WEAPON VISUAL: Attached '%s'"), *InMesh->GetName());
+}
+
+void AFlecsCharacter::DetachWeaponVisual()
+{
+	check(IsInGameThread());
+	if (!WeaponMeshComponent) return;
+	WeaponMeshComponent->SetSkeletalMesh(nullptr);
+	WeaponMeshComponent->SetVisibility(false);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // WEAPON TESTING
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -795,10 +848,14 @@ void AFlecsCharacter::SpawnAndEquipTestWeapon()
 		return;
 	}
 
+	// Capture visual data on game thread (UObject pointers not safe across threads)
+	USkeletalMesh* EquippedMesh = TestWeaponDefinition->WeaponProfile->EquippedMesh;
+	FTransform WeaponAttachOffset = TestWeaponDefinition->WeaponProfile->AttachOffset;
+
 	// Create weapon entity via EnqueueCommand
 	// IMPORTANT: Look up CharEntityId INSIDE the command, on simulation thread,
 	// to ensure BeginPlay's entity binding has already been processed.
-	FlecsSubsystem->EnqueueCommand([this, FlecsSubsystem, CharKey]()
+	FlecsSubsystem->EnqueueCommand([this, FlecsSubsystem, CharKey, EquippedMesh, WeaponAttachOffset]()
 	{
 		flecs::world* World = FlecsSubsystem->GetFlecsWorld();
 		if (!World) return;
@@ -848,9 +905,10 @@ void AFlecsCharacter::SpawnAndEquipTestWeapon()
 		int64 WeaponId = static_cast<int64>(WeaponEntity.id());
 
 		// Use AsyncTask to update TestWeaponEntityId on game thread
-		AsyncTask(ENamedThreads::GameThread, [this, WeaponId]()
+		AsyncTask(ENamedThreads::GameThread, [this, WeaponId, EquippedMesh, WeaponAttachOffset]()
 		{
 			TestWeaponEntityId = WeaponId;
+			AttachWeaponVisual(EquippedMesh, WeaponAttachOffset);
 			UE_LOG(LogTemp, Log, TEXT("FlecsCharacter: Weapon spawned and equipped (EntityId=%lld)"), WeaponId);
 			if (GEngine)
 			{

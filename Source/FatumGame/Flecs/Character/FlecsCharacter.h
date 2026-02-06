@@ -173,6 +173,22 @@ public:
 	TArray<FSkeletonKey> GetSpawnedEntities() const { return SpawnedEntityKeys; }
 
 	// ═══════════════════════════════════════════════════════════════
+	// WEAPON VISUAL (game thread only — cosmetic representation)
+	// ECS weapon logic is in FWeaponInstance/FWeaponStatic on sim thread.
+	// This component is the visual counterpart, driven by game thread.
+	// ═══════════════════════════════════════════════════════════════
+
+	/** Weapon skeletal mesh, attached to camera for first person view */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Weapon|Visual")
+	TObjectPtr<USkeletalMeshComponent> WeaponMeshComponent;
+
+	/** Attach weapon visual. Game thread only. */
+	void AttachWeaponVisual(USkeletalMesh* InMesh, const FTransform& AttachOffset);
+
+	/** Detach weapon visual. Game thread only. */
+	void DetachWeaponVisual();
+
+	// ═══════════════════════════════════════════════════════════════
 	// WEAPON TESTING
 	// ═══════════════════════════════════════════════════════════════
 
