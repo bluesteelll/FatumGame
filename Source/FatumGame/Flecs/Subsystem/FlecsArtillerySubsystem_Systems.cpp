@@ -17,6 +17,8 @@
 #include "FlecsDamageProfile.h"
 #include "FBShapeParams.h"
 #include "Skeletonize.h"
+#include "FlecsMessageSubsystem.h"
+#include "FlecsUIMessages.h"
 
 void UFlecsArtillerySubsystem::SetupFlecsSystems()
 {
@@ -169,6 +171,19 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 
 			// Clear processed hits (keeps array capacity for reuse)
 			Pending.Clear();
+
+			// Broadcast health change to message system (sim→game thread)
+			if (TotalDamageApplied > 0.f)
+			{
+				if (auto* MsgSub = UFlecsMessageSubsystem::SelfPtr)
+				{
+					FUIHealthMessage HealthMsg;
+					HealthMsg.EntityId = static_cast<int64>(Entity.id());
+					HealthMsg.CurrentHP = Health.CurrentHP;
+					HealthMsg.MaxHP = MaxHP;
+					MsgSub->EnqueueMessage(TAG_UI_Health, HealthMsg);
+				}
+			}
 
 			// Log total if multiple hits
 			if (TotalDamageApplied > 0.f && Pending.Hits.Num() > 1)
@@ -607,6 +622,15 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 					Weapon.bIsReloading = true;
 					Weapon.ReloadTimeRemaining = Static->ReloadTime;
 					UE_LOG(LogTemp, Log, TEXT("WEAPON: Reload started, %.2f sec"), Static->ReloadTime);
+
+					if (auto* MsgSub = UFlecsMessageSubsystem::SelfPtr)
+					{
+						FUIReloadMessage ReloadMsg;
+						ReloadMsg.WeaponEntityId = static_cast<int64>(Entity.id());
+						ReloadMsg.bStarted = true;
+						ReloadMsg.MagazineSize = Static->MagazineSize;
+						MsgSub->EnqueueMessage(TAG_UI_Reload, ReloadMsg);
+					}
 				}
 				Weapon.bReloadRequested = false;
 			}
@@ -635,6 +659,16 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 					Weapon.bIsReloading = false;
 					UE_LOG(LogTemp, Log, TEXT("WEAPON: Reload complete, ammo=%d/%d reserve=%d"),
 						Weapon.CurrentAmmo, Static->MagazineSize, Weapon.ReserveAmmo);
+
+					if (auto* MsgSub = UFlecsMessageSubsystem::SelfPtr)
+					{
+						FUIReloadMessage ReloadMsg;
+						ReloadMsg.WeaponEntityId = static_cast<int64>(Entity.id());
+						ReloadMsg.bStarted = false;
+						ReloadMsg.NewAmmo = Weapon.CurrentAmmo;
+						ReloadMsg.MagazineSize = Static->MagazineSize;
+						MsgSub->EnqueueMessage(TAG_UI_Reload, ReloadMsg);
+					}
 				}
 			}
 		});
@@ -853,6 +887,17 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 				AmmoBefore, Weapon.CurrentAmmo,
 				Static->bIsAutomatic, Static->bIsBurst);
 
+			// Broadcast ammo change to message system (sim→game thread)
+			if (auto* MsgSub = UFlecsMessageSubsystem::SelfPtr)
+			{
+				FUIAmmoMessage AmmoMsg;
+				AmmoMsg.WeaponEntityId = static_cast<int64>(WeaponEntity.id());
+				AmmoMsg.CurrentAmmo = Weapon.CurrentAmmo;
+				AmmoMsg.MagazineSize = Static->MagazineSize;
+				AmmoMsg.ReserveAmmo = Weapon.ReserveAmmo;
+				MsgSub->EnqueueMessage(TAG_UI_Ammo, AmmoMsg);
+			}
+
 			// Carry-over overshoot for consistent average fire rate.
 			// If cooldown was -0.003 when we fire, += FireInterval gives 0.097
 			// instead of 0.1, compensating for the overshoot.
@@ -906,6 +951,13 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 			if (!Health.IsAlive())
 			{
 				Entity.add<FTagDead>();
+
+				if (auto* MsgSub = UFlecsMessageSubsystem::SelfPtr)
+				{
+					FUIDeathMessage DeathMsg;
+					DeathMsg.EntityId = static_cast<int64>(Entity.id());
+					MsgSub->EnqueueMessage(TAG_UI_Death, DeathMsg);
+				}
 			}
 		});
 

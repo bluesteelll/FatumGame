@@ -33,6 +33,8 @@
 #include "InputActionValue.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Async/Async.h"
+#include "FlecsMessageSubsystem.h"
+#include "FlecsUIMessages.h"
 
 AFlecsCharacter::AFlecsCharacter(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
@@ -980,6 +982,20 @@ void AFlecsCharacter::PerformInteractionTrace()
 		}
 
 		OnInteractionTargetChanged(NewTarget.IsValid(), NewTarget);
+
+		// Broadcast to message system (game thread — direct broadcast)
+		if (UFlecsMessageSubsystem* MsgSub = UFlecsMessageSubsystem::Get(this))
+		{
+			FUIInteractionMessage InterMsg;
+			InterMsg.bHasTarget = NewTarget.IsValid();
+			InterMsg.TargetKey = NewTarget;
+			if (NewTarget.IsValid())
+			{
+				flecs::entity E = FlecsSubsystem->GetEntityForBarrageKey(NewTarget);
+				InterMsg.EntityId = E.is_valid() ? static_cast<int64>(E.id()) : 0;
+			}
+			MsgSub->BroadcastMessage(TAG_UI_Interaction, InterMsg);
+		}
 	}
 }
 

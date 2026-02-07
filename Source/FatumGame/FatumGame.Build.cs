@@ -16,7 +16,8 @@ public class FatumGame : ModuleRules
 				"FatumGame/Flecs/Definitions",
 				"FatumGame/Flecs/Spawner",
 				"FatumGame/Flecs/Character",
-				"FatumGame/Flecs/Library"
+					"FatumGame/Flecs/Library",
+				"FatumGame/Flecs/UI"
 			}
 		);
 
