@@ -238,6 +238,32 @@ struct FContainerStatic
  * Reference to UFlecsEntityDefinition - lives in PREFAB.
  * Allows getting back to the UE asset from any entity.
  */
+// ═══════════════════════════════════════════════════════════════
+// INTERACTION STATIC
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Static interaction data - lives in PREFAB, shared by all entities of this type.
+ * Contains immutable interaction rules. No instance component needed.
+ *
+ * The interaction type is determined at runtime from entity tags:
+ * - FTagPickupable + FTagItem → pickup
+ * - FTagContainer → open container
+ * - else → generic use
+ */
+struct FInteractionStatic
+{
+	/** Maximum interaction range (cm) */
+	float MaxRange = 300.f;
+
+	/** If true, entity becomes non-interactable after first use */
+	bool bSingleUse = false;
+};
+
+// ═══════════════════════════════════════════════════════════════
+// ENTITY DEFINITION REFERENCE
+// ═══════════════════════════════════════════════════════════════
+
 struct FEntityDefinitionRef
 {
 	/** Reference to the EntityDefinition asset */

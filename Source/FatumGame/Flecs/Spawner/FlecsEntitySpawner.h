@@ -16,6 +16,7 @@ class UFlecsHealthProfile;
 class UFlecsDamageProfile;
 class UFlecsProjectileProfile;
 class UFlecsContainerProfile;
+class UFlecsInteractionProfile;
 class UFlecsArtillerySubsystem;
 
 /**
@@ -107,6 +108,10 @@ struct FATUMGAME_API FEntitySpawnRequest
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Profiles")
 	TObjectPtr<UFlecsContainerProfile> ContainerProfile;
 
+	/** Interaction profile - makes entity interactable */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Profiles")
+	TObjectPtr<UFlecsInteractionProfile> InteractionProfile;
+
 	// ═══════════════════════════════════════════════════════════════
 	// INLINE OVERRIDES (use when no Data Asset needed)
 	// ═══════════════════════════════════════════════════════════════
@@ -146,6 +151,10 @@ struct FATUMGAME_API FEntitySpawnRequest
 	/** Is a character entity */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tags")
 	bool bIsCharacter = false;
+
+	/** Can be interacted with (press E) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tags")
+	bool bInteractable = false;
 
 	// ═══════════════════════════════════════════════════════════════
 	// C++ FLUENT BUILDER
@@ -300,6 +309,13 @@ struct FATUMGAME_API FEntitySpawnRequest
 		return *this;
 	}
 
+	/** Make interactable */
+	FEntitySpawnRequest& Interactable()
+	{
+		bInteractable = true;
+		return *this;
+	}
+
 	/** Spawn the entity (convenience, calls UFlecsEntityLibrary::SpawnEntity) */
 	FSkeletonKey Spawn(UObject* WorldContext) const;
 
@@ -320,7 +336,8 @@ struct FATUMGAME_API FEntitySpawnRequest
 			|| HealthProfile != nullptr
 			|| DamageProfile != nullptr
 			|| ProjectileProfile != nullptr
-			|| ContainerProfile != nullptr;
+			|| ContainerProfile != nullptr
+			|| InteractionProfile != nullptr;
 	}
 
 	/** Check if request will create a world entity (physics or render) */

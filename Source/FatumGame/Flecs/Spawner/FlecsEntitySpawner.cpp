@@ -9,6 +9,7 @@
 #include "FlecsDamageProfile.h"
 #include "FlecsProjectileProfile.h"
 #include "FlecsContainerProfile.h"
+#include "FlecsInteractionProfile.h"
 #include "FlecsGameTags.h"
 #include "FlecsStaticComponents.h"
 #include "FlecsInstanceComponents.h"
@@ -129,12 +130,14 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 	UFlecsDamageProfile* EffectiveDamage = Request.DamageProfile;
 	UFlecsProjectileProfile* EffectiveProjectile = Request.ProjectileProfile;
 	UFlecsContainerProfile* EffectiveContainer = Request.ContainerProfile;
+	UFlecsInteractionProfile* EffectiveInteraction = Request.InteractionProfile;
 
 	// Default tags from request
 	bool bPickupable = Request.bPickupable;
 	bool bDestructible = Request.bDestructible;
 	bool bHasLoot = Request.bHasLoot;
 	bool bIsCharacter = Request.bIsCharacter;
+	bool bInteractable = Request.bInteractable;
 	int32 ItemCount = Request.ItemCount;
 	float DespawnTime = Request.DespawnTime;
 
@@ -150,12 +153,16 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 		if (!EffectiveDamage) EffectiveDamage = Def->DamageProfile;
 		if (!EffectiveProjectile) EffectiveProjectile = Def->ProjectileProfile;
 		if (!EffectiveContainer) EffectiveContainer = Def->ContainerProfile;
+		if (!EffectiveInteraction) EffectiveInteraction = Def->InteractionProfile;
 
 		// Apply tags from definition (OR with request tags)
 		bPickupable = bPickupable || Def->bPickupable;
 		bDestructible = bDestructible || Def->bDestructible;
 		bHasLoot = bHasLoot || Def->bHasLoot;
 		bIsCharacter = bIsCharacter || Def->bIsCharacter;
+
+		// InteractionProfile implies interactable
+		bInteractable = bInteractable || EffectiveInteraction != nullptr;
 
 		// Use definition defaults if not overridden
 		if (ItemCount == 1 && Def->DefaultItemCount > 1)
@@ -365,6 +372,7 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 		bool bDestructible;
 		bool bHasLoot;
 		bool bIsCharacter;
+		bool bInteractable;
 
 		// Owner
 		FSkeletonKey OwnerKey;
@@ -418,6 +426,7 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 	Data.bDestructible = bDestructible;
 	Data.bHasLoot = bHasLoot;
 	Data.bIsCharacter = bIsCharacter;
+	Data.bInteractable = bInteractable || EffectiveInteraction != nullptr;
 	Data.OwnerKey = Request.OwnerKey;
 	Data.OwnerEntityId = Request.OwnerEntityId;
 
@@ -590,6 +599,10 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 		if (Data.bIsCharacter)
 		{
 			Entity.add<FTagCharacter>();
+		}
+		if (Data.bInteractable)
+		{
+			Entity.add<FTagInteractable>();
 		}
 
 		UE_LOG(LogFlecsEntity, Verbose, TEXT("Spawned entity: Key=%llu FlecsId=%llu Item=%d Health=%d Projectile=%d Container=%d Prefab=%d"),

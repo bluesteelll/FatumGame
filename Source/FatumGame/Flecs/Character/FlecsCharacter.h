@@ -269,6 +269,39 @@ public:
 	void RemoveAllItemsFromTestContainer();
 
 	// ═══════════════════════════════════════════════════════════════
+	// INTERACTION
+	// ═══════════════════════════════════════════════════════════════
+
+	/** Maximum distance for interaction raycast (cm) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flecs|Interaction")
+	float MaxInteractionDistance = 500.f;
+
+	/** Use sphere trace instead of ray trace for interaction */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flecs|Interaction")
+	bool bUseSphereTrace = true;
+
+	/** Sphere radius for interaction trace (cm) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flecs|Interaction",
+		meta = (EditCondition = "bUseSphereTrace", ClampMin = "5", ClampMax = "50"))
+	float InteractionSphereRadius = 15.f;
+
+	/** Get the BarrageKey of the current interaction target */
+	UFUNCTION(BlueprintPure, Category = "Flecs|Interaction")
+	FSkeletonKey GetInteractionTarget() const { return CurrentInteractionTarget; }
+
+	/** Is there a valid interaction target? */
+	UFUNCTION(BlueprintPure, Category = "Flecs|Interaction")
+	bool HasInteractionTarget() const { return CurrentInteractionTarget.IsValid(); }
+
+	/** Get prompt text for current interaction target */
+	UFUNCTION(BlueprintPure, Category = "Flecs|Interaction")
+	FText GetInteractionPrompt() const;
+
+	/** Called when interaction target changes (for UI updates) */
+	UFUNCTION(BlueprintImplementableEvent, Category = "Flecs|Events")
+	void OnInteractionTargetChanged(bool bHasTarget, FSkeletonKey TargetKey);
+
+	// ═══════════════════════════════════════════════════════════════
 	// IDENTITY
 	// ═══════════════════════════════════════════════════════════════
 
@@ -349,4 +382,23 @@ private:
 
 	/** Check for health changes from Flecs and fire events */
 	void CheckHealthChanges();
+
+	// ─────────────────────────────────────────────────────────
+	// INTERACTION (private)
+	// ─────────────────────────────────────────────────────────
+
+	/** Current interaction target (SkeletonKey of a Barrage body) */
+	FSkeletonKey CurrentInteractionTarget;
+
+	/** Cached prompt text for current target (avoids cross-thread reads) */
+	FText CachedInteractionPrompt;
+
+	/** Timer handle for 10 Hz interaction raycast */
+	FTimerHandle InteractionTraceTimerHandle;
+
+	/** Perform periodic raycast to detect interactable entities */
+	void PerformInteractionTrace();
+
+	/** Execute interaction with CurrentInteractionTarget */
+	void TryInteract();
 };

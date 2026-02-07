@@ -37,6 +37,7 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 	World.component<FItemStaticData>();
 	World.component<FContainerStatic>();
 	World.component<FEntityDefinitionRef>();
+	World.component<FInteractionStatic>();
 
 	// ─────────────────────────────────────────────────────────
 	// INSTANCE COMPONENTS (Per-entity mutable data)
@@ -75,6 +76,7 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 	World.component<FTagCharacter>();
 	World.component<FTagEquipment>();
 	World.component<FTagConsumable>();
+	World.component<FTagInteractable>();
 	World.component<FTagConstrained>();
 
 	// ─────────────────────────────────────────────────────────

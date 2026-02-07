@@ -66,3 +66,6 @@ struct FTagEquipment {};
 
 /** Entity is consumable (can be used/eaten) */
 struct FTagConsumable {};
+
+/** Entity can be interacted with (press E) */
+struct FTagInteractable {};

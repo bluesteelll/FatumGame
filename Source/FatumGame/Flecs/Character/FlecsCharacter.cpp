@@ -11,6 +11,7 @@
 #include "FlecsWeaponProfile.h"
 #include "FlecsItemDefinition.h"
 #include "FlecsContainerProfile.h"
+#include "FlecsInteractionProfile.h"
 #include "FlecsArtillerySubsystem.h"
 #include "FlecsGameTags.h"
 #include "FlecsStaticComponents.h"
@@ -261,12 +262,24 @@ void AFlecsCharacter::BeginPlay()
 	{
 		SpawnAndEquipTestWeapon();
 	}
+
+	// Start 10 Hz interaction trace timer
+	GetWorld()->GetTimerManager().SetTimer(
+		InteractionTraceTimerHandle,
+		this,
+		&AFlecsCharacter::PerformInteractionTrace,
+		0.1f, // 10 Hz
+		true   // looping
+	);
 }
 
 void AFlecsCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	InventoryEntityId = 0;
 	WeaponInventoryEntityId = 0;
+
+	GetWorld()->GetTimerManager().ClearTimer(InteractionTraceTimerHandle);
+	CurrentInteractionTarget = FSkeletonKey();
 
 	DetachWeaponVisual();
 	UFlecsArtillerySubsystem::UnregisterLocalPlayer();
@@ -696,6 +709,13 @@ void AFlecsCharacter::DestroyLastSpawnedEntity()
 
 void AFlecsCharacter::OnSpawnItem(const FInputActionValue& Value)
 {
+	// If we have an interaction target, interact with it
+	if (CurrentInteractionTarget.IsValid())
+	{
+		TryInteract();
+		return;
+	}
+
 	// If container testing is configured, use container mode
 	if (TestContainerDefinition && TestItemDefinition && TestItemDefinition->ItemDefinition)
 	{
@@ -856,6 +876,164 @@ void AFlecsCharacter::RemoveAllItemsFromTestContainer()
 	{
 		GEngine->AddOnScreenDebugMessage(-1, 3.f, FColor::Yellow, Message);
 	}
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// INTERACTION
+// ═══════════════════════════════════════════════════════════════════════════
+
+void AFlecsCharacter::PerformInteractionTrace()
+{
+	APlayerController* PC = Cast<APlayerController>(Controller);
+	if (!PC) return;
+
+	UBarrageDispatch* Barrage = GetWorld()->GetSubsystem<UBarrageDispatch>();
+	UFlecsArtillerySubsystem* FlecsSubsystem = GetWorld()->GetSubsystem<UFlecsArtillerySubsystem>();
+	if (!Barrage || !FlecsSubsystem) return;
+
+	// Get camera viewpoint
+	FVector CameraLocation;
+	FRotator CameraRotation;
+	PC->GetPlayerViewPoint(CameraLocation, CameraRotation);
+	FVector Direction = CameraRotation.Vector();
+
+	// Set up filters: detect MOVING layer objects, ignore self
+	auto BroadPhaseFilter = Barrage->GetDefaultBroadPhaseLayerFilter(Layers::MOVING);
+	auto ObjectFilter = Barrage->GetDefaultLayerFilter(Layers::MOVING);
+	FBarrageKey CharBarrageKey = Barrage->GetBarrageKeyFromSkeletonKey(CharacterKey);
+	auto BodyFilter = Barrage->GetFilterToIgnoreSingleBody(CharBarrageKey);
+
+	// Cast ray/sphere
+	TSharedPtr<FHitResult> HitResult = MakeShared<FHitResult>();
+
+	if (bUseSphereTrace)
+	{
+		Barrage->SphereCast(
+			InteractionSphereRadius,
+			MaxInteractionDistance,
+			CameraLocation,
+			Direction,
+			HitResult,
+			BroadPhaseFilter, ObjectFilter, BodyFilter);
+	}
+	else
+	{
+		Barrage->CastRay(
+			CameraLocation,
+			Direction * MaxInteractionDistance,
+			BroadPhaseFilter, ObjectFilter, BodyFilter,
+			HitResult);
+	}
+
+	FSkeletonKey NewTarget;
+
+	if (HitResult->bBlockingHit)
+	{
+		// Convert BodyID → BarrageKey → SkeletonKey → Flecs entity
+		FBarrageKey HitBarrageKey = Barrage->GetBarrageKeyFromFHitResult(HitResult);
+		FBLet Prim = Barrage->GetShapeRef(HitBarrageKey);
+		if (FBarragePrimitive::IsNotNull(Prim))
+		{
+			FSkeletonKey HitKey = Prim->KeyOutOfBarrage;
+			flecs::entity HitEntity = FlecsSubsystem->GetEntityForBarrageKey(HitKey);
+
+			if (HitEntity.is_valid() && HitEntity.has<FTagInteractable>() && !HitEntity.has<FTagDead>())
+			{
+				// Check interaction range from InteractionStatic
+				const FInteractionStatic* InterStatic = HitEntity.try_get<FInteractionStatic>();
+				float MaxRange = InterStatic ? InterStatic->MaxRange : MaxInteractionDistance;
+
+				if (HitResult->Distance <= MaxRange)
+				{
+					NewTarget = HitKey;
+				}
+			}
+		}
+	}
+
+	// Fire event if target changed
+	if (NewTarget != CurrentInteractionTarget)
+	{
+		CurrentInteractionTarget = NewTarget;
+
+		// Cache interaction prompt (avoids cross-thread reads later)
+		if (NewTarget.IsValid())
+		{
+			flecs::entity TargetEntity = FlecsSubsystem->GetEntityForBarrageKey(NewTarget);
+			if (TargetEntity.is_valid())
+			{
+				const FEntityDefinitionRef* DefRef = TargetEntity.try_get<FEntityDefinitionRef>();
+				if (DefRef && DefRef->Definition && DefRef->Definition->InteractionProfile)
+				{
+					CachedInteractionPrompt = DefRef->Definition->InteractionProfile->InteractionPrompt;
+				}
+				else
+				{
+					CachedInteractionPrompt = NSLOCTEXT("Interaction", "Fallback", "Press E");
+				}
+			}
+			UE_LOG(LogTemp, Log, TEXT("Interaction: Target acquired Key=%llu"), static_cast<uint64>(NewTarget));
+		}
+		else
+		{
+			CachedInteractionPrompt = FText::GetEmpty();
+		}
+
+		OnInteractionTargetChanged(NewTarget.IsValid(), NewTarget);
+	}
+}
+
+void AFlecsCharacter::TryInteract()
+{
+	if (!CurrentInteractionTarget.IsValid()) return;
+
+	UFlecsArtillerySubsystem* FlecsSubsystem = GetWorld()->GetSubsystem<UFlecsArtillerySubsystem>();
+	if (!FlecsSubsystem) return;
+
+	FSkeletonKey TargetKey = CurrentInteractionTarget;
+	FlecsSubsystem->EnqueueCommand([FlecsSubsystem, TargetKey]()
+	{
+		flecs::entity Target = FlecsSubsystem->GetEntityForBarrageKey(TargetKey);
+		if (!Target.is_valid() || Target.has<FTagDead>() || !Target.has<FTagInteractable>())
+		{
+			UE_LOG(LogTemp, Warning, TEXT("Interact: Target %llu no longer valid/interactable"),
+				static_cast<uint64>(TargetKey));
+			return;
+		}
+
+		// Determine interaction type from entity tags
+		if (Target.has<FTagPickupable>() && Target.has<FTagItem>())
+		{
+			// Pickup item
+			UE_LOG(LogTemp, Log, TEXT("Interact: Pickup entity %llu (Key=%llu)"),
+				Target.id(), static_cast<uint64>(TargetKey));
+			Target.add<FTagDead>();
+		}
+		else if (Target.has<FTagContainer>())
+		{
+			// Open container (TODO: container UI)
+			UE_LOG(LogTemp, Log, TEXT("Interact: Open container %llu (Key=%llu)"),
+				Target.id(), static_cast<uint64>(TargetKey));
+		}
+		else
+		{
+			// Generic use
+			UE_LOG(LogTemp, Log, TEXT("Interact: Use entity %llu (Key=%llu)"),
+				Target.id(), static_cast<uint64>(TargetKey));
+		}
+
+		// If single-use, remove interactable tag
+		const FInteractionStatic* InterStatic = Target.try_get<FInteractionStatic>();
+		if (InterStatic && InterStatic->bSingleUse)
+		{
+			Target.remove<FTagInteractable>();
+		}
+	});
+}
+
+FText AFlecsCharacter::GetInteractionPrompt() const
+{
+	return CachedInteractionPrompt;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

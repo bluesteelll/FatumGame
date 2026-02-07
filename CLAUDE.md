@@ -36,7 +36,7 @@ Game Thread -> Cosmetics, rendering, ISM spawns
 
 | File | Purpose |
 |------|---------|
-| `FlecsCharacter.h/cpp` | Character with Flecs (health, shooting, E/F test) |
+| `FlecsCharacter.h/cpp` | Character with Flecs (health, shooting, interaction, E/F test) |
 | `FlecsEntitySpawner.h/cpp` | **Unified Entity API**: FEntitySpawnRequest, UFlecsEntityLibrary |
 | `FlecsEntitySpawnerActor.h/cpp` | **Editor spawner**: drag to level, set EntityDefinition |
 | `FlecsEntityDefinition.h` | Unified preset combining all profiles |
@@ -56,7 +56,7 @@ Game Thread -> Cosmetics, rendering, ISM spawns
 | **Plugin:** `FlecsBarrageComponents.h/cpp` | Bridge: FBarrageBody, FISMRender, FCollisionPair |
 | **Plugin:** `FBarragePrimitive.h` | Atomic FlecsEntityId for reverse binding |
 
-**Profiles:** PhysicsProfile, RenderProfile, HealthProfile, DamageProfile, ProjectileProfile, ContainerProfile, ItemDefinition, WeaponProfile
+**Profiles:** PhysicsProfile, RenderProfile, HealthProfile, DamageProfile, ProjectileProfile, ContainerProfile, ItemDefinition, WeaponProfile, InteractionProfile
 
 ---
 
@@ -71,6 +71,7 @@ PREFAB (one per type) ───────────────────�
   FProjectileStatic { MaxLifetime, MaxBounces, GracePeriodFrames, MinVelocity }
   FItemStaticData   { TypeId, MaxStack, Weight, GridSize, EntityDefinition* }
   FContainerStatic  { Type, GridWidth, GridHeight, MaxItems, MaxWeight }
+  FInteractionStatic { MaxRange, bSingleUse }
   FEntityDefinitionRef { EntityDefinition* }
          ↑ IsA (inheritance)
 ENTITY (each instance) ─────────────────────────────────────
@@ -81,7 +82,7 @@ ENTITY (each instance) ───────────────────
   FContainedIn         { ContainerEntityId, GridPosition, SlotIndex }
   FBarrageBody         { SkeletonKey }  // Forward binding
   FISMRender           { Mesh, Scale }
-  + Tags: FTagProjectile, FTagCharacter, FTagItem, FTagContainer, FTagDead
+  + Tags: FTagProjectile, FTagCharacter, FTagItem, FTagContainer, FTagDead, FTagInteractable
 ```
 
 ### Damage System
@@ -204,6 +205,34 @@ Blueprint Class → **FlecsCharacter** → `BP_Player`
 - Add: SpringArm + Camera
 
 **Note:** Gravity is in PhysicsProfile.GravityFactor (0=laser, 1=grenade)
+
+---
+
+## Interaction System
+
+Barrage raycast-based interaction with Flecs entities (chests, items, switches).
+UE line traces can't see ECS entities (ISM-rendered, no UE actors). Uses Jolt physics queries instead.
+
+```
+Game Thread (10 Hz timer):
+  Camera → SphereCast via Barrage → BodyID → BarrageKey → Flecs entity
+    → has<FTagInteractable>()? → CurrentInteractionTarget
+
+E Key (OnSpawnItem):
+  if CurrentTarget valid → EnqueueCommand → sim thread:
+    FTagPickupable + FTagItem → pickup (add FTagDead)
+    FTagContainer → open container (TODO: UI)
+    else → generic use
+  else → existing test spawn behavior
+```
+
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| `FInteractionStatic` | Prefab | MaxRange, bSingleUse |
+| `FTagInteractable` | Entity | Tag for raycast filtering |
+| `UFlecsInteractionProfile` | Data Asset | InteractionPrompt, InteractionRange, bSingleUse |
+
+**Prompt text** is NOT stored in ECS — read via `FEntityDefinitionRef → EntityDefinition → InteractionProfile → InteractionPrompt`.
 
 ---
 

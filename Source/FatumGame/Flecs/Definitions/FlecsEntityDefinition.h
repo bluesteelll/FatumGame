@@ -14,6 +14,7 @@ class UFlecsDamageProfile;
 class UFlecsProjectileProfile;
 class UFlecsContainerProfile;
 class UFlecsWeaponProfile;
+class UFlecsInteractionProfile;
 
 /**
  * Unified entity definition - a preset combining multiple profiles.
@@ -94,6 +95,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Instanced, Category = "Profiles")
 	TObjectPtr<UFlecsWeaponProfile> WeaponProfile;
 
+	/** Interaction - makes entity interactable (press E) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Instanced, Category = "Profiles")
+	TObjectPtr<UFlecsInteractionProfile> InteractionProfile;
+
 	// ═══════════════════════════════════════════════════════════════
 	// DEFAULT TAGS
 	// ═══════════════════════════════════════════════════════════════
@@ -140,7 +145,8 @@ public:
 			|| DamageProfile != nullptr
 			|| ProjectileProfile != nullptr
 			|| ContainerProfile != nullptr
-			|| WeaponProfile != nullptr;
+			|| WeaponProfile != nullptr
+			|| InteractionProfile != nullptr;
 	}
 
 	/** Check if this will create a world entity (physics or render) */
@@ -160,6 +166,9 @@ public:
 
 	/** Check if this is a weapon */
 	bool IsWeapon() const { return WeaponProfile != nullptr; }
+
+	/** Check if this is interactable */
+	bool IsInteractable() const { return InteractionProfile != nullptr; }
 
 	virtual FPrimaryAssetId GetPrimaryAssetId() const override
 	{
