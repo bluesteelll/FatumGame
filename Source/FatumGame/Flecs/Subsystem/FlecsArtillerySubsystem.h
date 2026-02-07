@@ -246,7 +246,7 @@ public:
 
 	// ═══════════════════════════════════════════════════════════════
 	// DEPRECATED API (for backward compatibility during migration)
-	// Will be removed after FlecsGameplayLibrary and FlecsCharacter are updated.
+	// Will be removed after FlecsCharacter is updated.
 	// ═══════════════════════════════════════════════════════════════
 
 	UE_DEPRECATED(5.7, "Use BindEntityToBarrage instead")

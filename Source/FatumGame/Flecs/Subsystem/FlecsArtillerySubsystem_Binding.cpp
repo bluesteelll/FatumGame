@@ -5,7 +5,6 @@
 #include "FBarragePrimitive.h"
 #include "FlecsGameTags.h"
 #include "FlecsInstanceComponents.h"
-#include "FlecsGameplayLibrary.h"
 #include "FlecsEntityDefinition.h"
 #include "FlecsProjectileProfile.h"
 #include "BarrageSpawnUtils.h"

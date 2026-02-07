@@ -43,7 +43,12 @@ Game Thread -> Cosmetics, rendering, ISM spawns
 | `FlecsStaticComponents.h` | PREFAB components (FHealthStatic, FDamageStatic, etc.) |
 | `FlecsInstanceComponents.h/cpp` | Instance components (FHealthInstance, etc.) |
 | `FlecsGameTags.h/cpp` | Tags + ENUMs (FTagItem, FTagCharacter) |
-| `FlecsGameplayLibrary.h/cpp` | Blueprint API (wrappers over UFlecsEntityLibrary) |
+| `FlecsDamageLibrary.h/cpp` | Blueprint API: damage, heal, health queries |
+| `FlecsWeaponLibrary.h/cpp` | Blueprint API: weapon control (fire, reload, aim) |
+| `FlecsContainerLibrary.h/cpp` | Blueprint API: container & item operations |
+| `FlecsConstraintLibrary.h/cpp` | Blueprint API: physics constraints |
+| `FlecsSpawnLibrary.h/cpp` | Blueprint API: spawn (projectiles, items, destructibles, groups) |
+| `FlecsLibraryHelpers.h` | Shared inline helpers for library classes |
 | `FlecsArtillerySubsystem.h/cpp` | Simulation subsystem: sim thread, collisions, binding |
 | `FSimulationWorker.h/cpp` | Simulation thread (~60Hz, lock-free) |
 | `BarrageSpawnUtils.h/cpp` | Barrage spawn utilities |
@@ -139,7 +144,7 @@ Request.InitialVelocity = Velocity;
 UFlecsEntityLibrary::SpawnEntity(World, Request);
 
 // Blueprint wrapper (uses unified API internally)
-UFlecsGameplayLibrary::SpawnProjectileFromEntityDef(World, Definition, Location, Direction, Speed, OwnerId);
+UFlecsSpawnLibrary::SpawnProjectileFromEntityDef(World, Definition, Location, Direction, Speed, OwnerId);
 ```
 
 ### Projectile Physics Types
@@ -155,14 +160,14 @@ UFlecsGameplayLibrary::SpawnProjectileFromEntityDef(World, Definition, Location,
 
 ```cpp
 // Damage/Heal (thread-safe, enqueues to simulation thread)
-UFlecsGameplayLibrary::ApplyDamageByBarrageKey(World, TargetKey, 25.f);
-UFlecsGameplayLibrary::HealEntityByBarrageKey(World, TargetKey, 50.f);
-UFlecsGameplayLibrary::KillEntityByBarrageKey(World, EntityKey);
+UFlecsDamageLibrary::ApplyDamageByBarrageKey(World, TargetKey, 25.f);
+UFlecsDamageLibrary::HealEntityByBarrageKey(World, TargetKey, 50.f);
+UFlecsDamageLibrary::KillEntityByBarrageKey(World, EntityKey);
 
 // Containers
-AddItemToContainerFromDefinition(World, ContainerKey, EntityDef, Count, OutAdded);
-RemoveAllItemsFromContainer(World, ContainerKey);
-GetContainerItemCount(World, ContainerKey);
+UFlecsContainerLibrary::AddItemToContainer(World, ContainerKey, EntityDef, Count, OutAdded);
+UFlecsContainerLibrary::RemoveAllItemsFromContainer(World, ContainerKey);
+UFlecsContainerLibrary::GetContainerItemCount(World, ContainerKey);
 ```
 
 ---

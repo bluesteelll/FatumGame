@@ -217,6 +217,30 @@ public:
 	void ReloadTestWeapon();
 
 	// ═══════════════════════════════════════════════════════════════
+	// INVENTORY
+	// Pure ECS containers — no physics, no SkeletonKey.
+	// Defined via Data Assets, spawned on BeginPlay.
+	// ═══════════════════════════════════════════════════════════════
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flecs|Inventory")
+	TObjectPtr<UFlecsEntityDefinition> InventoryDefinition;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flecs|Inventory")
+	TObjectPtr<UFlecsEntityDefinition> WeaponInventoryDefinition;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Flecs|Inventory")
+	int64 InventoryEntityId = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Flecs|Inventory")
+	int64 WeaponInventoryEntityId = 0;
+
+	UFUNCTION(BlueprintPure, Category = "Flecs|Inventory")
+	int64 GetInventoryEntityId() const { return InventoryEntityId; }
+
+	UFUNCTION(BlueprintPure, Category = "Flecs|Inventory")
+	int64 GetWeaponInventoryEntityId() const { return WeaponInventoryEntityId; }
+
+	// ═══════════════════════════════════════════════════════════════
 	// CONTAINER TESTING
 	// ═══════════════════════════════════════════════════════════════
 

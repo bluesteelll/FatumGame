@@ -1,6 +1,6 @@
 
 #include "FlecsConstrainedGroupSpawner.h"
-#include "FlecsGameplayLibrary.h"
+#include "FlecsConstraintLibrary.h"
 #include "FlecsArtillerySubsystem.h"
 #include "FlecsGameTags.h"
 #include "FlecsStaticComponents.h"
@@ -186,7 +186,7 @@ FFlecsGroupSpawnResult AFlecsConstrainedGroupSpawner::SpawnGroup()
 		switch (ConstraintDef.ConstraintType)
 		{
 		case EFlecsConstraintType::Fixed:
-			ConstraintKey = UFlecsGameplayLibrary::CreateFixedConstraint(
+			ConstraintKey = UFlecsConstraintLibrary::CreateFixedConstraint(
 				this, Key1, Key2, ConstraintDef.BreakForce, ConstraintDef.BreakTorque);
 			break;
 
@@ -199,7 +199,7 @@ FFlecsGroupSpawnResult AFlecsConstrainedGroupSpawner::SpawnGroup()
 				FVector WorldAnchor = WorldTransform1.TransformPosition(ConstraintDef.AnchorOffset1);
 				FVector WorldHingeAxis = WorldTransform1.TransformVectorNoScale(ConstraintDef.HingeAxis);
 
-				ConstraintKey = UFlecsGameplayLibrary::CreateHingeConstraint(
+				ConstraintKey = UFlecsConstraintLibrary::CreateHingeConstraint(
 					this, Key1, Key2, WorldAnchor, WorldHingeAxis, ConstraintDef.BreakForce);
 			}
 			break;
@@ -207,13 +207,13 @@ FFlecsGroupSpawnResult AFlecsConstrainedGroupSpawner::SpawnGroup()
 		case EFlecsConstraintType::Distance:
 			UE_LOG(LogTemp, Warning, TEXT("Spawner Distance: MinDist=%.1f, MaxDist=%.1f, SpringFreq=%.2f, SpringDamp=%.2f, LockRot=%d"),
 				ConstraintDef.MinDistance, ConstraintDef.MaxDistance, ConstraintDef.SpringFrequency, ConstraintDef.SpringDamping, ConstraintDef.bLockRotation ? 1 : 0);
-			ConstraintKey = UFlecsGameplayLibrary::CreateDistanceConstraint(
+			ConstraintKey = UFlecsConstraintLibrary::CreateDistanceConstraint(
 				this, Key1, Key2, ConstraintDef.MinDistance, ConstraintDef.MaxDistance, ConstraintDef.BreakForce,
 				ConstraintDef.SpringFrequency, ConstraintDef.SpringDamping, ConstraintDef.bLockRotation);
 			break;
 
 		case EFlecsConstraintType::Point:
-			ConstraintKey = UFlecsGameplayLibrary::CreatePointConstraint(
+			ConstraintKey = UFlecsConstraintLibrary::CreatePointConstraint(
 				this, Key1, Key2, ConstraintDef.BreakForce, ConstraintDef.BreakTorque);
 			break;
 		}

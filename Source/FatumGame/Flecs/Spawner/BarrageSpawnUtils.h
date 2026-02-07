@@ -13,7 +13,7 @@ class UMaterialInterface;
 
 /**
  * Common spawn parameters for Barrage entities.
- * Used by FlecsEntitySpawner, FlecsGameplayLibrary, etc.
+ * Used by FlecsEntitySpawner, FlecsSpawnLibrary, etc.
  */
 struct FBarrageSpawnParams
 {

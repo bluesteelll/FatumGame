@@ -1,12 +1,16 @@
 
 #include "FlecsCharacter.h"
-#include "FlecsGameplayLibrary.h"
+#include "FlecsDamageLibrary.h"
+#include "FlecsWeaponLibrary.h"
+#include "FlecsContainerLibrary.h"
+#include "FlecsSpawnLibrary.h"
 #include "FlecsEntitySpawner.h"
 #include "FlecsEntityDefinition.h"
 #include "FlecsRenderProfile.h"
 #include "FlecsProjectileProfile.h"
 #include "FlecsWeaponProfile.h"
 #include "FlecsItemDefinition.h"
+#include "FlecsContainerProfile.h"
 #include "FlecsArtillerySubsystem.h"
 #include "FlecsGameTags.h"
 #include "FlecsStaticComponents.h"
@@ -181,6 +185,75 @@ void AFlecsCharacter::BeginPlay()
 		}
 
 		UFlecsArtillerySubsystem::RegisterLocalPlayer(this, Key);
+
+		// Spawn inventory containers (pure ECS, no physics)
+		if (InventoryDefinition || WeaponInventoryDefinition)
+		{
+			UFlecsEntityDefinition* InvDef = InventoryDefinition;
+			UFlecsEntityDefinition* WepInvDef = WeaponInventoryDefinition;
+			FlecsSubsystem->EnqueueCommand([this, FlecsSubsystem, InvDef, WepInvDef, Key]()
+			{
+				flecs::world* World = FlecsSubsystem->GetFlecsWorld();
+				if (!World) return;
+
+				int64 CharEntityId = 0;
+				flecs::entity CharEntity = FlecsSubsystem->GetEntityForBarrageKey(Key);
+				if (CharEntity.is_valid())
+				{
+					CharEntityId = static_cast<int64>(CharEntity.id());
+				}
+
+				auto SpawnContainer = [&](UFlecsEntityDefinition* Def) -> int64
+				{
+					if (!Def || !Def->ContainerProfile) return 0;
+
+					flecs::entity Prefab = FlecsSubsystem->GetOrCreateEntityPrefab(Def);
+					if (!Prefab.is_valid()) return 0;
+
+					flecs::entity E = World->entity().is_a(Prefab).add<FTagContainer>();
+
+					FContainerInstance Inst;
+					Inst.OwnerEntityId = CharEntityId;
+					E.set<FContainerInstance>(Inst);
+
+					const FContainerStatic* Static = E.try_get<FContainerStatic>();
+					if (Static)
+					{
+						switch (Static->Type)
+						{
+						case EContainerType::Slot:
+							{
+								FContainerSlotsInstance SlotsInst;
+								E.set<FContainerSlotsInstance>(SlotsInst);
+							}
+							break;
+						case EContainerType::Grid:
+							{
+								FContainerGridInstance Grid;
+								Grid.Initialize(Static->GridWidth, Static->GridHeight);
+								E.set<FContainerGridInstance>(Grid);
+							}
+							break;
+						case EContainerType::List:
+							break;
+						}
+					}
+
+					return static_cast<int64>(E.id());
+				};
+
+				int64 InvId = SpawnContainer(InvDef);
+				int64 WepInvId = SpawnContainer(WepInvDef);
+
+				AsyncTask(ENamedThreads::GameThread, [this, InvId, WepInvId]()
+				{
+					InventoryEntityId = InvId;
+					WeaponInventoryEntityId = WepInvId;
+					UE_LOG(LogTemp, Log, TEXT("FlecsCharacter: Inventories spawned (General=%lld, Weapon=%lld)"),
+						InvId, WepInvId);
+				});
+			});
+		}
 	}
 
 	// Auto-equip weapon if TestWeaponDefinition is set
@@ -192,6 +265,9 @@ void AFlecsCharacter::BeginPlay()
 
 void AFlecsCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	InventoryEntityId = 0;
+	WeaponInventoryEntityId = 0;
+
 	DetachWeaponVisual();
 	UFlecsArtillerySubsystem::UnregisterLocalPlayer();
 
@@ -250,7 +326,7 @@ void AFlecsCharacter::Tick(float DeltaTime)
 	int64 CharId = GetCharacterEntityId();
 	if (CharId != 0)
 	{
-		UFlecsGameplayLibrary::SetAimDirection(this, CharId, GetFiringDirection(), MuzzleOffset, GetActorLocation());
+		UFlecsWeaponLibrary::SetAimDirection(this, CharId, GetFiringDirection(), MuzzleOffset, GetActorLocation());
 	}
 }
 
@@ -376,7 +452,7 @@ float AFlecsCharacter::GetCurrentHealth() const
 	if (!FlecsSubsystem) return CachedHealth;
 
 	float CurrentHP, MaxHP;
-	if (UFlecsGameplayLibrary::GetHealth_ArtilleryThread(FlecsSubsystem, GetEntityKey(), CurrentHP, MaxHP))
+	if (UFlecsDamageLibrary::GetHealth_ArtilleryThread(FlecsSubsystem, GetEntityKey(), CurrentHP, MaxHP))
 	{
 		return CurrentHP;
 	}
@@ -396,13 +472,13 @@ bool AFlecsCharacter::IsAlive() const
 void AFlecsCharacter::ApplyDamage(float Damage)
 {
 	if (Damage <= 0.f) return;
-	UFlecsGameplayLibrary::ApplyDamageByBarrageKey(this, GetEntityKey(), Damage);
+	UFlecsDamageLibrary::ApplyDamageByBarrageKey(this, GetEntityKey(), Damage);
 }
 
 void AFlecsCharacter::Heal(float Amount)
 {
 	if (Amount <= 0.f) return;
-	UFlecsGameplayLibrary::HealEntityByBarrageKey(this, GetEntityKey(), Amount);
+	UFlecsDamageLibrary::HealEntityByBarrageKey(this, GetEntityKey(), Amount);
 }
 
 void AFlecsCharacter::CheckHealthChanges()
@@ -505,7 +581,7 @@ FSkeletonKey AFlecsCharacter::FireProjectileInDirection(FVector Direction)
 		}
 	}
 
-	return UFlecsGameplayLibrary::SpawnProjectileFromEntityDef(
+	return UFlecsSpawnLibrary::SpawnProjectileFromEntityDef(
 		GetWorld(),
 		ProjectileDefinition,
 		GetMuzzleLocation(),
@@ -552,7 +628,7 @@ TArray<FSkeletonKey> AFlecsCharacter::FireProjectileSpread(int32 Count, float Sp
 		SpreadRotation.Yaw += AngleOffset;
 		SpreadRotation.Pitch += FMath::RandRange(-SpreadAngle * 0.25f, SpreadAngle * 0.25f);
 
-		FSkeletonKey Key = UFlecsGameplayLibrary::SpawnProjectileFromEntityDef(
+		FSkeletonKey Key = UFlecsSpawnLibrary::SpawnProjectileFromEntityDef(
 			GetWorld(),
 			ProjectileDefinition,
 			SpawnLocation,
@@ -732,17 +808,18 @@ bool AFlecsCharacter::AddItemToTestContainer()
 	}
 
 	int32 ActuallyAdded = 0;
-	// Use new prefab-based function - stores EntityDefinition reference
-	bool bSuccess = UFlecsEntityLibrary::AddItemToContainerFromDefinition(
+	// Resolve SkeletonKey → int64 for new container API
+	int64 ContainerId = UFlecsEntityLibrary::GetEntityId(this, TestContainerKey);
+	bool bSuccess = UFlecsContainerLibrary::AddItemToContainer(
 		this,
-		TestContainerKey,
-		TestItemDefinition,  // Pass full EntityDefinition, not just ItemDefinition
+		ContainerId,
+		TestItemDefinition,
 		1,  // Add 1 item
 		ActuallyAdded
 	);
 
 	// Get current count for display
-	int32 ItemCount = UFlecsEntityLibrary::GetContainerItemCount(this, TestContainerKey);
+	int32 ItemCount = UFlecsContainerLibrary::GetContainerItemCount(this, ContainerId);
 
 	FString ItemName = TestItemDefinition->ItemDefinition->ItemName.ToString();
 	FString Message = FString::Printf(TEXT("Added item: %s (Container now has %d items) [Prefab]"), *ItemName, ItemCount + 1);
@@ -767,10 +844,11 @@ void AFlecsCharacter::RemoveAllItemsFromTestContainer()
 	}
 
 	// Get count before removal for display
-	int32 ItemCount = UFlecsEntityLibrary::GetContainerItemCount(this, TestContainerKey);
+	int64 ContainerId = UFlecsEntityLibrary::GetEntityId(this, TestContainerKey);
+	int32 ItemCount = UFlecsContainerLibrary::GetContainerItemCount(this, ContainerId);
 
 	// Remove all items
-	UFlecsEntityLibrary::RemoveAllItemsFromContainer(this, TestContainerKey);
+	UFlecsContainerLibrary::RemoveAllItemsFromContainer(this, ContainerId);
 
 	FString Message = FString::Printf(TEXT("Removed all items from container (%d items removed)"), ItemCount);
 	UE_LOG(LogTemp, Log, TEXT("FlecsCharacter: %s"), *Message);
@@ -932,22 +1010,22 @@ void AFlecsCharacter::StartFiringWeapon()
 
 	// Update aim direction, muzzle offset, and position based on camera
 	FVector AimDir = GetFiringDirection();
-	UFlecsGameplayLibrary::SetAimDirection(this, GetCharacterEntityId(), AimDir, MuzzleOffset, GetActorLocation());
+	UFlecsWeaponLibrary::SetAimDirection(this, GetCharacterEntityId(), AimDir, MuzzleOffset, GetActorLocation());
 
 	// Start firing
-	UFlecsGameplayLibrary::StartFiring(this, TestWeaponEntityId);
+	UFlecsWeaponLibrary::StartFiring(this, TestWeaponEntityId);
 }
 
 void AFlecsCharacter::StopFiringWeapon()
 {
 	if (TestWeaponEntityId == 0) return;
-	UFlecsGameplayLibrary::StopFiring(this, TestWeaponEntityId);
+	UFlecsWeaponLibrary::StopFiring(this, TestWeaponEntityId);
 }
 
 void AFlecsCharacter::ReloadTestWeapon()
 {
 	if (TestWeaponEntityId == 0) return;
-	UFlecsGameplayLibrary::ReloadWeapon(this, TestWeaponEntityId);
+	UFlecsWeaponLibrary::ReloadWeapon(this, TestWeaponEntityId);
 }
 
 int64 AFlecsCharacter::GetCharacterEntityId() const
