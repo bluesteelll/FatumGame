@@ -205,6 +205,7 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 		const float GravityFactor = EffectivePhysics ? EffectivePhysics->GravityFactor : 0.f;
 		const float Friction = EffectivePhysics ? EffectivePhysics->Friction : 0.2f;
 		const float Restitution = EffectivePhysics ? EffectivePhysics->Restitution : 0.3f;
+		const float LinearDamping = EffectivePhysics ? EffectivePhysics->LinearDamping : 0.0f;
 		const float CollisionRadius = EffectivePhysics ? EffectivePhysics->CollisionRadius : 30.f;
 
 		// Generate unique entity key
@@ -237,7 +238,8 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 					EntityKey,
 					static_cast<uint16>(EPhysicsLayer::PROJECTILE),
 					bIsBouncing ? Restitution : 0.f,  // No restitution = stops on contact
-					Friction
+					Friction,
+					LinearDamping
 				);
 			}
 			else
@@ -271,6 +273,7 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 				Params.GravityFactor = GravityFactor;
 				Params.Friction = Friction;
 				Params.Restitution = Restitution;
+				Params.LinearDamping = LinearDamping;
 			}
 			else
 			{

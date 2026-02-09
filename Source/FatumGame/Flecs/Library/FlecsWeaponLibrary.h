@@ -26,7 +26,7 @@ public:
 	static void ReloadWeapon(UObject* WorldContextObject, int64 WeaponEntityId);
 
 	UFUNCTION(BlueprintCallable, Category = "Flecs|Weapon", meta = (WorldContext = "WorldContextObject"))
-	static void SetAimDirection(UObject* WorldContextObject, int64 CharacterEntityId, FVector Direction, FVector MuzzleOffset = FVector::ZeroVector, FVector CharacterPosition = FVector::ZeroVector);
+	static void SetAimDirection(UObject* WorldContextObject, int64 CharacterEntityId, FVector Direction, FVector CharacterPosition = FVector::ZeroVector);
 
 	/**
 	 * Get current ammo in weapon magazine.

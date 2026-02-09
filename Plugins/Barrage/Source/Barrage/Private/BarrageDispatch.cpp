@@ -188,11 +188,11 @@ void UBarrageDispatch::CastRay(
 //and it's not clear to me that Shapefulness is going to actually be the defining shared
 //feature. I'm going to wait to refactor the types until testing is complete.
 FBLet UBarrageDispatch::CreatePrimitive(FBBoxParams& Definition, FSkeletonKey OutKey, uint16_t Layer, bool isSensor,
-                                        bool forceDynamic, bool isMovable, float Friction, float Restitution)
+                                        bool forceDynamic, bool isMovable, float Friction, float Restitution, float LinearDamping)
 {
 	if (JoltGameSim)
 	{
-		FBarrageKey temp = JoltGameSim->CreatePrimitive(Definition, Layer, isSensor, forceDynamic, isMovable, Friction, Restitution);
+		FBarrageKey temp = JoltGameSim->CreatePrimitive(Definition, Layer, isSensor, forceDynamic, isMovable, Friction, Restitution, LinearDamping);
 		return ManagePointers(OutKey, temp, Box);
 	}
 	return nullptr;
@@ -244,11 +244,11 @@ FBLet UBarrageDispatch::CreatePrimitive(FBSphereParams& Definition, FSkeletonKey
 	return nullptr;
 }
 
-FBLet UBarrageDispatch::CreateBouncingSphere(FBSphereParams& Definition, FSkeletonKey OutKey, uint16_t Layer, float Restitution, float Friction)
+FBLet UBarrageDispatch::CreateBouncingSphere(FBSphereParams& Definition, FSkeletonKey OutKey, uint16_t Layer, float Restitution, float Friction, float LinearDamping)
 {
 	if (JoltGameSim)
 	{
-		FBarrageKey temp = JoltGameSim->CreateBouncingSphere(Definition, Layer, Restitution, Friction);
+		FBarrageKey temp = JoltGameSim->CreateBouncingSphere(Definition, Layer, Restitution, Friction, LinearDamping);
 		return ManagePointers(OutKey, temp, FBShape::Sphere);
 	}
 	return nullptr;

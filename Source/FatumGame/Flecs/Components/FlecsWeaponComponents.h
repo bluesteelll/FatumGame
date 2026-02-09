@@ -32,14 +32,16 @@ struct FAimDirection
 	/** Normalized aim direction in world space */
 	FVector Direction = FVector::ForwardVector;
 
-	/** Muzzle offset from character center (capsule center) in local space.
-	 *  Set by character, read by WeaponFireSystem. */
-	FVector MuzzleOffset = FVector::ZeroVector;
-
-	/** Character world position (from UE actor, NOT from physics body).
-	 *  Physics body position drifts due to gravity between SetPosition updates.
-	 *  WeaponFireSystem uses this instead of FBarragePrimitive::GetPosition(). */
+	/** Projectile spawn origin in world space (camera position for players, actor pos for AI).
+	 *  Using camera position eliminates crosshair parallax — projectiles fly exactly where the crosshair points.
+	 *  WeaponFireSystem uses this for aim raycast origin. */
 	FVector CharacterPosition = FVector::ZeroVector;
+
+	/** Actual weapon muzzle world position, updated from weapon mesh socket each tick.
+	 *  Follows weapon animations (recoil, sway, etc).
+	 *  WeaponFireSystem uses this as projectile spawn location.
+	 *  Fallback: if zero, sim thread computes from CharacterPosition + FWeaponStatic::MuzzleOffset. */
+	FVector MuzzleWorldPosition = FVector::ZeroVector;
 };
 
 // ═══════════════════════════════════════════════════════════════

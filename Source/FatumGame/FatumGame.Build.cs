@@ -38,6 +38,10 @@ public class FatumGame : ModuleRules
 				"SolidMacros",
 				// Gameplay systems
 				"GameplayTags",
+				// UI
+				"UMG",
+				"Slate",
+				"SlateCore",
 			}
 		);
 	}

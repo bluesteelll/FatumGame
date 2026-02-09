@@ -1,5 +1,8 @@
 // FlecsRenderManager - ISM component manager for Barrage entities.
-// ISM component manager for Barrage entities.
+// Driven by UFlecsArtillerySubsystem::Tick() for guaranteed ordering:
+//   1. UpdateTransforms (sync existing ISMs to physics)
+//   2. ProcessPendingProjectileSpawns (add new ISMs at correct positions)
+// This ensures new ISM positions are never overwritten by stale physics data.
 
 #pragma once
 
@@ -15,10 +18,11 @@ class UMaterialInterface;
 /**
  * Manages ISM components for all Barrage entities.
  * Groups entities by mesh for batched rendering (1 draw call per mesh type).
- * Syncs ISM transforms from Barrage physics positions each tick.
+ *
+ * NOT self-ticking — driven by UFlecsArtillerySubsystem to control update ordering.
  */
 UCLASS()
-class FATUMGAME_API UFlecsRenderManager : public UWorldSubsystem, public FTickableGameObject
+class FATUMGAME_API UFlecsRenderManager : public UWorldSubsystem
 {
 	GENERATED_BODY()
 
@@ -29,25 +33,41 @@ public:
 	/** Remove entity (thread-safe, enqueues for game thread processing) */
 	void RemoveInstance(FSkeletonKey Key);
 
+	/**
+	 * Interpolate all ISM transforms between two sim-tick physics states.
+	 * @param Alpha Interpolation factor [0,1] between previous and current sim tick.
+	 * @param CurrentSimTick Monotonic sim tick counter for detecting new physics states.
+	 */
+	void UpdateTransforms(float Alpha, uint64 CurrentSimTick);
+
 	/** Get manager from world */
 	static UFlecsRenderManager* Get(UWorld* World);
-
-	// FTickableGameObject
-	virtual void Tick(float DeltaTime) override;
-	virtual bool IsTickable() const override { return bHasEntities; }
-	virtual TStatId GetStatId() const override;
 
 protected:
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
 
 private:
+	/** Per-entity transform state for interpolation between sim ticks. */
+	struct FEntityTransformState
+	{
+		FVector PrevPosition = FVector::ZeroVector;
+		FQuat   PrevRotation = FQuat::Identity;
+		FVector CurrPosition = FVector::ZeroVector;
+		FQuat   CurrRotation = FQuat::Identity;
+		uint64  LastUpdateTick = 0;
+		bool    bJustSpawned = true;
+	};
+
 	struct FMeshGroup
 	{
 		TObjectPtr<UInstancedStaticMeshComponent> ISM;
 
 		TMap<FSkeletonKey, int32> KeyToIndex;
 		TArray<FSkeletonKey> IndexToKey;
+
+		/** Per-entity interpolation state (keyed by same SkeletonKey as KeyToIndex). */
+		TMap<FSkeletonKey, FEntityTransformState> TransformStates;
 
 		// Pivot offset to center mesh on physics body
 		FVector PivotOffset = FVector::ZeroVector;
@@ -57,13 +77,11 @@ private:
 	TObjectPtr<AActor> ManagerActor;
 
 	TMap<UStaticMesh*, FMeshGroup> MeshGroups;
-	bool bHasEntities = false;
 
 	/** Thread-safe queue for pending removals (sim thread -> game thread) */
 	TQueue<FSkeletonKey, EQueueMode::Mpsc> PendingRemovals;
 
 	UInstancedStaticMeshComponent* GetOrCreateISM(UStaticMesh* InMesh, UMaterialInterface* InMaterial);
-	void UpdateTransforms();
 	void ProcessPendingRemovals();
 	void DoRemoveInstance(FSkeletonKey Key);
 };

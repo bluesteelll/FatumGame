@@ -268,7 +268,7 @@ Ref<Shape> FWorldSimOwner::AttemptBoxCache(double JoltX, double JoltY, double Jo
 }
 
 //we need the coordinate utils, but we don't really want to include them in the .h
-FBarrageKey FWorldSimOwner::CreatePrimitive(FBBoxParams& ToCreate, uint16 Layer, bool IsSensor, bool forceDynamic, bool isMovable, float Friction, float Restitution)
+FBarrageKey FWorldSimOwner::CreatePrimitive(FBBoxParams& ToCreate, uint16 Layer, bool IsSensor, bool forceDynamic, bool isMovable, float Friction, float Restitution, float LinearDamping)
 {
 	//if movable, check if dynamic. if not movable but dynamic, come on guys.
 	EMotionType MovementType = isMovable ?
@@ -300,6 +300,7 @@ FBarrageKey FWorldSimOwner::CreatePrimitive(FBBoxParams& ToCreate, uint16 Layer,
 	box_body_settings.mMotionQuality = MotionQuality;
 	box_body_settings.mFriction = FMath::Clamp(Friction, 0.0f, 1.0f);
 	box_body_settings.mRestitution = FMath::Clamp(Restitution, 0.0f, 1.0f);
+	box_body_settings.mLinearDamping = FMath::Max(LinearDamping, 0.0f);
 
 	if (MovementType == EMotionType::Dynamic && (Layer == Layers::MOVING || Layer == Layers::ENEMY))
 	{
@@ -403,6 +404,7 @@ FBarrageKey FWorldSimOwner::CreatePrimitive(FBSphereParams& ToCreate, uint16 Lay
 		MovementType,
 		Layer);
 	sphere_settings.mIsSensor = IsSensor;
+	sphere_settings.mMaxLinearVelocity = 10000.0f; // 10 km/s = 1,000,000 UU/s (Jolt default 500 m/s is too low for game projectiles)
 	BodyID BodyIDTemp = body_interface->CreateBody(sphere_settings)->GetID();
 	AddInternalQueuing(BodyIDTemp, 0);// we can't figure this out yet. we'll have to set it later or rearch for data exposure reasons. --JMK, can kicka
 	FBarrageKey FBK = GenerateBarrageKeyFromBodyId(BodyIDTemp);
@@ -432,7 +434,7 @@ FBarrageKey FWorldSimOwner::CreatePrimitive(FBCapParams& ToCreate, uint16 Layer,
 	return FBK;
 }
 
-FBarrageKey FWorldSimOwner::CreateBouncingSphere(FBSphereParams& ToCreate, uint16 Layer, float Restitution, float Friction)
+FBarrageKey FWorldSimOwner::CreateBouncingSphere(FBSphereParams& ToCreate, uint16 Layer, float Restitution, float Friction, float LinearDamping)
 {
 	// Always use Dynamic motion for bouncing objects - they need physics simulation
 	EMotionType MovementType = EMotionType::Dynamic;
@@ -451,12 +453,14 @@ FBarrageKey FWorldSimOwner::CreateBouncingSphere(FBSphereParams& ToCreate, uint1
 	sphere_settings.mMotionQuality = MotionQuality;
 	sphere_settings.mIsSensor = false; // Must be false for physical bounces
 	sphere_settings.mAllowSleeping = false; // Keep projectiles active
+	sphere_settings.mLinearDamping = FMath::Max(LinearDamping, 0.0f);
 
 	// Set reasonable mass for a small projectile
 	JPH::MassProperties msp;
 	msp.ScaleToMass(0.1f); // 100 grams - light projectile
 	sphere_settings.mMassPropertiesOverride = msp;
 	sphere_settings.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
+	sphere_settings.mMaxLinearVelocity = 10000.0f; // 10 km/s = 1,000,000 UU/s (Jolt default 500 m/s is too low for game projectiles)
 
 	BodyID BodyIDTemp = body_interface->CreateBody(sphere_settings)->GetID();
 	AddInternalQueuing(BodyIDTemp, 0);

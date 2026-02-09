@@ -8,6 +8,7 @@
 #include "FlecsCharacter.generated.h"
 
 class UFlecsEntityDefinition;
+class UFlecsHUDWidget;
 class UInputAction;
 class UInputMappingContext;
 class USpringArmComponent;
@@ -128,9 +129,12 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flecs|Projectile")
 	TObjectPtr<UFlecsEntityDefinition> ProjectileDefinition;
 
-	/** Muzzle offset from character origin */
+	/** Barrel offset from camera in local aim space (X=forward, Y=right, Z=up).
+	 *  Projectile spawns at camera + this offset, aimed at the crosshair target via raycast.
+	 *  Set to approximate real weapon barrel position relative to camera eye.
+	 *  Example: (50, 15, -10) = 50cm forward, 15cm right, 10cm below eye. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flecs|Projectile")
-	FVector MuzzleOffset = FVector(100.f, 0.f, 50.f);
+	FVector MuzzleOffset = FVector(50.f, 0.f, 0.f);
 
 	/** Speed override (0 = use definition) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flecs|Projectile")
@@ -300,6 +304,18 @@ public:
 	/** Called when interaction target changes (for UI updates) */
 	UFUNCTION(BlueprintImplementableEvent, Category = "Flecs|Events")
 	void OnInteractionTargetChanged(bool bHasTarget, FSkeletonKey TargetKey);
+
+	// ═══════════════════════════════════════════════════════════════
+	// HUD
+	// ═══════════════════════════════════════════════════════════════
+
+	/** Widget class to create for HUD. Set to WBP_MainHUD (child of UFlecsHUDWidget). */
+	UPROPERTY(EditAnywhere, Category = "HUD")
+	TSubclassOf<UFlecsHUDWidget> HUDWidgetClass;
+
+	/** Active HUD widget instance. */
+	UPROPERTY(BlueprintReadOnly, Category = "HUD")
+	TObjectPtr<UFlecsHUDWidget> HUDWidget;
 
 	// ═══════════════════════════════════════════════════════════════
 	// IDENTITY

@@ -21,6 +21,11 @@ public:
 	virtual uint32 Run() override;
 	virtual void Stop() override;
 
+	// ─── Sim timing (published by sim thread, consumed by game thread for interpolation) ───
+	std::atomic<uint64> SimTickCount{0};
+	std::atomic<double> LastSimTickTimeSeconds{0.0};
+	std::atomic<float>  LastSimDeltaTime{1.0f / 60.0f};
+
 private:
 	std::atomic<bool> bRunning{false};
 };

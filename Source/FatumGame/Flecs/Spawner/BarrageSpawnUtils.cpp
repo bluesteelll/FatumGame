@@ -78,7 +78,8 @@ FBarrageSpawnResult FBarrageSpawnUtils::SpawnEntity(UWorld* World, const FBarrag
 		false, // not force dynamic
 		Params.bIsMovable,
 		Params.Friction,
-		Params.Restitution
+		Params.Restitution,
+		Params.LinearDamping
 	);
 
 	if (!FBarragePrimitive::IsNotNull(Body))

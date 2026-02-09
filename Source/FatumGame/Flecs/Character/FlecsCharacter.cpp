@@ -35,6 +35,7 @@
 #include "Async/Async.h"
 #include "FlecsMessageSubsystem.h"
 #include "FlecsUIMessages.h"
+#include "FlecsHUDWidget.h"
 
 AFlecsCharacter::AFlecsCharacter(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
@@ -273,10 +274,29 @@ void AFlecsCharacter::BeginPlay()
 		0.1f, // 10 Hz
 		true   // looping
 	);
+
+	// Create HUD widget
+	if (HUDWidgetClass)
+	{
+		if (APlayerController* PC = Cast<APlayerController>(Controller))
+		{
+			HUDWidget = CreateWidget<UFlecsHUDWidget>(PC, HUDWidgetClass);
+			if (HUDWidget)
+			{
+				HUDWidget->AddToViewport();
+			}
+		}
+	}
 }
 
 void AFlecsCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	if (HUDWidget)
+	{
+		HUDWidget->RemoveFromParent();
+		HUDWidget = nullptr;
+	}
+
 	InventoryEntityId = 0;
 	WeaponInventoryEntityId = 0;
 
@@ -315,33 +335,51 @@ void AFlecsCharacter::Tick(float DeltaTime)
 	Super::Tick(DeltaTime);
 	CheckHealthChanges();
 
+	UFlecsArtillerySubsystem* FlecsSubsystem = GetWorld()->GetSubsystem<UFlecsArtillerySubsystem>();
+
 	// Sync UE actor position → Barrage physics body
-	if (CharacterKey.IsValid())
+	if (CharacterKey.IsValid() && FlecsSubsystem)
 	{
-		if (UFlecsArtillerySubsystem* FlecsSubsystem = GetWorld()->GetSubsystem<UFlecsArtillerySubsystem>())
+		FVector Pos = GetActorLocation();
+		FlecsSubsystem->EnqueueCommand([Key = CharacterKey, Pos]()
 		{
-			FVector Pos = GetActorLocation();
-			FlecsSubsystem->EnqueueCommand([Key = CharacterKey, Pos]()
+			UBarrageDispatch* Physics = UBarrageDispatch::SelfPtr;
+			if (Physics)
 			{
-				UBarrageDispatch* Physics = UBarrageDispatch::SelfPtr;
-				if (Physics)
+				FBLet Body = Physics->GetShapeRef(Key);
+				if (FBarragePrimitive::IsNotNull(Body))
 				{
-					FBLet Body = Physics->GetShapeRef(Key);
-					if (FBarragePrimitive::IsNotNull(Body))
-					{
-						FBarragePrimitive::SetPosition(Pos, Body);
-					}
+					FBarragePrimitive::SetPosition(Pos, Body);
 				}
-			});
-		}
+			}
+		});
 	}
 
 	// Continuously update aim direction, muzzle offset, and position so WeaponFireSystem has fresh data.
-	// Position comes from UE actor directly — NOT from Barrage physics body which drifts due to gravity.
+	// Uses lock-free TTripleBuffer — sim thread reads latest value right before ProgressWorld().
+	// CharacterPosition = camera position (not actor center) to eliminate crosshair parallax.
 	int64 CharId = GetCharacterEntityId();
-	if (CharId != 0)
+	if (CharId != 0 && FlecsSubsystem)
 	{
-		UFlecsWeaponLibrary::SetAimDirection(this, CharId, GetFiringDirection(), MuzzleOffset, GetActorLocation());
+		if (auto* Bridge = FlecsSubsystem->GetLateSyncBridge())
+		{
+			// Use camera position as projectile spawn origin — matches crosshair exactly.
+			// Actor position (capsule center) is ~60 units below camera, causing parallax.
+			FVector SpawnOrigin = FollowCamera ? FollowCamera->GetComponentLocation() : GetActorLocation();
+			FVector AimDir = GetFiringDirection();
+
+			FAimDirection Aim;
+			Aim.Direction = AimDir;
+			Aim.CharacterPosition = SpawnOrigin;
+			Aim.MuzzleWorldPosition = GetMuzzleLocation();
+			Bridge->WriteAimDirection(CharId, Aim);
+		}
+
+		// One-time: pass player entity ID to HUD for message filtering
+		if (HUDWidget && HUDWidget->CachedPlayerEntityId == 0)
+		{
+			HUDWidget->SetPlayerEntityId(CharId);
+		}
 	}
 }
 
@@ -537,7 +575,7 @@ void AFlecsCharacter::HandleDeath()
 
 FVector AFlecsCharacter::GetMuzzleLocation() const
 {
-	// Prefer weapon mesh socket if available
+	// Prefer weapon mesh socket if available (follows animation: recoil, sway, etc.)
 	if (WeaponMeshComponent && WeaponMeshComponent->GetSkeletalMeshAsset())
 	{
 		static const FName MuzzleSocketName(TEXT("Muzzle"));
@@ -547,12 +585,14 @@ FVector AFlecsCharacter::GetMuzzleLocation() const
 		}
 	}
 
-	// Fallback: character position + offset
-	FVector Location = GetActorLocation();
-	Location += GetActorForwardVector() * MuzzleOffset.X;
-	Location += GetActorRightVector() * MuzzleOffset.Y;
-	Location += GetActorUpVector() * MuzzleOffset.Z;
-	return Location;
+	// Fallback: camera position + aim-relative offset.
+	// Must match sim thread computation (CharacterPosition + AimQuat * MuzzleOffset).
+	// Using camera (not ActorLocation) eliminates parallax with crosshair.
+	FVector CameraPos = FollowCamera ? FollowCamera->GetComponentLocation() : GetActorLocation();
+	FVector AimDir = GetFiringDirection();
+	FQuat AimQuat = FRotationMatrix::MakeFromX(AimDir).ToQuat();
+	FTransform MuzzleTransform(AimQuat, CameraPos);
+	return MuzzleTransform.TransformPosition(MuzzleOffset);
 }
 
 FVector AFlecsCharacter::GetFiringDirection() const
@@ -1180,6 +1220,10 @@ void AFlecsCharacter::SpawnAndEquipTestWeapon()
 		AsyncTask(ENamedThreads::GameThread, [this, WeaponId, EquippedMesh, WeaponAttachOffset]()
 		{
 			TestWeaponEntityId = WeaponId;
+			if (HUDWidget)
+			{
+				HUDWidget->SetWeaponEntityId(WeaponId);
+			}
 			AttachWeaponVisual(EquippedMesh, WeaponAttachOffset);
 			UE_LOG(LogTemp, Log, TEXT("FlecsCharacter: Weapon spawned and equipped (EntityId=%lld)"), WeaponId);
 			if (GEngine)
@@ -1202,9 +1246,18 @@ void AFlecsCharacter::StartFiringWeapon()
 {
 	if (TestWeaponEntityId == 0) return;
 
-	// Update aim direction, muzzle offset, and position based on camera
-	FVector AimDir = GetFiringDirection();
-	UFlecsWeaponLibrary::SetAimDirection(this, GetCharacterEntityId(), AimDir, MuzzleOffset, GetActorLocation());
+	// Update aim direction via lock-free bridge (ensures fresh data for first shot)
+	if (auto* FlecsSubsystem = GetWorld()->GetSubsystem<UFlecsArtillerySubsystem>())
+	{
+		if (auto* Bridge = FlecsSubsystem->GetLateSyncBridge())
+		{
+			FAimDirection Aim;
+			Aim.Direction = GetFiringDirection();
+			Aim.CharacterPosition = FollowCamera ? FollowCamera->GetComponentLocation() : GetActorLocation();
+			Aim.MuzzleWorldPosition = GetMuzzleLocation();
+			Bridge->WriteAimDirection(GetCharacterEntityId(), Aim);
+		}
+	}
 
 	// Start firing
 	UFlecsWeaponLibrary::StartFiring(this, TestWeaponEntityId);

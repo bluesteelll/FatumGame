@@ -19,6 +19,7 @@
 #include "Skeletonize.h"
 #include "FlecsMessageSubsystem.h"
 #include "FlecsUIMessages.h"
+#include "PhysicsFilters/FastObjectLayerFilters.h"
 
 void UFlecsArtillerySubsystem::SetupFlecsSystems()
 {
@@ -265,8 +266,6 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 			ProjInstance.LifetimeRemaining -= DeltaTime;
 			if (ProjInstance.LifetimeRemaining <= 0.f)
 			{
-				UE_LOG(LogTemp, Log, TEXT("PROJ_DEBUG Lifetime EXPIRED: Key=%llu FlecsId=%llu"),
-					static_cast<uint64>(Body.BarrageKey), Entity.id());
 				Entity.add<FTagDead>();
 				return;
 			}
@@ -299,15 +298,11 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 					FVector3f Velocity = FBarragePrimitive::GetVelocity(Prim);
 					if (Velocity.SizeSquared() < MinVelocitySq)
 					{
-						UE_LOG(LogTemp, Log, TEXT("PROJ_DEBUG VelocityCheck KILLED: Key=%llu FlecsId=%llu Vel=%.2f"),
-							static_cast<uint64>(Body.BarrageKey), Entity.id(), Velocity.Size());
 						Entity.add<FTagDead>();
 					}
 				}
 				else
 				{
-					UE_LOG(LogTemp, Warning, TEXT("PROJ_DEBUG PhysicsBody GONE early: Key=%llu FlecsId=%llu"),
-						static_cast<uint64>(Body.BarrageKey), Entity.id());
 					Entity.add<FTagDead>();
 				}
 			}
@@ -725,32 +720,33 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 			}
 
 			// MUZZLE CALCULATION — reads aim state from FAimDirection
-			// (authoritative: set by game thread from UE actor each Tick)
+			// MuzzleWorldPosition is the actual weapon socket position (follows animations).
+			// CharacterPosition is camera position (for aim raycast origin).
 			FVector MuzzleLocation = FVector::ZeroVector;
 			FVector FireDirection = FVector::ForwardVector;
+			FVector CharPosD = FVector::ZeroVector;
 
+			const FAimDirection* AimDir = CharacterEntity.try_get<FAimDirection>();
+			if (AimDir)
 			{
-				FVector CharPosD = FVector::ZeroVector;
-				FVector UseMuzzleOffset = Static->MuzzleOffset;
-
-				const FAimDirection* AimDir = CharacterEntity.try_get<FAimDirection>();
-				if (AimDir)
+				if (!AimDir->Direction.IsNearlyZero())
 				{
-					if (!AimDir->Direction.IsNearlyZero())
-					{
-						FireDirection = AimDir->Direction;
-					}
-					if (!AimDir->MuzzleOffset.IsNearlyZero())
-					{
-						UseMuzzleOffset = AimDir->MuzzleOffset;
-					}
-					CharPosD = AimDir->CharacterPosition;
+					FireDirection = AimDir->Direction;
 				}
+				CharPosD = AimDir->CharacterPosition;
 
+				if (!AimDir->MuzzleWorldPosition.IsNearlyZero())
+				{
+					MuzzleLocation = AimDir->MuzzleWorldPosition;
+				}
+			}
+
+			// Fallback: compute from camera + weapon static offset (no weapon mesh socket)
+			if (MuzzleLocation.IsNearlyZero())
+			{
 				FQuat AimQuat = FRotationMatrix::MakeFromX(FireDirection).ToQuat();
 				FTransform MuzzleTransform(AimQuat, CharPosD);
-				MuzzleLocation = MuzzleTransform.TransformPosition(UseMuzzleOffset);
-
+				MuzzleLocation = MuzzleTransform.TransformPosition(Static->MuzzleOffset);
 			}
 
 			// ─────────────────────────────────────────────────────
@@ -773,11 +769,55 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 			const float GravityFactor = PhysProfile ? PhysProfile->GravityFactor : 0.f;
 			const float ProjFriction = PhysProfile ? PhysProfile->Friction : 0.2f;
 			const float ProjRestitution = PhysProfile ? PhysProfile->Restitution : 0.3f;
+			const float ProjLinearDamping = PhysProfile ? PhysProfile->LinearDamping : 0.0f;
 			const bool bIsBouncing = ProjProfile->IsBouncing();
 			const bool bNeedsDynamic = bIsBouncing || GravityFactor > 0.f;
 
+			// ─────────────────────────────────────────────────────
+			// AIM CORRECTION: Raycast from camera to find actual target,
+			// then compute barrel→target direction. Projectile spawns
+			// from barrel AND flies exactly where the crosshair points.
+			// ─────────────────────────────────────────────────────
+			const float AimTraceRange = 100000.f; // 1km
+			FVector TargetPoint = CharPosD + FireDirection * AimTraceRange;
+
+			{
+				FBLet CharPrim = CachedBarrageDispatch->GetShapeRef(CharBody->BarrageKey);
+				if (FBarragePrimitive::IsNotNull(CharPrim))
+				{
+					auto BPFilter = CachedBarrageDispatch->GetDefaultBroadPhaseLayerFilter(Layers::CAST_QUERY);
+					FastExcludeObjectLayerFilter ObjFilter({
+						EPhysicsLayer::PROJECTILE,
+						EPhysicsLayer::ENEMYPROJECTILE,
+						EPhysicsLayer::DEBRIS
+					});
+					auto BodyFilter = CachedBarrageDispatch->GetFilterToIgnoreSingleBody(CharPrim);
+
+					TSharedPtr<FHitResult> AimHit = MakeShared<FHitResult>();
+					CachedBarrageDispatch->CastRay(
+						CharPosD,
+						FireDirection * AimTraceRange,
+						BPFilter, ObjFilter, BodyFilter,
+						AimHit);
+
+					if (AimHit->bBlockingHit)
+					{
+						TargetPoint = AimHit->ImpactPoint;
+					}
+				}
+			}
+
+			// Direction from barrel to target (accounts for barrel offset at any distance)
+			FVector SpawnDirection = (TargetPoint - MuzzleLocation).GetSafeNormal();
+
+			// Near-wall safety: if barrel is extremely close to target, angle becomes unreliable
+			if (FVector::DistSquared(MuzzleLocation, TargetPoint) < 10000.f) // < 1m
+			{
+				SpawnDirection = FireDirection;
+			}
+
 			float Speed = ProjProfile->DefaultSpeed * Static->ProjectileSpeedMultiplier;
-			FVector Velocity = FireDirection * Speed;
+			FVector Velocity = SpawnDirection * Speed;
 
 			for (int32 i = 0; i < Static->ProjectilesPerShot; ++i)
 			{
@@ -792,7 +832,7 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 					Body = CachedBarrageDispatch->CreateBouncingSphere(
 						SphereParams, ProjectileKey,
 						static_cast<uint16>(EPhysicsLayer::PROJECTILE),
-						bIsBouncing ? ProjRestitution : 0.f, ProjFriction);
+						bIsBouncing ? ProjRestitution : 0.f, ProjFriction, ProjLinearDamping);
 				}
 				else
 				{
@@ -865,14 +905,18 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 					RenderSpawn.Material = RenderProfile->MaterialOverride;
 					RenderSpawn.Scale = RenderProfile->Scale;
 					RenderSpawn.RotationOffset = RenderProfile->RotationOffset;
-					RenderSpawn.Location = MuzzleLocation;
-					RenderSpawn.Direction = FireDirection;
+					RenderSpawn.SpawnDirection = SpawnDirection;
+					RenderSpawn.SimComputedLocation = MuzzleLocation;
 					RenderSpawn.EntityKey = ProjectileKey;
 					PendingProjectileSpawns.Enqueue(RenderSpawn);
 				}
 
-				UE_LOG(LogTemp, Log, TEXT("WEAPON: Projectile created Key=%llu Entity=%llu (sim thread)"),
-					static_cast<uint64>(ProjectileKey), ProjEntity.id());
+				UE_LOG(LogTemp, Log, TEXT("WEAPON: Projectile Key=%llu Entity=%llu AimDir=(%.3f,%.3f,%.3f) SpawnDir=(%.3f,%.3f,%.3f) Speed=%.0f Gravity=%.2f Target=(%.0f,%.0f,%.0f)"),
+					static_cast<uint64>(ProjectileKey), ProjEntity.id(),
+					FireDirection.X, FireDirection.Y, FireDirection.Z,
+					SpawnDirection.X, SpawnDirection.Y, SpawnDirection.Z,
+					Speed, GravityFactor,
+					TargetPoint.X, TargetPoint.Y, TargetPoint.Z);
 			}
 
 			// Consume ammo
@@ -976,17 +1020,10 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 			EnsureBarrageAccess();
 
 			const FBarrageBody* Body = Entity.try_get<FBarrageBody>();
-			const bool bIsProjectile = Entity.has<FTagProjectile>();
-
-			UE_LOG(LogTemp, Log, TEXT("PROJ_DEBUG Cleanup START: FlecsId=%llu IsProj=%d HasBody=%d"),
-				Entity.id(), bIsProjectile, Body != nullptr);
 
 			if (Body && Body->IsValid())
 			{
 				FSkeletonKey Key = Body->BarrageKey;
-
-				UE_LOG(LogTemp, Log, TEXT("PROJ_DEBUG Cleanup ISM: Key=%llu FlecsId=%llu"),
-					static_cast<uint64>(Key), Entity.id());
 
 				// Remove ISM render instance
 				if (CachedBarrageDispatch && CachedBarrageDispatch->GetWorld())
@@ -1001,26 +1038,17 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 				if (CachedBarrageDispatch)
 				{
 					FBLet Prim = CachedBarrageDispatch->GetShapeRef(Key);
-					bool bPrimValid = FBarragePrimitive::IsNotNull(Prim);
-
-					UE_LOG(LogTemp, Log, TEXT("PROJ_DEBUG Cleanup Physics: Key=%llu PrimValid=%d"),
-						static_cast<uint64>(Key), bPrimValid);
-
-					if (bPrimValid)
+					if (FBarragePrimitive::IsNotNull(Prim))
 					{
 						Prim->ClearFlecsEntity();
 						FBarrageKey BarrageKey = Prim->KeyIntoBarrage;
 						CachedBarrageDispatch->SetBodyObjectLayer(BarrageKey, Layers::DEBRIS);
 						CachedBarrageDispatch->SuggestTombstone(Prim);
-
-						UE_LOG(LogTemp, Log, TEXT("PROJ_DEBUG Physics moved to DEBRIS layer: BarrageKey=%llu"),
-							BarrageKey.KeyIntoBarrage);
 					}
 				}
 			}
 
 			Entity.destruct();
-			UE_LOG(LogTemp, Log, TEXT("PROJ_DEBUG Cleanup DONE: FlecsId=%llu"), Entity.id());
 		});
 
 	// ─────────────────────────────────────────────────────────

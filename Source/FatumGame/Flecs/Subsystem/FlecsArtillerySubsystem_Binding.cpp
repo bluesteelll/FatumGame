@@ -181,27 +181,76 @@ bool UFlecsArtillerySubsystem::QueueDamageByKey(FSkeletonKey TargetKey, float Da
 
 void UFlecsArtillerySubsystem::ProcessPendingProjectileSpawns()
 {
-	// Must be called on Game thread.
-	// Physics body + Flecs entity are created on sim thread (WeaponFireSystem).
-	// This only registers the ISM render instance (UE rendering requires game thread).
+	// Inverted flow: game thread reads FRESH muzzle world position from bridge atomics
+	// (follows weapon mesh socket animation). Falls back to sim-computed position.
+	//
+	// Ordering guarantee (in Tick):
+	//   1. UpdateTransforms(Alpha, SimTick)   — interpolates existing ISMs
+	//   2. ProcessPendingProjectileSpawns()    — adds new ISMs at correct game-thread positions
 	check(IsInGameThread());
 
 	UFlecsRenderManager* Renderer = GetRenderManager();
 	if (!Renderer) return;
+
+	// Read CURRENT muzzle position from bridge atomics (written by AFlecsCharacter::Tick every frame)
+	FVector FreshMuzzle = FVector::ZeroVector;
+	bool bHasFreshMuzzle = false;
+	if (LateSyncBridge)
+	{
+		bHasFreshMuzzle = LateSyncBridge->WriteSeqNum.load(std::memory_order_relaxed) > 0;
+		if (bHasFreshMuzzle)
+		{
+			FreshMuzzle = FVector(
+				LateSyncBridge->LastWrittenMuzzleX.load(std::memory_order_relaxed),
+				LateSyncBridge->LastWrittenMuzzleY.load(std::memory_order_relaxed),
+				LateSyncBridge->LastWrittenMuzzleZ.load(std::memory_order_relaxed));
+			// Zero muzzle means no weapon socket — fall back to sim-computed
+			if (FreshMuzzle.IsNearlyZero())
+			{
+				bHasFreshMuzzle = false;
+			}
+		}
+	}
 
 	FPendingProjectileSpawn Spawn;
 	while (PendingProjectileSpawns.Dequeue(Spawn))
 	{
 		if (!Spawn.Mesh || !Spawn.EntityKey.IsValid()) continue;
 
-		FQuat DirQuat = FRotationMatrix::MakeFromX(Spawn.Direction).ToQuat();
+		// Use fresh muzzle position (animated socket), or fall back to sim-computed
+		FVector SpawnLocation = bHasFreshMuzzle ? FreshMuzzle : Spawn.SimComputedLocation;
+
+		FQuat DirQuat = FRotationMatrix::MakeFromX(Spawn.SpawnDirection).ToQuat();
 
 		FTransform RenderTransform;
-		RenderTransform.SetLocation(Spawn.Location);
+		RenderTransform.SetLocation(SpawnLocation);
 		RenderTransform.SetRotation(DirQuat * Spawn.RotationOffset.Quaternion());
 		RenderTransform.SetScale3D(Spawn.Scale);
 
 		Renderer->AddInstance(Spawn.Mesh, Spawn.Material, RenderTransform, Spawn.EntityKey);
+
+		UE_LOG(LogTemp, Log, TEXT("INTERP [Spawn] Key=%llu FreshMuzzle=%d Correction=%.2f SpawnLoc=(%.1f,%.1f,%.1f) SimLoc=(%.1f,%.1f,%.1f)"),
+			static_cast<uint64>(Spawn.EntityKey),
+			bHasFreshMuzzle, FVector::Dist(SpawnLocation, Spawn.SimComputedLocation),
+			SpawnLocation.X, SpawnLocation.Y, SpawnLocation.Z,
+			Spawn.SimComputedLocation.X, Spawn.SimComputedLocation.Y, Spawn.SimComputedLocation.Z);
+
+		// Correct physics body to match game-thread muzzle position
+		if (bHasFreshMuzzle)
+		{
+			FSkeletonKey Key = Spawn.EntityKey;
+			EnqueueCommand([this, Key, SpawnLocation]()
+			{
+				if (CachedBarrageDispatch)
+				{
+					FBLet Prim = CachedBarrageDispatch->GetShapeRef(Key);
+					if (FBarragePrimitive::IsNotNull(Prim))
+					{
+						FBarragePrimitive::SetPosition(SpawnLocation, Prim);
+					}
+				}
+			});
+		}
 	}
 }
 

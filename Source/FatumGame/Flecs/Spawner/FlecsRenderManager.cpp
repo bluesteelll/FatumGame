@@ -29,11 +29,6 @@ void UFlecsRenderManager::Deinitialize()
 	Super::Deinitialize();
 }
 
-TStatId UFlecsRenderManager::GetStatId() const
-{
-	RETURN_QUICK_DECLARE_CYCLE_STAT(UFlecsRenderManager, STATGROUP_Tickables);
-}
-
 UInstancedStaticMeshComponent* UFlecsRenderManager::GetOrCreateISM(UStaticMesh* InMesh, UMaterialInterface* InMaterial)
 {
 	if (!InMesh)
@@ -115,7 +110,11 @@ int32 UFlecsRenderManager::AddInstance(UStaticMesh* InMesh, UMaterialInterface* 
 	}
 	Group.IndexToKey[Index] = Key;
 
-	bHasEntities = true;
+	// Init interpolation state — snap, no lerp on first frame
+	FEntityTransformState& State = Group.TransformStates.Add(Key);
+	State.CurrPosition = State.PrevPosition = Transform.GetLocation();
+	State.CurrRotation = State.PrevRotation = Transform.GetRotation();
+	State.bJustSpawned = true;
 
 	return Index;
 }
@@ -151,19 +150,9 @@ void UFlecsRenderManager::DoRemoveInstance(FSkeletonKey Key)
 			}
 
 			Group.KeyToIndex.Remove(Key);
+			Group.TransformStates.Remove(Key);
 			Group.IndexToKey.SetNum(FMath::Max(0, Group.IndexToKey.Num() - 1));
 
-			break;
-		}
-	}
-
-	// Check if any entities left
-	bHasEntities = false;
-	for (auto& Pair : MeshGroups)
-	{
-		if (Pair.Value.KeyToIndex.Num() > 0)
-		{
-			bHasEntities = true;
 			break;
 		}
 	}
@@ -178,12 +167,7 @@ void UFlecsRenderManager::ProcessPendingRemovals()
 	}
 }
 
-void UFlecsRenderManager::Tick(float DeltaTime)
-{
-	UpdateTransforms();
-}
-
-void UFlecsRenderManager::UpdateTransforms()
+void UFlecsRenderManager::UpdateTransforms(float Alpha, uint64 CurrentSimTick)
 {
 	ProcessPendingRemovals();
 
@@ -192,6 +176,10 @@ void UFlecsRenderManager::UpdateTransforms()
 	{
 		return;
 	}
+
+	// Periodic log counter (~1/sec at 60fps)
+	static uint32 InterpLogCounter = 0;
+	const bool bLogThisFrame = (++InterpLogCounter % 60 == 0);
 
 	for (auto& Pair : MeshGroups)
 	{
@@ -210,31 +198,99 @@ void UFlecsRenderManager::UpdateTransforms()
 			int32 Index = KeyIndex.Value;
 
 			FBLet Body = Physics->GetShapeRef(Key);
-			if (FBarragePrimitive::IsNotNull(Body))
+			if (!FBarragePrimitive::IsNotNull(Body))
 			{
-				FVector3f Pos = FBarragePrimitive::GetPosition(Body);
-				FQuat4f Rot = FBarragePrimitive::OptimisticGetAbsoluteRotation(Body);
+				KeysToRemove.Add(Key);
+				continue;
+			}
 
-				FTransform CurrentTransform;
-				Group.ISM->GetInstanceTransform(Index, CurrentTransform, true);
-				FVector Scale = CurrentTransform.GetScale3D();
+			FVector3f Pos3f = FBarragePrimitive::GetPosition(Body);
+			FVector PhysPos(Pos3f);
 
-				FVector ScaledPivotOffset = Group.PivotOffset * Scale;
-				FVector RotatedPivotOffset = FQuat(Rot).RotateVector(ScaledPivotOffset);
+			// Skip NaN positions (can occur during StepWorld)
+			if (PhysPos.ContainsNaN())
+			{
+				continue;
+			}
 
-				FTransform NewTransform;
-				NewTransform.SetLocation(FVector(Pos) + RotatedPivotOffset);
-				NewTransform.SetRotation(FQuat(Rot));
-				NewTransform.SetScale3D(Scale);
+			FQuat4f Rot4f = FBarragePrimitive::OptimisticGetAbsoluteRotation(Body);
+			FQuat PhysRot(Rot4f);
 
-				Group.ISM->UpdateInstanceTransform(Index, NewTransform, true, false, true);
-				bAnyUpdated = true;
+			// Update interpolation state
+			FEntityTransformState* State = Group.TransformStates.Find(Key);
+			if (!State)
+			{
+				// Entity added without TransformState (shouldn't happen, but be safe)
+				KeysToRemove.Add(Key);
+				continue;
+			}
+
+			// Detect new sim tick: shift Curr → Prev, update Curr
+			if (CurrentSimTick > State->LastUpdateTick)
+			{
+				State->PrevPosition = State->CurrPosition;
+				State->PrevRotation = State->CurrRotation;
+				State->CurrPosition = PhysPos;
+				State->CurrRotation = PhysRot;
+				State->LastUpdateTick = CurrentSimTick;
+			}
+
+			// Compute render position
+			FVector RenderPos;
+			FQuat RenderRot;
+
+			if (State->bJustSpawned)
+			{
+				// First frame: snap to current physics, no lerp
+				RenderPos = State->CurrPosition;
+				RenderRot = State->CurrRotation;
+				State->bJustSpawned = false;
+
+				UE_LOG(LogTemp, Log, TEXT("INTERP [Snap] Key=%llu Pos=(%.1f,%.1f,%.1f)"),
+					static_cast<uint64>(Key), RenderPos.X, RenderPos.Y, RenderPos.Z);
 			}
 			else
 			{
-				// Orphaned ISM instance - body destroyed without RemoveInstance
-				KeysToRemove.Add(Key);
+				RenderPos = FMath::Lerp(State->PrevPosition, State->CurrPosition, Alpha);
+				RenderRot = FQuat::Slerp(State->PrevRotation, State->CurrRotation, Alpha);
+
+				// Log first entity per group, ~1/sec: shows interpolation + velocity in action
+				if (bLogThisFrame && KeyIndex.Key == Group.KeyToIndex.begin()->Key)
+				{
+					float PrevCurrDist = FVector::Dist(State->PrevPosition, State->CurrPosition);
+
+					// Also log physics velocity direction to diagnose flight path issues
+					FVector3f Vel3f = FBarragePrimitive::GetVelocity(Body);
+					FVector Vel(Vel3f);
+					FVector VelDir = Vel.GetSafeNormal();
+					float Speed = Vel.Size();
+
+					UE_LOG(LogTemp, Log, TEXT("INTERP [Lerp] Key=%llu Alpha=%.3f Tick=%llu Prev=(%.1f,%.1f,%.1f) Curr=(%.1f,%.1f,%.1f) Render=(%.1f,%.1f,%.1f) PrevCurrDist=%.2f Vel=(%.3f,%.3f,%.3f) Speed=%.0f Entities=%d"),
+						static_cast<uint64>(Key), Alpha, CurrentSimTick,
+						State->PrevPosition.X, State->PrevPosition.Y, State->PrevPosition.Z,
+						State->CurrPosition.X, State->CurrPosition.Y, State->CurrPosition.Z,
+						RenderPos.X, RenderPos.Y, RenderPos.Z,
+						PrevCurrDist,
+						VelDir.X, VelDir.Y, VelDir.Z, Speed,
+						Group.KeyToIndex.Num());
+				}
 			}
+
+			// Apply pivot offset AFTER interpolation
+			FTransform CurrentTransform;
+			Group.ISM->GetInstanceTransform(Index, CurrentTransform, true);
+			FVector Scale = CurrentTransform.GetScale3D();
+
+			FVector ScaledPivotOffset = Group.PivotOffset * Scale;
+			FVector RotatedPivotOffset = RenderRot.RotateVector(ScaledPivotOffset);
+
+			FTransform NewTransform;
+			NewTransform.SetLocation(RenderPos + RotatedPivotOffset);
+			NewTransform.SetRotation(RenderRot);
+			NewTransform.SetScale3D(Scale);
+
+			Group.ISM->UpdateInstanceTransform(Index, NewTransform, true, false, true);
+			bAnyUpdated = true;
 		}
 
 		for (const FSkeletonKey& Key : KeysToRemove)

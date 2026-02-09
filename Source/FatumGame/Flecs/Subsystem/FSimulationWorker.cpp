@@ -4,6 +4,7 @@
 #include "FlecsArtillerySubsystem.h"
 #include "BarrageDispatch.h"
 #include "HAL/PlatformProcess.h"
+#include "HAL/PlatformTime.h"
 
 bool FSimulationWorker::Init()
 {
@@ -61,12 +62,20 @@ uint32 FSimulationWorker::Run()
 
 		if (FlecsSubsystem)
 		{
+			FlecsSubsystem->ApplyLateSyncBuffers();
 			FlecsSubsystem->ProgressWorld(DeltaTime);
 		}
 
 		++TickCount;
 
-		// Rate limiter: sleep remaining time to hit ~120 Hz
+		// Publish timing for game thread interpolation.
+		// Order matters: SimTickCount is the "version guard" — store it LAST
+		// so game thread sees consistent DeltaTime + TimeSeconds when it reads the new tick count.
+		LastSimDeltaTime.store(DeltaTime, std::memory_order_release);
+		LastSimTickTimeSeconds.store(FPlatformTime::Seconds(), std::memory_order_release);
+		SimTickCount.store(TickCount, std::memory_order_release);
+
+		// Rate limiter: sleep remaining time to hit ~60 Hz
 		auto TickEnd = std::chrono::high_resolution_clock::now();
 		float WorkTime = std::chrono::duration<float>(TickEnd - TickStart).count();
 		float SleepTime = TargetTickSeconds - WorkTime;

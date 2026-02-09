@@ -9,6 +9,7 @@
 #include "GameplayTagContainer.h"
 #include "flecs.h"
 #include "FSimulationWorker.h"
+#include "FLateSyncBridge.h"
 #include <atomic>
 #include "FlecsArtillerySubsystem.generated.h"
 
@@ -20,9 +21,9 @@ struct BarrageContactEvent;
 struct FItemStaticData;
 
 /**
- * Pending ISM render instance for a projectile.
+ * Pending ISM render instance for a sim-thread-spawned entity.
  * Physics body + Flecs entity are created on sim thread.
- * Only ISM registration needs game thread (UE rendering).
+ * Game thread recomputes ISM position from fresh camera + raw intent data (inverted flow).
  */
 struct FPendingProjectileSpawn
 {
@@ -30,9 +31,14 @@ struct FPendingProjectileSpawn
 	UMaterialInterface* Material = nullptr;
 	FVector Scale = FVector::OneVector;
 	FRotator RotationOffset = FRotator::ZeroRotator;
-	FVector Location = FVector::ZeroVector;
-	FVector Direction = FVector::ForwardVector;
 	FSkeletonKey EntityKey;
+
+	/** Actual projectile flight direction (barrel→target, corrected for barrel offset via raycast).
+	 *  Used for ISM rotation. */
+	FVector SpawnDirection = FVector::ForwardVector;
+
+	/** Fallback position if bridge is unavailable (computed by sim thread from stale aim data). */
+	FVector SimComputedLocation = FVector::ZeroVector;
 };
 
 /**
@@ -71,6 +77,9 @@ public:
 	/** Ensure the calling thread has Barrage physics access. Call from Flecs worker systems that touch physics. */
 	void EnsureBarrageAccess();
 
+	/** Apply all late-sync buffers to Flecs entities. Called by sim thread before ProgressWorld(). */
+	void ApplyLateSyncBuffers();
+
 	// ═══════════════════════════════════════════════════════════════
 	// LOCAL PLAYER REGISTRATION (local player cache)
 	// ═══════════════════════════════════════════════════════════════
@@ -87,6 +96,9 @@ public:
 
 	/** Queue a command to execute on the simulation thread next tick. MPSC-safe. */
 	void EnqueueCommand(TFunction<void()>&& Command);
+
+	/** Lock-free bridge for latest-value-wins data (aim, etc). Game thread writes, sim thread reads. */
+	FLateSyncBridge* GetLateSyncBridge() const { return LateSyncBridge.Get(); }
 
 	// ═══════════════════════════════════════════════════════════════
 	// BIDIRECTIONAL BINDING API (simulation thread only)
@@ -328,4 +340,7 @@ private:
 
 	/** Queue of projectile spawns from weapon fire. Sim → Game thread. */
 	TQueue<FPendingProjectileSpawn, EQueueMode::Mpsc> PendingProjectileSpawns;
+
+	/** Bridge for lock-free game→sim "latest wins" data. */
+	TUniquePtr<FLateSyncBridge> LateSyncBridge;
 };

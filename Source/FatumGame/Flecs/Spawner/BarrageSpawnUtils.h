@@ -38,6 +38,7 @@ struct FBarrageSpawnParams
 	// Surface properties
 	float Friction = 0.5f;
 	float Restitution = 0.3f;
+	float LinearDamping = 0.05f;
 
 	// Behavior flags (used by caller for Flecs tag assignment, not applied here)
 	bool bDestructible = false;

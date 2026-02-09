@@ -339,7 +339,7 @@ public:
 	//to understand and vastly vastly faster. it's also easier to optimize out allocations, and it's very
 	//very easy to read for people who are probably already drowning in new types.
 	//finally, it allows FBShapeParams to be a POD and so we can reason about it really easily.
-	FBarrageKey CreatePrimitive(FBBoxParams& ToCreate, uint16 Layer, bool IsSensor = false, bool forceDynamic = false, bool isMovable = true, float Friction = 0.5f, float Restitution = 0.3f);
+	FBarrageKey CreatePrimitive(FBBoxParams& ToCreate, uint16 Layer, bool IsSensor = false, bool forceDynamic = false, bool isMovable = true, float Friction = 0.5f, float Restitution = 0.3f, float LinearDamping = 0.05f);
 	FBarrageKey CreatePrimitive(FBCapParams& ToCreate, uint16 Layer, bool IsSensor, bool forceDynamic, bool isMovable);
 	FBarrageKey CreatePrimitive(FBCharParams& ToCreate, uint16 Layer);
 	FBarrageKey CreatePrimitive(FBSphereParams& ToCreate, uint16 Layer, bool IsSensor = false);
@@ -348,7 +348,8 @@ public:
 	// Create a bouncing dynamic sphere - for projectiles that should bounce off surfaces
 	// @param Restitution - Elasticity/bounce factor: 0.0 = no bounce, 1.0 = perfect elastic bounce (0.8 recommended)
 	// @param Friction - Surface friction coefficient: 0.0 = frictionless ice, 1.0 = sticky (0.2 recommended for bullets)
-	FBarrageKey CreateBouncingSphere(FBSphereParams& ToCreate, uint16 Layer, float Restitution = 0.8f, float Friction = 0.2f);
+	// @param LinearDamping - Velocity damping: 0.0 = no drag, higher = more drag (Jolt default 0.05)
+	FBarrageKey CreateBouncingSphere(FBSphereParams& ToCreate, uint16 Layer, float Restitution = 0.8f, float Friction = 0.2f, float LinearDamping = 0.0f);
 
 	//Under normal circumstances, you will _not_ want to set the layer and movement to anything else.
 	//the use of static mesh colliders is quite slow, and primitive shapes or compound primitives work for most purposes

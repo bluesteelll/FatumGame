@@ -16,6 +16,8 @@
 #include "BarrageDispatch.h"
 #include "FBarragePrimitive.h"
 #include "FlecsGameTags.h"
+#include "FlecsRenderManager.h"
+#include "HAL/PlatformTime.h"
 
 // ═══════════════════════════════════════════════════════════════
 // SIMULATION THREAD API (called by FSimulationWorker)
@@ -46,6 +48,14 @@ void UFlecsArtillerySubsystem::EnsureBarrageAccess()
 	{
 		CachedBarrageDispatch->GrantClientFeed();
 		bRegistered = true;
+	}
+}
+
+void UFlecsArtillerySubsystem::ApplyLateSyncBuffers()
+{
+	if (LateSyncBridge && FlecsWorld)
+	{
+		LateSyncBridge->ApplyAll(FlecsWorld.Get());
 	}
 }
 
@@ -90,6 +100,9 @@ void UFlecsArtillerySubsystem::OnWorldBeginPlay(UWorld& InWorld)
 	// Register game thread with Barrage for physics reads (needed by UFlecsRenderManager::UpdateTransforms)
 	CachedBarrageDispatch->GrantClientFeed();
 
+	// Create late-sync bridge for lock-free game→sim data
+	LateSyncBridge = MakeUnique<FLateSyncBridge>();
+
 	// Create Flecs world
 	FlecsWorld = MakeUnique<flecs::world>();
 	checkf(FlecsWorld.IsValid(), TEXT("FlecsArtillerySubsystem: Failed to create Flecs world"));
@@ -133,6 +146,7 @@ void UFlecsArtillerySubsystem::Deinitialize()
 	CachedBarrageDispatch = nullptr;
 	SelfPtr = nullptr;
 
+	LateSyncBridge.Reset();
 	FlecsWorld.Reset();
 
 	Super::Deinitialize();
@@ -173,12 +187,51 @@ void UFlecsArtillerySubsystem::EnqueueCommand(TFunction<void()>&& Command)
 
 // ═══════════════════════════════════════════════════════════════
 // GAME THREAD TICK (UTickableWorldSubsystem)
-// Processes operations that require Game thread (e.g., Barrage body creation).
+// Controls update ordering for ISM rendering:
+//   1. UpdateTransforms — sync existing ISMs to latest physics positions
+//   2. ProcessPendingProjectileSpawns — add new ISMs at correct game-thread positions
+// This guarantees new projectile ISMs are never overwritten by stale physics data.
 // ═══════════════════════════════════════════════════════════════
 
 void UFlecsArtillerySubsystem::Tick(float DeltaTime)
 {
-	// Process pending projectile spawns from weapon fire.
-	// These are queued by WeaponFireSystem on simulation thread.
+	// Compute interpolation alpha from sim timing.
+	// Alpha ∈ [0,1]: 0 = right after last sim tick, 1 = right before next.
+	// Smooth rendering at any FPS by lerping between two sim-tick states.
+	float Alpha = 1.0f;
+	const uint64 SimTick = SimWorker.SimTickCount.load(std::memory_order_acquire);
+	const float SimDt = SimWorker.LastSimDeltaTime.load(std::memory_order_acquire);
+	const double LastSimTime = SimWorker.LastSimTickTimeSeconds.load(std::memory_order_acquire);
+
+	if (SimDt > 0.0f && LastSimTime > 0.0)
+	{
+		const double TimeSince = FPlatformTime::Seconds() - LastSimTime;
+		if (TimeSince >= 0.0)
+		{
+			Alpha = FMath::Clamp(static_cast<float>(TimeSince / SimDt), 0.0f, 1.0f);
+		}
+	}
+
+	// Periodic log: alpha, sim tick, timing health (~1/sec)
+	{
+		static uint32 TickLog = 0;
+		if (++TickLog % 60 == 0)
+		{
+			UE_LOG(LogTemp, Log, TEXT("INTERP [Tick] Alpha=%.3f SimTick=%llu SimDt=%.4f TimeSince=%.4f"),
+				Alpha, SimTick, SimDt,
+				(LastSimTime > 0.0) ? FPlatformTime::Seconds() - LastSimTime : -1.0);
+		}
+	}
+
+	// Step 1: Interpolate all existing ISM transforms between sim-tick states.
+	// RenderManager is NOT self-ticking — we drive it here for guaranteed ordering.
+	if (UFlecsRenderManager* Renderer = GetRenderManager())
+	{
+		Renderer->UpdateTransforms(Alpha, SimTick);
+	}
+
+	// Step 2: Add new ISM instances for projectiles fired since last tick.
+	// Uses inverted flow: game-thread recomputes position from fresh camera + raw offset.
+	// Since UpdateTransforms already ran, new positions won't be overwritten.
 	ProcessPendingProjectileSpawns();
 }

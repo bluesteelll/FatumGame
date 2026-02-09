@@ -71,7 +71,7 @@ void UFlecsWeaponLibrary::ReloadWeapon(UObject* WorldContextObject, int64 Weapon
 	});
 }
 
-void UFlecsWeaponLibrary::SetAimDirection(UObject* WorldContextObject, int64 CharacterEntityId, FVector Direction, FVector MuzzleOffset, FVector CharacterPosition)
+void UFlecsWeaponLibrary::SetAimDirection(UObject* WorldContextObject, int64 CharacterEntityId, FVector Direction, FVector CharacterPosition)
 {
 	UFlecsArtillerySubsystem* Subsystem = FlecsLibrary::GetSubsystem(WorldContextObject);
 	if (!Subsystem || CharacterEntityId == 0) return;
@@ -82,7 +82,7 @@ void UFlecsWeaponLibrary::SetAimDirection(UObject* WorldContextObject, int64 Cha
 		NormalizedDir = FVector::ForwardVector;
 	}
 
-	Subsystem->EnqueueCommand([Subsystem, CharacterEntityId, NormalizedDir, MuzzleOffset, CharacterPosition]()
+	Subsystem->EnqueueCommand([Subsystem, CharacterEntityId, NormalizedDir, CharacterPosition]()
 	{
 		flecs::world* World = Subsystem->GetFlecsWorld();
 		if (!World) return;
@@ -92,7 +92,6 @@ void UFlecsWeaponLibrary::SetAimDirection(UObject* WorldContextObject, int64 Cha
 
 		FAimDirection AimDir;
 		AimDir.Direction = NormalizedDir;
-		AimDir.MuzzleOffset = MuzzleOffset;
 		AimDir.CharacterPosition = CharacterPosition;
 		CharEntity.set<FAimDirection>(AimDir);
 	});
