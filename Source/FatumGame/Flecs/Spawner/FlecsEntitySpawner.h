@@ -17,6 +17,7 @@ class UFlecsDamageProfile;
 class UFlecsProjectileProfile;
 class UFlecsContainerProfile;
 class UFlecsInteractionProfile;
+class UFlecsNiagaraProfile;
 class UFlecsArtillerySubsystem;
 
 /**
@@ -111,6 +112,10 @@ struct FATUMGAME_API FEntitySpawnRequest
 	/** Interaction profile - makes entity interactable */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Profiles")
 	TObjectPtr<UFlecsInteractionProfile> InteractionProfile;
+
+	/** Niagara VFX profile - adds visual effects */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Profiles")
+	TObjectPtr<UFlecsNiagaraProfile> NiagaraProfile;
 
 	// ═══════════════════════════════════════════════════════════════
 	// INLINE OVERRIDES (use when no Data Asset needed)
@@ -253,6 +258,13 @@ struct FATUMGAME_API FEntitySpawnRequest
 		return *this;
 	}
 
+	/** Add Niagara VFX profile */
+	FEntitySpawnRequest& WithNiagara(UFlecsNiagaraProfile* Profile)
+	{
+		NiagaraProfile = Profile;
+		return *this;
+	}
+
 	/** Set initial velocity */
 	FEntitySpawnRequest& WithVelocity(FVector Velocity)
 	{
@@ -337,7 +349,8 @@ struct FATUMGAME_API FEntitySpawnRequest
 			|| DamageProfile != nullptr
 			|| ProjectileProfile != nullptr
 			|| ContainerProfile != nullptr
-			|| InteractionProfile != nullptr;
+			|| InteractionProfile != nullptr
+			|| NiagaraProfile != nullptr;
 	}
 
 	/** Check if request will create a world entity (physics or render) */

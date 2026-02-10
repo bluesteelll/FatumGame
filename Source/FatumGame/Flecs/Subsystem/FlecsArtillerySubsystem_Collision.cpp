@@ -6,6 +6,7 @@
 #include "FlecsGameTags.h"
 #include "FlecsStaticComponents.h"
 #include "FlecsInstanceComponents.h"
+#include "FlecsNiagaraManager.h"
 
 void UFlecsArtillerySubsystem::SubscribeToBarrageEvents()
 {
@@ -160,6 +161,57 @@ void UFlecsArtillerySubsystem::OnBarrageContact(const BarrageContactEvent& Event
 	{
 		PairEntity.add<FTagCollisionCharacter>();
 	}
+
+	// ─────────────────────────────────────────────────────────
+	// KILL NON-BOUNCING PROJECTILES ON ANY CONTACT
+	// MaxBounces=0 projectiles die on first contact (wall, floor, entity).
+	// Bypasses BounceCollisionSystem grace period entirely.
+	// Stores contact point for accurate death VFX position
+	// (physics body position is WRONG — StepWorld already bounced it).
+	// ─────────────────────────────────────────────────────────
+	FVector ContactPoint = Event.PointIfAny;
+
+	auto TryKillNonBouncingProjectile = [&World, ContactPoint](uint64 ProjEntityId, uint64 OtherEntityId)
+	{
+		if (ProjEntityId == 0) return;
+
+		flecs::entity ProjEntity = World.entity(ProjEntityId);
+		if (!ProjEntity.is_valid() || !ProjEntity.is_alive() || ProjEntity.has<FTagDead>()) return;
+		if (!ProjEntity.has<FTagProjectile>()) return;
+
+		const FProjectileStatic* ProjStatic = ProjEntity.try_get<FProjectileStatic>();
+		const int32 MaxBounces = ProjStatic ? ProjStatic->MaxBounces : 0;
+
+		// Bouncing projectiles (MaxBounces != 0) — let BounceCollisionSystem handle
+		if (MaxBounces != 0) return;
+
+		// Don't kill if hitting own owner (projectile should pass through)
+		if (OtherEntityId != 0)
+		{
+			const FProjectileInstance* ProjInst = ProjEntity.try_get<FProjectileInstance>();
+			if (ProjInst && ProjInst->OwnerEntityId != 0
+				&& static_cast<uint64>(ProjInst->OwnerEntityId) == OtherEntityId)
+			{
+				return;
+			}
+		}
+
+		// Store contact point for death VFX (physics position is post-bounce = wrong)
+		FDeathContactPoint DCP;
+		DCP.Position = ContactPoint;
+		ProjEntity.set<FDeathContactPoint>(DCP);
+
+		ProjEntity.add<FTagDead>();
+		UE_LOG(LogTemp, Log, TEXT("COLLISION: Projectile %llu killed on contact (MaxBounces=0) at (%.0f,%.0f,%.0f)"),
+			ProjEntityId, ContactPoint.X, ContactPoint.Y, ContactPoint.Z);
+	};
+
+	// Use physics-layer flag (bBodyIsProjectile) OR Flecs tag — physics layer is
+	// always set (even before Flecs entity is fully committed in multi-threaded progress).
+	if (bEntity1IsProjectile || (bBody1IsProjectile && FlecsId1 != 0))
+		TryKillNonBouncingProjectile(FlecsId1, FlecsId2);
+	if (bEntity2IsProjectile || (bBody2IsProjectile && FlecsId2 != 0))
+		TryKillNonBouncingProjectile(FlecsId2, FlecsId1);
 
 	// Log collision pair creation (verbose)
 	UE_LOG(LogTemp, Verbose, TEXT("COLLISION PAIR: E1=%llu E2=%llu Damage=%d Bounce=%d Pickup=%d Destr=%d"),

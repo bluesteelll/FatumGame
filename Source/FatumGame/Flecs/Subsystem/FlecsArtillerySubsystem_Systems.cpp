@@ -19,6 +19,8 @@
 #include "Skeletonize.h"
 #include "FlecsMessageSubsystem.h"
 #include "FlecsUIMessages.h"
+#include "FlecsNiagaraManager.h"
+#include "FlecsNiagaraProfile.h"
 #include "PhysicsFilters/FastObjectLayerFilters.h"
 
 void UFlecsArtillerySubsystem::SetupFlecsSystems()
@@ -101,6 +103,12 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 	World.component<FTagCollisionDestructible>();
 	World.component<FTagCollisionCharacter>();
 	World.component<FTagCollisionProcessed>();
+
+	// ─────────────────────────────────────────────────────────
+	// VFX COMPONENTS
+	// ─────────────────────────────────────────────────────────
+	World.component<FNiagaraDeathEffect>();
+	World.component<FDeathContactPoint>();
 
 	// ─────────────────────────────────────────────────────────
 	// CONSTRAINT COMPONENTS
@@ -418,8 +426,14 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 				bool bIsBouncing = (MaxBounces == -1);
 				if (!bAreaDamage && !bIsBouncing)
 				{
+					// Store contact point for accurate death VFX position
+					FDeathContactPoint DCP;
+					DCP.Position = Pair.ContactPoint;
+					ProjectileEntity.set<FDeathContactPoint>(DCP);
+
 					ProjectileEntity.add<FTagDead>();
-					UE_LOG(LogTemp, Log, TEXT("COLLISION: Projectile %llu killed after damage hit"), ProjectileId);
+					UE_LOG(LogTemp, Log, TEXT("COLLISION: Projectile %llu killed after damage hit at (%.0f,%.0f,%.0f)"),
+						ProjectileId, Pair.ContactPoint.X, Pair.ContactPoint.Y, Pair.ContactPoint.Z);
 				}
 			}
 
@@ -429,15 +443,18 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 	// ─────────────────────────────────────────────────────────
 	// BOUNCE COLLISION SYSTEM
 	// Uses Static/Instance architecture:
-	// - FProjectileStatic (prefab): MaxBounces, GracePeriodFrames
-	// - FProjectileInstance (entity): BounceCount, GraceFramesRemaining
+	// - FProjectileStatic (prefab): MaxBounces
+	// - FProjectileInstance (entity): BounceCount
+	// No grace period — owner check handles self-collision.
+	// MaxBounces=N means "allow N bounces, die on N+1th contact".
 	// ─────────────────────────────────────────────────────────
 	World.system<const FCollisionPair>("BounceCollisionSystem")
 		.with<FTagCollisionBounce>()
 		.without<FTagCollisionProcessed>()
 		.each([&World](flecs::entity PairEntity, const FCollisionPair& Pair)
 		{
-			auto ProcessBounce = [&World](uint64 EntityId, uint64 OtherId) -> bool
+			FVector ContactPoint = Pair.ContactPoint;
+			auto ProcessBounce = [&World, ContactPoint](uint64 EntityId, uint64 OtherId) -> bool
 			{
 				if (EntityId == 0) return false;
 
@@ -447,9 +464,6 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 				FProjectileInstance* ProjInstance = Entity.try_get_mut<FProjectileInstance>();
 				if (!ProjInstance) return false;
 
-				// Skip bounce during grace period (newly spawned, hasn't left spawn area)
-				if (ProjInstance->GraceFramesRemaining > 0) return true;
-
 				// Skip bounce with own owner
 				if (ProjInstance->OwnerEntityId != 0
 					&& static_cast<uint64>(ProjInstance->OwnerEntityId) == OtherId)
@@ -458,10 +472,8 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 				}
 
 				const FProjectileStatic* ProjStatic = Entity.try_get<FProjectileStatic>();
-				const int32 GracePeriodFrames = ProjStatic ? ProjStatic->GracePeriodFrames : 30;
 				const int32 MaxBounces = ProjStatic ? ProjStatic->MaxBounces : -1;
 
-				ProjInstance->GraceFramesRemaining = GracePeriodFrames;
 				ProjInstance->BounceCount++;
 
 				UE_LOG(LogTemp, Log, TEXT("COLLISION: Bounce %d/%d for Entity %llu"),
@@ -469,8 +481,14 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 
 				if (MaxBounces >= 0 && ProjInstance->BounceCount > MaxBounces)
 				{
+					// Store contact point for accurate death VFX position
+					FDeathContactPoint DCP;
+					DCP.Position = ContactPoint;
+					Entity.set<FDeathContactPoint>(DCP);
+
 					Entity.add<FTagDead>();
-					UE_LOG(LogTemp, Log, TEXT("COLLISION: Projectile %llu exceeded max bounces"), EntityId);
+					UE_LOG(LogTemp, Log, TEXT("COLLISION: Projectile %llu exceeded max bounces at (%.0f,%.0f,%.0f)"),
+						EntityId, ContactPoint.X, ContactPoint.Y, ContactPoint.Z);
 				}
 
 				return true;
@@ -771,7 +789,9 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 			const float ProjRestitution = PhysProfile ? PhysProfile->Restitution : 0.3f;
 			const float ProjLinearDamping = PhysProfile ? PhysProfile->LinearDamping : 0.0f;
 			const bool bIsBouncing = ProjProfile->IsBouncing();
-			const bool bNeedsDynamic = bIsBouncing || GravityFactor > 0.f;
+			// ALL projectiles use dynamic body — sensors tunnel at high speed (no CCD).
+			// Non-bouncing non-gravity projectiles: dynamic + restitution=0 + gravity=0.
+			const bool bNeedsDynamic = true;
 
 			// ─────────────────────────────────────────────────────
 			// AIM CORRECTION: Raycast from camera to find actual target,
@@ -807,11 +827,20 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 				}
 			}
 
+			// Minimum engagement distance: if target too close to camera,
+			// push it along aim ray to prevent barrel parallax issues.
+			constexpr float MinEngagementDist = 300.f; // 3m
+			if (FVector::DistSquared(CharPosD, TargetPoint) < MinEngagementDist * MinEngagementDist)
+			{
+				TargetPoint = CharPosD + FireDirection * MinEngagementDist;
+			}
+
 			// Direction from barrel to target (accounts for barrel offset at any distance)
 			FVector SpawnDirection = (TargetPoint - MuzzleLocation).GetSafeNormal();
 
-			// Near-wall safety: if barrel is extremely close to target, angle becomes unreliable
-			if (FVector::DistSquared(MuzzleLocation, TargetPoint) < 10000.f) // < 1m
+			// Dot product safety: if barrel→target diverges too much from aim,
+			// fall back to aim direction (catches extreme edge cases).
+			if (FVector::DotProduct(SpawnDirection, FireDirection) < 0.85f) // > ~32° deviation
 			{
 				SpawnDirection = FireDirection;
 			}
@@ -908,7 +937,25 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 					RenderSpawn.SpawnDirection = SpawnDirection;
 					RenderSpawn.SimComputedLocation = MuzzleLocation;
 					RenderSpawn.EntityKey = ProjectileKey;
+
+					// Niagara VFX fields (attached effect)
+					if (ProjDef->NiagaraProfile && ProjDef->NiagaraProfile->HasAttachedEffect())
+					{
+						RenderSpawn.NiagaraEffect = ProjDef->NiagaraProfile->AttachedEffect;
+						RenderSpawn.NiagaraScale = ProjDef->NiagaraProfile->AttachedEffectScale;
+						RenderSpawn.NiagaraOffset = ProjDef->NiagaraProfile->AttachedOffset;
+					}
+
 					PendingProjectileSpawns.Enqueue(RenderSpawn);
+				}
+
+				// Death VFX component (read by DeadEntityCleanupSystem on death)
+				if (ProjDef->NiagaraProfile && ProjDef->NiagaraProfile->HasDeathEffect())
+				{
+					FNiagaraDeathEffect DeathVFX;
+					DeathVFX.Effect = ProjDef->NiagaraProfile->DeathEffect;
+					DeathVFX.Scale = ProjDef->NiagaraProfile->DeathEffectScale;
+					ProjEntity.set<FNiagaraDeathEffect>(DeathVFX);
 				}
 
 				UE_LOG(LogTemp, Log, TEXT("WEAPON: Projectile Key=%llu Entity=%llu AimDir=(%.3f,%.3f,%.3f) SpawnDir=(%.3f,%.3f,%.3f) Speed=%.0f Gravity=%.2f Target=(%.0f,%.0f,%.0f)"),
@@ -1032,6 +1079,51 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 					{
 						Renderer->RemoveInstance(Key);
 					}
+				}
+
+				// Queue death VFX + unregister from Niagara (MPSC → game thread)
+				if (UFlecsNiagaraManager* NiagaraMgr = UFlecsNiagaraManager::Get(
+						CachedBarrageDispatch ? CachedBarrageDispatch->GetWorld() : nullptr))
+				{
+					const FNiagaraDeathEffect* DeathVFX = Entity.try_get<FNiagaraDeathEffect>();
+					if (DeathVFX && DeathVFX->Effect && CachedBarrageDispatch)
+					{
+						FPendingDeathEffect FX;
+						FX.Effect = DeathVFX->Effect;
+						FX.Scale = DeathVFX->Scale;
+
+						// Prefer stored contact point (accurate impact position).
+						// Physics body position is WRONG after StepWorld resolves collision.
+						const FDeathContactPoint* DCP = Entity.try_get<FDeathContactPoint>();
+						if (DCP && !DCP->Position.IsNearlyZero())
+						{
+							FX.Location = DCP->Position;
+						}
+						else
+						{
+							// Fallback: read from physics (for non-collision deaths like lifetime expiry)
+							FBLet DeathPrim = CachedBarrageDispatch->GetShapeRef(Key);
+							if (FBarragePrimitive::IsNotNull(DeathPrim))
+							{
+								FX.Location = FVector(FBarragePrimitive::GetPosition(DeathPrim));
+								FVector DeathVel(FBarragePrimitive::GetVelocity(DeathPrim));
+								if (!DeathVel.IsNearlyZero())
+								{
+									FX.Rotation = FRotationMatrix::MakeFromX(DeathVel).ToQuat();
+								}
+							}
+							else
+							{
+								// No physics body — skip VFX, just unregister
+								NiagaraMgr->EnqueueRemoval(Key);
+								Entity.destruct();
+								return;
+							}
+						}
+
+						NiagaraMgr->EnqueueDeathEffect(FX);
+					}
+					NiagaraMgr->EnqueueRemoval(Key);
 				}
 
 				// Handle Barrage physics body cleanup

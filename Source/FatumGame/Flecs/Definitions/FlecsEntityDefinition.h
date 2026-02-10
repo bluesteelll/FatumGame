@@ -15,6 +15,7 @@ class UFlecsProjectileProfile;
 class UFlecsContainerProfile;
 class UFlecsWeaponProfile;
 class UFlecsInteractionProfile;
+class UFlecsNiagaraProfile;
 
 /**
  * Unified entity definition - a preset combining multiple profiles.
@@ -99,6 +100,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Instanced, Category = "Profiles")
 	TObjectPtr<UFlecsInteractionProfile> InteractionProfile;
 
+	/** Niagara VFX - adds visual effects (trails, death explosions) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Instanced, Category = "Profiles")
+	TObjectPtr<UFlecsNiagaraProfile> NiagaraProfile;
+
 	// ═══════════════════════════════════════════════════════════════
 	// DEFAULT TAGS
 	// ═══════════════════════════════════════════════════════════════
@@ -146,7 +151,8 @@ public:
 			|| ProjectileProfile != nullptr
 			|| ContainerProfile != nullptr
 			|| WeaponProfile != nullptr
-			|| InteractionProfile != nullptr;
+			|| InteractionProfile != nullptr
+			|| NiagaraProfile != nullptr;
 	}
 
 	/** Check if this will create a world entity (physics or render) */

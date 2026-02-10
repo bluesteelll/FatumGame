@@ -42,6 +42,8 @@ public class FatumGame : ModuleRules
 				"UMG",
 				"Slate",
 				"SlateCore",
+				// VFX
+				"Niagara",
 			}
 		);
 	}

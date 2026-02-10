@@ -18,6 +18,8 @@
 #include "FBShapeParams.h"
 #include "BarrageSpawnUtils.h"
 #include "FlecsRenderManager.h"
+#include "FlecsNiagaraManager.h"
+#include "FlecsNiagaraProfile.h"
 #include "Skeletonize.h"
 #include "flecs.h"
 
@@ -131,6 +133,7 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 	UFlecsProjectileProfile* EffectiveProjectile = Request.ProjectileProfile;
 	UFlecsContainerProfile* EffectiveContainer = Request.ContainerProfile;
 	UFlecsInteractionProfile* EffectiveInteraction = Request.InteractionProfile;
+	UFlecsNiagaraProfile* EffectiveNiagara = Request.NiagaraProfile;
 
 	// Default tags from request
 	bool bPickupable = Request.bPickupable;
@@ -154,6 +157,7 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 		if (!EffectiveProjectile) EffectiveProjectile = Def->ProjectileProfile;
 		if (!EffectiveContainer) EffectiveContainer = Def->ContainerProfile;
 		if (!EffectiveInteraction) EffectiveInteraction = Def->InteractionProfile;
+		if (!EffectiveNiagara) EffectiveNiagara = Def->NiagaraProfile;
 
 		// Apply tags from definition (OR with request tags)
 		bPickupable = bPickupable || Def->bPickupable;
@@ -224,36 +228,22 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 		{
 			// ═══════════════════════════════════════════════════════
 			// PROJECTILE: Use sphere collision
-			// Dynamic body if: bouncing OR has gravity
-			// Sensor if: no bouncing AND no gravity (laser-like)
+			// ALL projectiles use dynamic body — sensors tunnel at high speed (no CCD).
+			// Non-bouncing: restitution=0 (stops on contact, killed by OnBarrageContact).
 			// ═══════════════════════════════════════════════════════
-			const bool bNeedsDynamicBody = bIsBouncing || GravityFactor > 0.f;
-
 			FBSphereParams SphereParams = FBarrageBounder::GenerateSphereBounds(Request.Location, CollisionRadius);
 
-			if (bNeedsDynamicBody)
-			{
-				Body = Barrage->CreateBouncingSphere(
-					SphereParams,
-					EntityKey,
-					static_cast<uint16>(EPhysicsLayer::PROJECTILE),
-					bIsBouncing ? Restitution : 0.f,  // No restitution = stops on contact
-					Friction,
-					LinearDamping
-				);
-			}
-			else
-			{
-				Body = Barrage->CreatePrimitive(
-					SphereParams,
-					EntityKey,
-					static_cast<uint16>(EPhysicsLayer::PROJECTILE),
-					true  // IsSensor - laser-like, no physics
-				);
-			}
+			Body = Barrage->CreateBouncingSphere(
+				SphereParams,
+				EntityKey,
+				static_cast<uint16>(EPhysicsLayer::PROJECTILE),
+				bIsBouncing ? Restitution : 0.f,
+				Friction,
+				LinearDamping
+			);
 
-			UE_LOG(LogFlecsEntity, Log, TEXT("SpawnEntity: Projectile Key=%llu Bouncing=%d Gravity=%.2f Dynamic=%d"),
-				static_cast<uint64>(EntityKey), bIsBouncing, GravityFactor, bNeedsDynamicBody);
+			UE_LOG(LogFlecsEntity, Log, TEXT("SpawnEntity: Projectile Key=%llu Bouncing=%d Gravity=%.2f"),
+				static_cast<uint64>(EntityKey), bIsBouncing, GravityFactor);
 		}
 		else
 		{
@@ -326,6 +316,16 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 			}
 		}
 
+		// Register attached Niagara VFX (game thread, direct)
+		if (EffectiveNiagara && EffectiveNiagara->HasAttachedEffect())
+		{
+			if (UFlecsNiagaraManager* NiagaraMgr = UFlecsNiagaraManager::Get(World))
+			{
+				NiagaraMgr->RegisterEntity(EntityKey, EffectiveNiagara->AttachedEffect,
+					EffectiveNiagara->AttachedEffectScale, EffectiveNiagara->AttachedOffset);
+			}
+		}
+
 		UE_LOG(LogFlecsEntity, Log, TEXT("SpawnEntity: Spawned world entity Key=%llu at %s (Projectile=%d)"),
 			static_cast<uint64>(EntityKey), *Request.Location.ToString(), bIsProjectile);
 	}
@@ -386,6 +386,11 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 		bool bHasDamage;
 		bool bHasProjectile;
 		bool bHasItem;
+
+		// Death VFX
+		bool bHasDeathEffect;
+		UNiagaraSystem* DeathEffect;
+		float DeathEffectScale;
 	};
 
 	FSpawnData Data;
@@ -432,6 +437,11 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 	Data.bInteractable = bInteractable || EffectiveInteraction != nullptr;
 	Data.OwnerKey = Request.OwnerKey;
 	Data.OwnerEntityId = Request.OwnerEntityId;
+
+	// Death VFX
+	Data.bHasDeathEffect = EffectiveNiagara && EffectiveNiagara->HasDeathEffect();
+	Data.DeathEffect = Data.bHasDeathEffect ? EffectiveNiagara->DeathEffect.Get() : nullptr;
+	Data.DeathEffectScale = Data.bHasDeathEffect ? EffectiveNiagara->DeathEffectScale : 1.0f;
 
 	// Enqueue Flecs entity creation
 	FlecsSubsystem->EnqueueCommand([FlecsSubsystem, Data]()
@@ -606,6 +616,15 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 		if (Data.bInteractable)
 		{
 			Entity.add<FTagInteractable>();
+		}
+
+		// Death VFX component (read by DeadEntityCleanupSystem)
+		if (Data.bHasDeathEffect && Data.DeathEffect)
+		{
+			FNiagaraDeathEffect DeathVFX;
+			DeathVFX.Effect = Data.DeathEffect;
+			DeathVFX.Scale = Data.DeathEffectScale;
+			Entity.set<FNiagaraDeathEffect>(DeathVFX);
 		}
 
 		UE_LOG(LogFlecsEntity, Verbose, TEXT("Spawned entity: Key=%llu FlecsId=%llu Item=%d Health=%d Projectile=%d Container=%d Prefab=%d"),

@@ -9,6 +9,7 @@
 #include "FlecsProjectileProfile.h"
 #include "BarrageSpawnUtils.h"
 #include "FlecsRenderManager.h"
+#include "FlecsNiagaraManager.h"
 
 // ═══════════════════════════════════════════════════════════════
 // BIDIRECTIONAL BINDING API (Lock-Free)
@@ -122,6 +123,15 @@ UFlecsRenderManager* UFlecsArtillerySubsystem::GetRenderManager() const
 	return nullptr;
 }
 
+UFlecsNiagaraManager* UFlecsArtillerySubsystem::GetNiagaraManager() const
+{
+	if (CachedBarrageDispatch && CachedBarrageDispatch->GetWorld())
+	{
+		return UFlecsNiagaraManager::Get(CachedBarrageDispatch->GetWorld());
+	}
+	return nullptr;
+}
+
 // ═══════════════════════════════════════════════════════════════
 // DAMAGE SYSTEM API
 // ═══════════════════════════════════════════════════════════════
@@ -228,6 +238,16 @@ void UFlecsArtillerySubsystem::ProcessPendingProjectileSpawns()
 		RenderTransform.SetScale3D(Spawn.Scale);
 
 		Renderer->AddInstance(Spawn.Mesh, Spawn.Material, RenderTransform, Spawn.EntityKey);
+
+		// Register attached Niagara VFX for this projectile
+		if (Spawn.NiagaraEffect)
+		{
+			if (UFlecsNiagaraManager* NiagaraMgr = GetNiagaraManager())
+			{
+				NiagaraMgr->RegisterEntity(Spawn.EntityKey, Spawn.NiagaraEffect,
+					Spawn.NiagaraScale, Spawn.NiagaraOffset);
+			}
+		}
 
 		UE_LOG(LogTemp, Log, TEXT("INTERP [Spawn] Key=%llu FreshMuzzle=%d Correction=%.2f SpawnLoc=(%.1f,%.1f,%.1f) SimLoc=(%.1f,%.1f,%.1f)"),
 			static_cast<uint64>(Spawn.EntityKey),

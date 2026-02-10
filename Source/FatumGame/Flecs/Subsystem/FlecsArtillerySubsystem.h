@@ -15,8 +15,10 @@
 
 class UBarrageDispatch;
 class UFlecsRenderManager;
+class UFlecsNiagaraManager;
 class UFlecsEntityDefinition;
 class UFlecsItemDefinition;
+class UNiagaraSystem;
 struct BarrageContactEvent;
 struct FItemStaticData;
 
@@ -39,6 +41,15 @@ struct FPendingProjectileSpawn
 
 	/** Fallback position if bridge is unavailable (computed by sim thread from stale aim data). */
 	FVector SimComputedLocation = FVector::ZeroVector;
+
+	/** Attached Niagara VFX to register (null = no VFX). */
+	UNiagaraSystem* NiagaraEffect = nullptr;
+	float NiagaraScale = 1.0f;
+	FVector NiagaraOffset = FVector::ZeroVector;
+
+	/** Death Niagara VFX (set on Flecs entity as FNiagaraDeathEffect). */
+	UNiagaraSystem* DeathEffect = nullptr;
+	float DeathEffectScale = 1.0f;
 };
 
 /**
@@ -113,6 +124,9 @@ public:
 
 	/** Get the render manager (convenience). */
 	class UFlecsRenderManager* GetRenderManager() const;
+
+	/** Get the Niagara VFX manager (convenience). */
+	class UFlecsNiagaraManager* GetNiagaraManager() const;
 
 	/**
 	 * Get a Flecs stage for thread-safe deferred commands.

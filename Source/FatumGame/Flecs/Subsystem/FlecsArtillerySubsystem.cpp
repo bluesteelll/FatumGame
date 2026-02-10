@@ -17,6 +17,7 @@
 #include "FBarragePrimitive.h"
 #include "FlecsGameTags.h"
 #include "FlecsRenderManager.h"
+#include "FlecsNiagaraManager.h"
 #include "HAL/PlatformTime.h"
 
 // ═══════════════════════════════════════════════════════════════
@@ -230,7 +231,16 @@ void UFlecsArtillerySubsystem::Tick(float DeltaTime)
 		Renderer->UpdateTransforms(Alpha, SimTick);
 	}
 
-	// Step 2: Add new ISM instances for projectiles fired since last tick.
+	// Step 2: Update Niagara VFX arrays (positions/velocities from physics).
+	if (UFlecsNiagaraManager* NiagaraMgr = GetNiagaraManager())
+	{
+		NiagaraMgr->ProcessPendingRegistrations();
+		NiagaraMgr->ProcessPendingRemovals();
+		NiagaraMgr->UpdateEffects();
+		NiagaraMgr->ProcessPendingDeathEffects();
+	}
+
+	// Step 3: Add new ISM instances for projectiles fired since last tick.
 	// Uses inverted flow: game-thread recomputes position from fresh camera + raw offset.
 	// Since UpdateTransforms already ran, new positions won't be overwritten.
 	ProcessPendingProjectileSpawns();
