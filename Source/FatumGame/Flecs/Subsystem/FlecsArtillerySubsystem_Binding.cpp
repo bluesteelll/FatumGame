@@ -255,22 +255,12 @@ void UFlecsArtillerySubsystem::ProcessPendingProjectileSpawns()
 			SpawnLocation.X, SpawnLocation.Y, SpawnLocation.Z,
 			Spawn.SimComputedLocation.X, Spawn.SimComputedLocation.Y, Spawn.SimComputedLocation.Z);
 
-		// Correct physics body to match game-thread muzzle position
-		if (bHasFreshMuzzle)
-		{
-			FSkeletonKey Key = Spawn.EntityKey;
-			EnqueueCommand([this, Key, SpawnLocation]()
-			{
-				if (CachedBarrageDispatch)
-				{
-					FBLet Prim = CachedBarrageDispatch->GetShapeRef(Key);
-					if (FBarragePrimitive::IsNotNull(Prim))
-					{
-						FBarragePrimitive::SetPosition(SpawnLocation, Prim);
-					}
-				}
-			});
-		}
+		// NOTE: Do NOT correct physics body position here.
+		// The body was created at SimMuzzle with velocity computed from SimMuzzle.
+		// SetPosition(GameMuzzle) would break position↔velocity consistency:
+		// body at GameMuzzle but velocity direction computed from SimMuzzle → wrong trajectory.
+		// ISM starts at GameMuzzle (1 frame visual), then syncs to physics via interpolation.
+		// At 5000+ u/s the 2-5u sim↔game muzzle difference is invisible.
 	}
 }
 
