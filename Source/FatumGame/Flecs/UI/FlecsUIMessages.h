@@ -1,7 +1,8 @@
 // UI message structs and GameplayTag channels for the message subsystem.
 //
-// All payloads are POD-like — no FText, FString, TArray.
+// Most payloads are POD-like — no FText, FString.
 // Complex data (prompts, names) is resolved on game thread from entity definitions.
+// Exception: FUIInventorySnapshotMessage uses TArray (copied via EnqueueMessage).
 //
 // Usage (sim thread):
 //   UFlecsMessageSubsystem::SelfPtr->EnqueueMessage(TAG_UI_Health, HealthMsg);
@@ -16,6 +17,8 @@
 #include "SkeletonTypes.h"
 #include "FlecsUIMessages.generated.h"
 
+class UFlecsItemDefinition;
+
 // ═══════════════════════════════════════════════════════════════
 // GAMEPLAY TAG CHANNELS
 // ═══════════════════════════════════════════════════════════════
@@ -25,6 +28,8 @@ UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_UI_Death);
 UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_UI_Ammo);
 UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_UI_Reload);
 UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_UI_Interaction);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_UI_InventorySnapshot);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_UI_InventoryChanged);
 
 // ═══════════════════════════════════════════════════════════════
 // MESSAGE STRUCTS
@@ -130,4 +135,81 @@ struct FUIInteractionMessage
 	/** Whether there is a valid interaction target */
 	UPROPERTY(BlueprintReadOnly, Category = "UI")
 	bool bHasTarget = false;
+};
+
+// ═══════════════════════════════════════════════════════════════
+// INVENTORY MESSAGES
+// ═══════════════════════════════════════════════════════════════
+
+/** Single item snapshot for inventory UI. */
+USTRUCT(BlueprintType)
+struct FInventoryItemSnapshot
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "Inventory")
+	int64 ItemEntityId = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Inventory")
+	FIntPoint GridPosition = FIntPoint(-1, -1);
+
+	UPROPERTY(BlueprintReadOnly, Category = "Inventory")
+	FIntPoint GridSize = FIntPoint(1, 1);
+
+	UPROPERTY(BlueprintReadOnly, Category = "Inventory")
+	FName ItemName;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Inventory")
+	int32 Count = 1;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Inventory")
+	int32 MaxStack = 99;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Inventory")
+	float Weight = 0.f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Inventory")
+	int32 RarityTier = 0;
+
+	/** Item definition for icon, display name, actions. Safe: DataAssets outlive widgets. */
+	UPROPERTY(BlueprintReadOnly, Category = "Inventory")
+	TObjectPtr<UFlecsItemDefinition> ItemDefinition;
+};
+
+/** Full container snapshot. Sent in response to RequestContainerSnapshot. */
+USTRUCT(BlueprintType)
+struct FUIInventorySnapshotMessage
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "Inventory")
+	int64 ContainerEntityId = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Inventory")
+	int32 GridWidth = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Inventory")
+	int32 GridHeight = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Inventory")
+	float MaxWeight = -1.f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Inventory")
+	float CurrentWeight = 0.f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Inventory")
+	int32 CurrentCount = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Inventory")
+	TArray<FInventoryItemSnapshot> Items;
+};
+
+/** Lightweight notification: container contents changed. Triggers snapshot refresh. */
+USTRUCT(BlueprintType)
+struct FUIInventoryChangedMessage
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "Inventory")
+	int64 ContainerEntityId = 0;
 };

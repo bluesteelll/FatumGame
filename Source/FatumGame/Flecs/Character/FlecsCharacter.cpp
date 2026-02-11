@@ -36,6 +36,7 @@
 #include "FlecsMessageSubsystem.h"
 #include "FlecsUIMessages.h"
 #include "FlecsHUDWidget.h"
+#include "FlecsInventoryWidget.h"
 
 AFlecsCharacter::AFlecsCharacter(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
@@ -183,6 +184,16 @@ void AFlecsCharacter::BeginPlay()
 				// Bidirectional binding: sets FBarrageBody + atomic in FBarragePrimitive
 				FlecsSubsystem->BindEntityToBarrage(Entity, Key);
 
+				// Send initial health to HUD (sim thread → EnqueueMessage)
+				if (UFlecsMessageSubsystem::SelfPtr)
+				{
+					FUIHealthMessage HealthMsg;
+					HealthMsg.EntityId = static_cast<int64>(Entity.id());
+					HealthMsg.CurrentHP = CapturedInitialHealth;
+					HealthMsg.MaxHP = CapturedMaxHealth;
+					UFlecsMessageSubsystem::SelfPtr->EnqueueMessage(TAG_UI_Health, HealthMsg);
+				}
+
 				UE_LOG(LogTemp, Log, TEXT("FlecsCharacter: Registered in Flecs with Key=%llu, HP=%.0f/%.0f"),
 					static_cast<uint64>(Key), CapturedInitialHealth, CapturedMaxHealth);
 			});
@@ -287,10 +298,32 @@ void AFlecsCharacter::BeginPlay()
 			}
 		}
 	}
+
+	// Create inventory widget (hidden by default)
+	if (InventoryWidgetClass)
+	{
+		if (APlayerController* PC = Cast<APlayerController>(Controller))
+		{
+			InventoryWidget = CreateWidget<UFlecsInventoryWidget>(PC, InventoryWidgetClass);
+			if (InventoryWidget)
+			{
+				InventoryWidget->SetOwningCharacter(this);
+				InventoryWidget->AddToViewport(10); // Above HUD
+				InventoryWidget->SetVisibility(ESlateVisibility::Collapsed);
+			}
+		}
+	}
 }
 
 void AFlecsCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	if (InventoryWidget)
+	{
+		InventoryWidget->CloseInventory();
+		InventoryWidget->RemoveFromParent();
+		InventoryWidget = nullptr;
+	}
+
 	if (HUDWidget)
 	{
 		HUDWidget->RemoveFromParent();
@@ -431,6 +464,12 @@ void AFlecsCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 		{
 			EnhancedInputComponent->BindAction(DestroyItemAction, ETriggerEvent::Started, this, &AFlecsCharacter::OnDestroyItem);
 		}
+
+		// Toggle Inventory (I)
+		if (InventoryAction)
+		{
+			EnhancedInputComponent->BindAction(InventoryAction, ETriggerEvent::Started, this, &AFlecsCharacter::ToggleInventory);
+		}
 	}
 }
 
@@ -461,6 +500,9 @@ void AFlecsCharacter::Move(const FInputActionValue& Value)
 
 void AFlecsCharacter::Look(const FInputActionValue& Value)
 {
+	// Suppress camera rotation while inventory is open
+	if (InventoryWidget && InventoryWidget->IsInventoryOpen()) return;
+
 	// Input is a Vector2D (X = Yaw, Y = Pitch)
 	FVector2D LookAxisVector = Value.Get<FVector2D>();
 
@@ -772,6 +814,17 @@ void AFlecsCharacter::OnSpawnItem(const FInputActionValue& Value)
 			AddItemToTestContainer();
 		}
 	}
+	else if (TestItemDefinition && TestItemDefinition->ItemDefinition && InventoryEntityId != 0)
+	{
+		// No test container — add item directly to player inventory
+		int32 Added = 0;
+		UFlecsContainerLibrary::AddItemToContainer(this, InventoryEntityId, TestItemDefinition, 1, Added, false); // bAutoStack = false for testing
+		if (GEngine)
+		{
+			GEngine->AddOnScreenDebugMessage(-1, 2.f, FColor::Cyan,
+				FString::Printf(TEXT("Added '%s' to inventory"), *TestItemDefinition->GetName()));
+		}
+	}
 	else
 	{
 		// Fallback to entity spawning
@@ -877,7 +930,8 @@ bool AFlecsCharacter::AddItemToTestContainer()
 		ContainerId,
 		TestItemDefinition,
 		1,  // Add 1 item
-		ActuallyAdded
+		ActuallyAdded,
+		false  // bAutoStack = false for testing
 	);
 
 	// Get current count for display
@@ -1216,6 +1270,17 @@ void AFlecsCharacter::SpawnAndEquipTestWeapon()
 		// Store weapon entity ID (thread-safe assignment via main thread later)
 		int64 WeaponId = static_cast<int64>(WeaponEntity.id());
 
+		// Send initial ammo state to HUD (we're on sim thread, use EnqueueMessage)
+		if (Static && UFlecsMessageSubsystem::SelfPtr)
+		{
+			FUIAmmoMessage AmmoMsg;
+			AmmoMsg.WeaponEntityId = WeaponId;
+			AmmoMsg.CurrentAmmo = Static->MagazineSize;
+			AmmoMsg.MagazineSize = Static->MagazineSize;
+			AmmoMsg.ReserveAmmo = Static->MaxReserveAmmo;
+			UFlecsMessageSubsystem::SelfPtr->EnqueueMessage(TAG_UI_Ammo, AmmoMsg);
+		}
+
 		// Use AsyncTask to update TestWeaponEntityId on game thread
 		AsyncTask(ENamedThreads::GameThread, [this, WeaponId, EquippedMesh, WeaponAttachOffset]()
 		{
@@ -1273,6 +1338,53 @@ void AFlecsCharacter::ReloadTestWeapon()
 {
 	if (TestWeaponEntityId == 0) return;
 	UFlecsWeaponLibrary::ReloadWeapon(this, TestWeaponEntityId);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// INVENTORY UI
+// ═══════════════════════════════════════════════════════════════════════════
+
+bool AFlecsCharacter::IsInventoryOpen() const
+{
+	return InventoryWidget && InventoryWidget->IsInventoryOpen();
+}
+
+void AFlecsCharacter::ToggleInventory(const FInputActionValue& Value)
+{
+	if (!InventoryWidget || InventoryEntityId == 0) return;
+
+	if (InventoryWidget->IsInventoryOpen())
+	{
+		InventoryWidget->CloseInventory();
+		InventoryWidget->SetVisibility(ESlateVisibility::Collapsed);
+		SetInventoryInputMode(false);
+	}
+	else
+	{
+		InventoryWidget->SetVisibility(ESlateVisibility::SelfHitTestInvisible);
+		InventoryWidget->OpenInventory(InventoryEntityId);
+		SetInventoryInputMode(true);
+	}
+}
+
+void AFlecsCharacter::SetInventoryInputMode(bool bInventoryOpen)
+{
+	APlayerController* PC = Cast<APlayerController>(Controller);
+	if (!PC) return;
+
+	if (bInventoryOpen)
+	{
+		PC->SetShowMouseCursor(true);
+		FInputModeGameAndUI InputMode;
+		InputMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
+		InputMode.SetHideCursorDuringCapture(false);
+		PC->SetInputMode(InputMode);
+	}
+	else
+	{
+		PC->SetShowMouseCursor(false);
+		PC->SetInputMode(FInputModeGameOnly());
+	}
 }
 
 int64 AFlecsCharacter::GetCharacterEntityId() const

@@ -9,6 +9,7 @@
 
 class UFlecsEntityDefinition;
 class UFlecsHUDWidget;
+class UFlecsInventoryWidget;
 class UInputAction;
 class UInputMappingContext;
 class USpringArmComponent;
@@ -84,6 +85,10 @@ public:
 	/** Destroy Item Input Action (F) */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input")
 	TObjectPtr<UInputAction> DestroyItemAction;
+
+	/** Toggle Inventory Input Action (I) */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input")
+	TObjectPtr<UInputAction> InventoryAction;
 
 	// ═══════════════════════════════════════════════════════════════
 	// HEALTH
@@ -318,6 +323,22 @@ public:
 	TObjectPtr<UFlecsHUDWidget> HUDWidget;
 
 	// ═══════════════════════════════════════════════════════════════
+	// INVENTORY UI
+	// ═══════════════════════════════════════════════════════════════
+
+	/** Widget class for inventory UI. Set to WBP_Inventory in Blueprint. */
+	UPROPERTY(EditAnywhere, Category = "Inventory UI")
+	TSubclassOf<UFlecsInventoryWidget> InventoryWidgetClass;
+
+	/** Active inventory widget instance. */
+	UPROPERTY(BlueprintReadOnly, Category = "Inventory UI")
+	TObjectPtr<UFlecsInventoryWidget> InventoryWidget;
+
+	/** Is inventory currently open? */
+	UFUNCTION(BlueprintPure, Category = "Inventory UI")
+	bool IsInventoryOpen() const;
+
+	// ═══════════════════════════════════════════════════════════════
 	// IDENTITY
 	// ═══════════════════════════════════════════════════════════════
 
@@ -383,6 +404,12 @@ protected:
 
 	/** Called when DestroyItem (F) is pressed */
 	void OnDestroyItem(const FInputActionValue& Value);
+
+	/** Toggle inventory open/close */
+	void ToggleInventory(const FInputActionValue& Value);
+
+	/** Switch input mode for inventory (cursor + input mode). */
+	void SetInventoryInputMode(bool bInventoryOpen);
 
 private:
 	/** SkeletonKey generated from actor pointer hash (replaces UPlayerKeyCarry) */

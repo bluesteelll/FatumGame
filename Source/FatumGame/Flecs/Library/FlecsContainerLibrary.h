@@ -34,7 +34,8 @@ public:
 		int64 ContainerEntityId,
 		UFlecsEntityDefinition* EntityDefinition,
 		int32 Count,
-		int32& OutActuallyAdded);
+		int32& OutActuallyAdded,
+		bool bAutoStack = true);
 
 	UFUNCTION(BlueprintCallable, Category = "Flecs|Container", meta = (WorldContext = "WorldContextObject"))
 	static bool RemoveItemFromContainer(
@@ -67,4 +68,31 @@ public:
 		int64 ItemEntityId,
 		FVector DropLocation,
 		int32 Count = -1);
+
+	// ═══════════════════════════════════════════════════════════════
+	// INVENTORY UI QUERIES
+	// ═══════════════════════════════════════════════════════════════
+
+	/** Request async snapshot of all items in container. Result arrives via TAG_UI_InventorySnapshot message. */
+	UFUNCTION(BlueprintCallable, Category = "Flecs|Container", meta = (WorldContext = "WorldContextObject"))
+	static void RequestContainerSnapshot(UObject* WorldContextObject, int64 ContainerEntityId);
+
+	/** Move an item to a new grid position within the same container. */
+	UFUNCTION(BlueprintCallable, Category = "Flecs|Container", meta = (WorldContext = "WorldContextObject"))
+	static void MoveItemInContainer(
+		UObject* WorldContextObject,
+		int64 ContainerEntityId,
+		int64 ItemEntityId,
+		FIntPoint NewGridPosition);
+
+	/** Synchronous read of container metadata. Returns false if container not found. */
+	UFUNCTION(BlueprintPure, Category = "Flecs|Container", meta = (WorldContext = "WorldContextObject"))
+	static bool GetContainerInfo(
+		UObject* WorldContextObject,
+		int64 ContainerEntityId,
+		int32& OutGridWidth,
+		int32& OutGridHeight,
+		float& OutMaxWeight,
+		float& OutCurrentWeight,
+		int32& OutCurrentCount);
 };
