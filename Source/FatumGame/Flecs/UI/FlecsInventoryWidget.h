@@ -1,15 +1,18 @@
-// Grid inventory widget. Builds slot grid + item visuals entirely in C++.
-// No Blueprint child or Designer setup needed.
+// Grid inventory widget. Uses Model/View pattern with UFlecsContainerModel.
+// Inherits UFlecsUIPanel for CommonUI-native input/cursor management.
 //
-// Implements IFlecsContainerView to receive snapshots from UFlecsContainerModel.
-// All container data flows through the Model (lock-free triple buffer from sim thread).
+// Two usage modes:
+//   1. Pure C++ (default): BuildDefaultWidgetTree() auto-creates Border + CanvasPanel.
+//   2. Blueprint Designer: Create WBP_Inventory child class in editor.
+//      Add Border ("BackgroundBorder") + CanvasPanel ("GridCanvas") in Designer.
+//      BindWidgetOptional links them automatically. C++ skips auto-creation.
 //
-// Usage: set InventoryWidgetClass = UFlecsInventoryWidget in BP_Player.
+// Slot/Item sub-widgets can also be Blueprint subclasses via SlotWidgetClass/ItemWidgetClass.
 
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Blueprint/UserWidget.h"
+#include "FlecsUIPanel.h"
 #include "IFlecsContainerView.h"
 #include "FlecsContainerTypes.h"
 #include "FlecsInventoryWidget.generated.h"
@@ -21,8 +24,8 @@ class UFlecsInventorySlotWidget;
 class UFlecsInventoryItemWidget;
 class UFlecsContainerModel;
 
-UCLASS(Blueprintable)
-class FATUMGAME_API UFlecsInventoryWidget : public UUserWidget, public IFlecsContainerView
+UCLASS()
+class FATUMGAME_API UFlecsInventoryWidget : public UFlecsUIPanel, public IFlecsContainerView
 {
 	GENERATED_BODY()
 
@@ -55,20 +58,54 @@ public:
 	virtual void OnOperationRolledBack(uint32 OpId) override;
 
 protected:
-	virtual bool Initialize() override;
+	virtual void BuildDefaultWidgetTree() override;
+	virtual void PostInitialize() override;
 
 	// ═══════════════════════════════════════════════════════════════
-	// VIRTUAL — override in C++ subclass for custom visuals
+	// VIRTUAL — override in C++ or BP subclass for custom visuals
 	// ═══════════════════════════════════════════════════════════════
 
-	virtual void BuildGrid(int32 GridWidth, int32 GridHeight);
+	virtual void BuildGrid(int32 InGridWidth, int32 InGridHeight);
 	virtual void PopulateItems(const TArray<FContainerItemSnapshot>& Items);
 	virtual void ClearAll();
 
-	UPROPERTY()
+	// ═══════════════════════════════════════════════════════════════
+	// DESIGNER-BINDABLE WIDGETS (BindWidgetOptional)
+	// In BP child: add widgets with these names in Designer.
+	// In pure C++: auto-created in Initialize().
+	// ═══════════════════════════════════════════════════════════════
+
+	/** Background border. Name in Designer: "BackgroundBorder". */
+	UPROPERTY(BlueprintReadOnly, meta = (BindWidgetOptional))
+	TObjectPtr<UBorder> BackgroundBorder;
+
+	/** Canvas for grid slots and items. Name in Designer: "GridCanvas". */
+	UPROPERTY(BlueprintReadOnly, meta = (BindWidgetOptional))
 	TObjectPtr<UCanvasPanel> GridCanvas;
 
+	// ═══════════════════════════════════════════════════════════════
+	// VISUAL CONFIGURATION (editable in Details panel)
+	// ═══════════════════════════════════════════════════════════════
+
+	/** Size of each grid cell in pixels. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Inventory|Grid")
 	float CellSize = 50.f;
+
+	/** Background color (only used when C++ auto-creates the border). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Inventory|Grid")
+	FLinearColor BackgroundColor = FLinearColor(0.02f, 0.02f, 0.05f, 0.92f);
+
+	/** Padding inside the background border (only used when C++ auto-creates). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Inventory|Grid")
+	float BackgroundPadding = 8.f;
+
+	/** Widget class to use for grid slots. Override with BP subclass for custom visuals. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Inventory|Widget Classes")
+	TSubclassOf<UFlecsInventorySlotWidget> SlotWidgetClass;
+
+	/** Widget class to use for item visuals. Override with BP subclass for custom visuals. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Inventory|Widget Classes")
+	TSubclassOf<UFlecsInventoryItemWidget> ItemWidgetClass;
 
 private:
 	// ═══════════════════════════════════════════════════════════════
@@ -80,9 +117,6 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<UFlecsContainerModel> ContainerModel;
-
-	UPROPERTY()
-	TObjectPtr<UBorder> BackgroundBorder;
 
 	UPROPERTY()
 	TArray<TObjectPtr<UFlecsInventorySlotWidget>> SlotWidgets;

@@ -16,24 +16,22 @@
 // LIFECYCLE
 // ═══════════════════════════════════════════════════════════════
 
-bool UFlecsInventoryWidget::Initialize()
+void UFlecsInventoryWidget::BuildDefaultWidgetTree()
 {
-	if (!Super::Initialize()) return false;
+	BackgroundBorder = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("BackgroundBorder"));
+	BackgroundBorder->SetBrushColor(BackgroundColor);
+	BackgroundBorder->SetPadding(FMargin(BackgroundPadding));
 
-	// Build widget tree only if no Blueprint Designer content exists
-	if (WidgetTree && !WidgetTree->RootWidget)
-	{
-		BackgroundBorder = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("Background"));
-		BackgroundBorder->SetBrushColor(FLinearColor(0.02f, 0.02f, 0.05f, 0.92f));
-		BackgroundBorder->SetPadding(FMargin(8.f));
+	GridCanvas = WidgetTree->ConstructWidget<UCanvasPanel>(UCanvasPanel::StaticClass(), TEXT("GridCanvas"));
+	BackgroundBorder->SetContent(GridCanvas);
 
-		GridCanvas = WidgetTree->ConstructWidget<UCanvasPanel>(UCanvasPanel::StaticClass(), TEXT("GridCanvas"));
-		BackgroundBorder->SetContent(GridCanvas);
+	WidgetTree->RootWidget = BackgroundBorder;
+}
 
-		WidgetTree->RootWidget = BackgroundBorder;
-	}
-
-	return true;
+void UFlecsInventoryWidget::PostInitialize()
+{
+	if (!SlotWidgetClass) SlotWidgetClass = UFlecsInventorySlotWidget::StaticClass();
+	if (!ItemWidgetClass) ItemWidgetClass = UFlecsInventoryItemWidget::StaticClass();
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -66,6 +64,9 @@ void UFlecsInventoryWidget::OpenInventory(int64 InContainerEntityId)
 	}
 	// Otherwise, snapshot will arrive on next Tick via OnContainerSnapshotReceived
 
+	// CommonUI: triggers NativeOnActivated → mapping context switch + cursor
+	ActivateWidget();
+
 	UE_LOG(LogTemp, Log, TEXT("OpenInventory: ContainerId=%lld Model=%s Grid=%dx%d"),
 		ContainerEntityId, *ContainerModel->GetName(),
 		ContainerModel->GetGridWidth(), ContainerModel->GetGridHeight());
@@ -74,6 +75,9 @@ void UFlecsInventoryWidget::OpenInventory(int64 InContainerEntityId)
 void UFlecsInventoryWidget::CloseInventory()
 {
 	if (!bIsOpen) return;
+
+	// CommonUI: triggers NativeOnDeactivated → restore mapping context + cursor
+	DeactivateWidget();
 
 	bIsOpen = false;
 	ClearAll();
@@ -157,16 +161,16 @@ void UFlecsInventoryWidget::OnOperationRolledBack(uint32 OpId)
 // GRID BUILDING (virtual — override for custom visuals)
 // ═══════════════════════════════════════════════════════════════
 
-void UFlecsInventoryWidget::BuildGrid(int32 GridWidth, int32 GridHeight)
+void UFlecsInventoryWidget::BuildGrid(int32 InGridWidth, int32 InGridHeight)
 {
 	ClearAll();
 	if (!GridCanvas) return;
 
-	for (int32 Y = 0; Y < GridHeight; ++Y)
+	for (int32 Y = 0; Y < InGridHeight; ++Y)
 	{
-		for (int32 X = 0; X < GridWidth; ++X)
+		for (int32 X = 0; X < InGridWidth; ++X)
 		{
-			UFlecsInventorySlotWidget* SlotWidget = CreateWidget<UFlecsInventorySlotWidget>(GetOwningPlayer());
+			UFlecsInventorySlotWidget* SlotWidget = CreateWidget<UFlecsInventorySlotWidget>(GetOwningPlayer(), SlotWidgetClass);
 			check(SlotWidget);
 			SlotWidget->InitSlot(X, Y, this);
 
@@ -195,7 +199,7 @@ void UFlecsInventoryWidget::PopulateItems(const TArray<FContainerItemSnapshot>& 
 	{
 		if (Item.GridPosition.X < 0) continue;
 
-		UFlecsInventoryItemWidget* ItemWidget = CreateWidget<UFlecsInventoryItemWidget>(GetOwningPlayer());
+		UFlecsInventoryItemWidget* ItemWidget = CreateWidget<UFlecsInventoryItemWidget>(GetOwningPlayer(), ItemWidgetClass);
 		check(ItemWidget);
 		ItemWidget->SetItemData(Item);
 		ItemWidget->SetParentInventory(this);

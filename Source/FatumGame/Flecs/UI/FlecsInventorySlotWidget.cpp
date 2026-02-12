@@ -1,4 +1,4 @@
-// UFlecsInventorySlotWidget: grid cell with drag-drop + highlight, fully C++.
+// UFlecsInventorySlotWidget: grid cell with drag-drop + highlight.
 
 #include "FlecsInventorySlotWidget.h"
 #include "FlecsInventoryWidget.h"
@@ -6,25 +6,11 @@
 #include "Blueprint/WidgetTree.h"
 #include "Components/Border.h"
 
-namespace
+void UFlecsInventorySlotWidget::BuildDefaultWidgetTree()
 {
-	const FLinearColor SlotDefaultColor(0.08f, 0.08f, 0.08f, 0.6f);
-	const FLinearColor SlotCanPlaceColor(0.1f, 0.6f, 0.1f, 0.6f);
-	const FLinearColor SlotCannotPlaceColor(0.6f, 0.1f, 0.1f, 0.6f);
-}
-
-bool UFlecsInventorySlotWidget::Initialize()
-{
-	if (!Super::Initialize()) return false;
-
-	if (WidgetTree && !WidgetTree->RootWidget)
-	{
-		SlotBorder = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("SlotBorder"));
-		SlotBorder->SetBrushColor(SlotDefaultColor);
-		WidgetTree->RootWidget = SlotBorder;
-	}
-
-	return true;
+	SlotBorder = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("SlotBorder"));
+	SlotBorder->SetBrushColor(DefaultColor);
+	WidgetTree->RootWidget = SlotBorder;
 }
 
 void UFlecsInventorySlotWidget::InitSlot(int32 InGridX, int32 InGridY, UFlecsInventoryWidget* InInventoryWidget)
@@ -37,7 +23,7 @@ void UFlecsInventorySlotWidget::InitSlot(int32 InGridX, int32 InGridY, UFlecsInv
 bool UFlecsInventorySlotWidget::NativeOnDrop(const FGeometry& InGeometry, const FDragDropEvent& InDragDropEvent,
 	UDragDropOperation* InOperation)
 {
-	ClearDragHighlight();
+	OnDragHighlightClear();
 
 	UFlecsInventoryDragOperation* DragOp = Cast<UFlecsInventoryDragOperation>(InOperation);
 	if (!DragOp || !ParentInventory) return false;
@@ -59,27 +45,32 @@ void UFlecsInventorySlotWidget::NativeOnDragEnter(const FGeometry& InGeometry, c
 	if (!DragOp || !ParentInventory) return;
 
 	bool bCanPlace = ParentInventory->CanFitAt(DragOp->ItemEntityId, FIntPoint(GridX, GridY));
-	SetDragHighlight(bCanPlace);
+	OnDragHighlight(bCanPlace);
 }
 
 void UFlecsInventorySlotWidget::NativeOnDragLeave(const FDragDropEvent& InDragDropEvent,
 	UDragDropOperation* InOperation)
 {
-	ClearDragHighlight();
+	OnDragHighlightClear();
 }
 
-void UFlecsInventorySlotWidget::SetDragHighlight(bool bCanPlace)
+// ═══════════════════════════════════════════════════════════════
+// DEFAULT HIGHLIGHT — BlueprintNativeEvent implementations
+// BP subclass can override these for custom visuals (glow, particles, etc.)
+// ═══════════════════════════════════════════════════════════════
+
+void UFlecsInventorySlotWidget::OnDragHighlight_Implementation(bool bCanPlace)
 {
 	if (SlotBorder)
 	{
-		SlotBorder->SetBrushColor(bCanPlace ? SlotCanPlaceColor : SlotCannotPlaceColor);
+		SlotBorder->SetBrushColor(bCanPlace ? CanPlaceColor : CannotPlaceColor);
 	}
 }
 
-void UFlecsInventorySlotWidget::ClearDragHighlight()
+void UFlecsInventorySlotWidget::OnDragHighlightClear_Implementation()
 {
 	if (SlotBorder)
 	{
-		SlotBorder->SetBrushColor(SlotDefaultColor);
+		SlotBorder->SetBrushColor(DefaultColor);
 	}
 }

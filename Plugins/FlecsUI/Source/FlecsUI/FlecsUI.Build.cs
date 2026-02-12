@@ -25,6 +25,7 @@ public class FlecsUI : ModuleRules
 
 			// Input
 			"EnhancedInput",
+			"CommonUI",
 		});
 
 		PrivateDependencyModuleNames.AddRange(new string[]

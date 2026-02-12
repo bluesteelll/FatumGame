@@ -65,6 +65,10 @@
 			"Enabled": true
 		},
 		{
+			"Name": "CommonUI",
+			"Enabled": true
+		},
+		{
 			"Name": "FlecsUI",
 			"Enabled": true
 		},

@@ -1,4 +1,4 @@
-// UFlecsInventoryItemWidget: item visual + drag initiation, fully C++.
+// UFlecsInventoryItemWidget: item visual + drag initiation.
 
 #include "FlecsInventoryItemWidget.h"
 #include "FlecsInventoryWidget.h"
@@ -8,31 +8,24 @@
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
 
-bool UFlecsInventoryItemWidget::Initialize()
+void UFlecsInventoryItemWidget::BuildDefaultWidgetTree()
 {
-	if (!Super::Initialize()) return false;
+	ItemBorder = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("ItemBorder"));
+	ItemBorder->SetBrushColor(ItemBackgroundColor);
+	ItemBorder->SetPadding(FMargin(4.f));
 
-	if (WidgetTree && !WidgetTree->RootWidget)
-	{
-		ItemBorder = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("ItemBorder"));
-		ItemBorder->SetBrushColor(FLinearColor(0.15f, 0.15f, 0.2f, 0.9f));
-		ItemBorder->SetPadding(FMargin(4.f));
+	UVerticalBox* VBox = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("VBox"));
 
-		UVerticalBox* VBox = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("VBox"));
+	TextItemName = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("TextItemName"));
+	TextItemName->SetColorAndOpacity(FSlateColor(ItemNameColor));
+	VBox->AddChildToVerticalBox(TextItemName);
 
-		TextItemName = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("TextItemName"));
-		TextItemName->SetColorAndOpacity(FSlateColor(FLinearColor::White));
-		VBox->AddChildToVerticalBox(TextItemName);
+	TextCount = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("TextCount"));
+	TextCount->SetColorAndOpacity(FSlateColor(CountTextColor));
+	VBox->AddChildToVerticalBox(TextCount);
 
-		TextCount = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("TextCount"));
-		TextCount->SetColorAndOpacity(FSlateColor(FLinearColor(0.7f, 0.7f, 0.7f)));
-		VBox->AddChildToVerticalBox(TextCount);
-
-		ItemBorder->SetContent(VBox);
-		WidgetTree->RootWidget = ItemBorder;
-	}
-
-	return true;
+	ItemBorder->SetContent(VBox);
+	WidgetTree->RootWidget = ItemBorder;
 }
 
 void UFlecsInventoryItemWidget::SetItemData(const FContainerItemSnapshot& Data)
@@ -40,9 +33,23 @@ void UFlecsInventoryItemWidget::SetItemData(const FContainerItemSnapshot& Data)
 	ItemEntityId = Data.ItemEntityId;
 	TypeId = Data.TypeId;
 	Count = Data.Count;
+	MaxStack = Data.MaxStack;
+	RarityTier = Data.RarityTier;
 	GridPosition = Data.GridPosition;
 	GridSize = Data.GridSize;
+	ItemDefinition = Data.ItemDefinition;
 
+	// Call virtual — BP subclass can override OnUpdateVisuals for icons, rarity borders, etc.
+	RefreshVisuals();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// DEFAULT OnUpdateVisuals — from UFlecsUIWidget base.
+// Sets text blocks if available. BP override can do anything.
+// ═══════════════════════════════════════════════════════════════
+
+void UFlecsInventoryItemWidget::OnUpdateVisuals_Implementation()
+{
 	if (TextItemName)
 	{
 		TextItemName->SetText(FText::FromName(TypeId));
@@ -60,6 +67,10 @@ void UFlecsInventoryItemWidget::SetItemData(const FContainerItemSnapshot& Data)
 		}
 	}
 }
+
+// ═══════════════════════════════════════════════════════════════
+// DRAG INITIATION
+// ═══════════════════════════════════════════════════════════════
 
 FReply UFlecsInventoryItemWidget::NativeOnMouseButtonDown(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent)
 {

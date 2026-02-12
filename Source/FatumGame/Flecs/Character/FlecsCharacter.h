@@ -10,7 +10,6 @@
 class UFlecsEntityDefinition;
 class UFlecsHUDWidget;
 class UFlecsInventoryWidget;
-class UFlecsUIInputConfig;
 class UInputAction;
 class UInputMappingContext;
 class USpringArmComponent;
@@ -334,10 +333,6 @@ public:
 	/** Widget class for inventory UI. Set to WBP_Inventory in Blueprint. */
 	UPROPERTY(EditAnywhere, Category = "Inventory UI")
 	TSubclassOf<UFlecsInventoryWidget> InventoryWidgetClass;
-
-	/** Input config for inventory panel (cursor, input mode). Create as Data Asset. */
-	UPROPERTY(EditAnywhere, Category = "Inventory UI")
-	TObjectPtr<UFlecsUIInputConfig> InventoryInputConfig;
 
 	/** Active inventory widget instance. */
 	UPROPERTY(BlueprintReadOnly, Category = "Inventory UI")

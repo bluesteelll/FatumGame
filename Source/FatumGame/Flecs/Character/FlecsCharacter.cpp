@@ -37,8 +37,6 @@
 #include "FlecsUIMessages.h"
 #include "FlecsHUDWidget.h"
 #include "FlecsInventoryWidget.h"
-#include "FlecsUIInputManager.h"
-#include "FlecsUIInputConfig.h"
 
 AFlecsCharacter::AFlecsCharacter(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
@@ -107,12 +105,6 @@ void AFlecsCharacter::BeginPlay()
 				Subsystem->AddMappingContext(GameplayMappingContext, 0);
 			}
 		}
-	}
-
-	// Configure centralized input manager for UI panels
-	if (UFlecsUIInputManager* InputMgr = GetWorld()->GetSubsystem<UFlecsUIInputManager>())
-	{
-		InputMgr->Configure(GameplayMappingContext, InventoryMappingContext);
 	}
 
 	// ─────────────────────────────────────────────────────────────
@@ -316,6 +308,8 @@ void AFlecsCharacter::BeginPlay()
 			if (InventoryWidget)
 			{
 				InventoryWidget->SetOwningCharacter(this);
+				InventoryWidget->GameplayMappingContext = GameplayMappingContext;
+				InventoryWidget->PanelMappingContext = InventoryMappingContext;
 				InventoryWidget->AddToViewport(10); // Above HUD
 				InventoryWidget->SetVisibility(ESlateVisibility::Collapsed);
 			}
@@ -327,14 +321,7 @@ void AFlecsCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	if (InventoryWidget)
 	{
-		if (InventoryWidget->IsInventoryOpen())
-		{
-			if (UFlecsUIInputManager* InputMgr = GetWorld()->GetSubsystem<UFlecsUIInputManager>())
-			{
-				InputMgr->PopPanel(InventoryWidget);
-			}
-		}
-		InventoryWidget->CloseInventory();
+		InventoryWidget->CloseInventory(); // Calls DeactivateWidget internally
 		InventoryWidget->RemoveFromParent();
 		InventoryWidget = nullptr;
 	}
@@ -1365,25 +1352,15 @@ void AFlecsCharacter::ToggleInventory(const FInputActionValue& Value)
 {
 	if (!InventoryWidget || InventoryEntityId == 0) return;
 
-	UFlecsUIInputManager* InputMgr = GetWorld()->GetSubsystem<UFlecsUIInputManager>();
-
 	if (InventoryWidget->IsInventoryOpen())
 	{
-		InventoryWidget->CloseInventory();
+		InventoryWidget->CloseInventory();    // Calls DeactivateWidget → restores input
 		InventoryWidget->SetVisibility(ESlateVisibility::Collapsed);
-		if (InputMgr)
-		{
-			InputMgr->PopPanel(InventoryWidget);
-		}
 	}
 	else
 	{
 		InventoryWidget->SetVisibility(ESlateVisibility::SelfHitTestInvisible);
-		InventoryWidget->OpenInventory(InventoryEntityId);
-		if (InputMgr && InventoryInputConfig)
-		{
-			InputMgr->PushPanel(InventoryWidget, InventoryInputConfig);
-		}
+		InventoryWidget->OpenInventory(InventoryEntityId);  // Calls ActivateWidget → switches input
 	}
 }
 
