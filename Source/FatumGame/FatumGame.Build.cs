@@ -35,6 +35,7 @@ public class FatumGame : ModuleRules
 				"UnrealFlecs",
 				"FlecsLibrary",
 				"FlecsBarrage",
+				"FlecsUI",
 				"SolidMacros",
 				// Gameplay systems
 				"GameplayTags",

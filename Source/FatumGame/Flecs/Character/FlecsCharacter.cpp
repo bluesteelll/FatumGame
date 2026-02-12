@@ -37,6 +37,8 @@
 #include "FlecsUIMessages.h"
 #include "FlecsHUDWidget.h"
 #include "FlecsInventoryWidget.h"
+#include "FlecsUIInputManager.h"
+#include "FlecsUIInputConfig.h"
 
 AFlecsCharacter::AFlecsCharacter(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
@@ -100,11 +102,17 @@ void AFlecsCharacter::BeginPlay()
 	{
 		if (UEnhancedInputLocalPlayerSubsystem* Subsystem = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(PlayerController->GetLocalPlayer()))
 		{
-			if (DefaultMappingContext)
+			if (GameplayMappingContext)
 			{
-				Subsystem->AddMappingContext(DefaultMappingContext, 0);
+				Subsystem->AddMappingContext(GameplayMappingContext, 0);
 			}
 		}
+	}
+
+	// Configure centralized input manager for UI panels
+	if (UFlecsUIInputManager* InputMgr = GetWorld()->GetSubsystem<UFlecsUIInputManager>())
+	{
+		InputMgr->Configure(GameplayMappingContext, InventoryMappingContext);
 	}
 
 	// ─────────────────────────────────────────────────────────────
@@ -319,6 +327,13 @@ void AFlecsCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	if (InventoryWidget)
 	{
+		if (InventoryWidget->IsInventoryOpen())
+		{
+			if (UFlecsUIInputManager* InputMgr = GetWorld()->GetSubsystem<UFlecsUIInputManager>())
+			{
+				InputMgr->PopPanel(InventoryWidget);
+			}
+		}
 		InventoryWidget->CloseInventory();
 		InventoryWidget->RemoveFromParent();
 		InventoryWidget = nullptr;
@@ -500,9 +515,6 @@ void AFlecsCharacter::Move(const FInputActionValue& Value)
 
 void AFlecsCharacter::Look(const FInputActionValue& Value)
 {
-	// Suppress camera rotation while inventory is open
-	if (InventoryWidget && InventoryWidget->IsInventoryOpen()) return;
-
 	// Input is a Vector2D (X = Yaw, Y = Pitch)
 	FVector2D LookAxisVector = Value.Get<FVector2D>();
 
@@ -1353,39 +1365,28 @@ void AFlecsCharacter::ToggleInventory(const FInputActionValue& Value)
 {
 	if (!InventoryWidget || InventoryEntityId == 0) return;
 
+	UFlecsUIInputManager* InputMgr = GetWorld()->GetSubsystem<UFlecsUIInputManager>();
+
 	if (InventoryWidget->IsInventoryOpen())
 	{
 		InventoryWidget->CloseInventory();
 		InventoryWidget->SetVisibility(ESlateVisibility::Collapsed);
-		SetInventoryInputMode(false);
+		if (InputMgr)
+		{
+			InputMgr->PopPanel(InventoryWidget);
+		}
 	}
 	else
 	{
 		InventoryWidget->SetVisibility(ESlateVisibility::SelfHitTestInvisible);
 		InventoryWidget->OpenInventory(InventoryEntityId);
-		SetInventoryInputMode(true);
+		if (InputMgr && InventoryInputConfig)
+		{
+			InputMgr->PushPanel(InventoryWidget, InventoryInputConfig);
+		}
 	}
 }
 
-void AFlecsCharacter::SetInventoryInputMode(bool bInventoryOpen)
-{
-	APlayerController* PC = Cast<APlayerController>(Controller);
-	if (!PC) return;
-
-	if (bInventoryOpen)
-	{
-		PC->SetShowMouseCursor(true);
-		FInputModeGameAndUI InputMode;
-		InputMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
-		InputMode.SetHideCursorDuringCapture(false);
-		PC->SetInputMode(InputMode);
-	}
-	else
-	{
-		PC->SetShowMouseCursor(false);
-		PC->SetInputMode(FInputModeGameOnly());
-	}
-}
 
 int64 AFlecsCharacter::GetCharacterEntityId() const
 {

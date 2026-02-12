@@ -65,6 +65,10 @@
 			"Enabled": true
 		},
 		{
+			"Name": "FlecsUI",
+			"Enabled": true
+		},
+		{
 			"Name": "ModularGameplay",
 			"Enabled": true
 		},

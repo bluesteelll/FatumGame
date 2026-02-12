@@ -10,6 +10,7 @@
 class UFlecsEntityDefinition;
 class UFlecsHUDWidget;
 class UFlecsInventoryWidget;
+class UFlecsUIInputConfig;
 class UInputAction;
 class UInputMappingContext;
 class USpringArmComponent;
@@ -58,9 +59,13 @@ public:
 	// ENHANCED INPUT
 	// ═══════════════════════════════════════════════════════════════
 
-	/** Input Mapping Context - assign in Blueprint */
+	/** Gameplay mapping context — active during normal gameplay */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input")
-	TObjectPtr<UInputMappingContext> DefaultMappingContext;
+	TObjectPtr<UInputMappingContext> GameplayMappingContext;
+
+	/** UI mapping context — active when inventory/menu is open (only toggle key) */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input")
+	TObjectPtr<UInputMappingContext> InventoryMappingContext;
 
 	/** Move Input Action */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input")
@@ -330,6 +335,10 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Inventory UI")
 	TSubclassOf<UFlecsInventoryWidget> InventoryWidgetClass;
 
+	/** Input config for inventory panel (cursor, input mode). Create as Data Asset. */
+	UPROPERTY(EditAnywhere, Category = "Inventory UI")
+	TObjectPtr<UFlecsUIInputConfig> InventoryInputConfig;
+
 	/** Active inventory widget instance. */
 	UPROPERTY(BlueprintReadOnly, Category = "Inventory UI")
 	TObjectPtr<UFlecsInventoryWidget> InventoryWidget;
@@ -407,9 +416,6 @@ protected:
 
 	/** Toggle inventory open/close */
 	void ToggleInventory(const FInputActionValue& Value);
-
-	/** Switch input mode for inventory (cursor + input mode). */
-	void SetInventoryInputMode(bool bInventoryOpen);
 
 private:
 	/** SkeletonKey generated from actor pointer hash (replaces UPlayerKeyCarry) */

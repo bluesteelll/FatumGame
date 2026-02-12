@@ -1,8 +1,10 @@
-// UFlecsInventoryWidget: Grid inventory, fully built in C++.
+// UFlecsInventoryWidget: Grid inventory using Model/View pattern.
+// All data flows through UFlecsContainerModel (lock-free triple buffer from sim thread).
 
 #include "FlecsInventoryWidget.h"
 #include "FlecsCharacter.h"
-#include "FlecsContainerLibrary.h"
+#include "FlecsContainerModel.h"
+#include "FlecsUISubsystem.h"
 #include "FlecsInventorySlotWidget.h"
 #include "FlecsInventoryItemWidget.h"
 #include "Blueprint/WidgetTree.h"
@@ -34,29 +36,6 @@ bool UFlecsInventoryWidget::Initialize()
 	return true;
 }
 
-void UFlecsInventoryWidget::NativeConstruct()
-{
-	Super::NativeConstruct();
-
-	UFlecsMessageSubsystem* MsgSub = UFlecsMessageSubsystem::Get(this);
-	check(MsgSub);
-
-	SnapshotHandle = MsgSub->RegisterListener<FUIInventorySnapshotMessage>(
-		TAG_UI_InventorySnapshot, this,
-		[this](FGameplayTag Tag, const FUIInventorySnapshotMessage& Msg) { HandleSnapshot(Tag, Msg); });
-
-	ChangedHandle = MsgSub->RegisterListener<FUIInventoryChangedMessage>(
-		TAG_UI_InventoryChanged, this,
-		[this](FGameplayTag Tag, const FUIInventoryChangedMessage& Msg) { HandleChanged(Tag, Msg); });
-}
-
-void UFlecsInventoryWidget::NativeDestruct()
-{
-	SnapshotHandle.Unregister();
-	ChangedHandle.Unregister();
-	Super::NativeDestruct();
-}
-
 // ═══════════════════════════════════════════════════════════════
 // PUBLIC API
 // ═══════════════════════════════════════════════════════════════
@@ -73,18 +52,23 @@ void UFlecsInventoryWidget::OpenInventory(int64 InContainerEntityId)
 	ContainerEntityId = InContainerEntityId;
 	bIsOpen = true;
 
-	int32 GW = 0, GH = 0;
-	float MW = 0.f, CW = 0.f;
-	int32 CC = 0;
-	bool bFound = UFlecsContainerLibrary::GetContainerInfo(this, ContainerEntityId, GW, GH, MW, CW, CC);
-	CachedGridWidth = GW;
-	CachedGridHeight = GH;
+	// Acquire model from subsystem (creates if needed, ref-counted)
+	UFlecsUISubsystem* UISub = UFlecsUISubsystem::SelfPtr;
+	check(UISub);
+	ContainerModel = UISub->AcquireContainerModel(ContainerEntityId);
+	ContainerModel->BindView(this);
 
-	UE_LOG(LogTemp, Log, TEXT("OpenInventory: ContainerId=%lld Found=%d Grid=%dx%d Items=%d"),
-		ContainerEntityId, bFound, GW, GH, CC);
+	// If model already has data from a previous open, use it immediately
+	if (ContainerModel->GetGridWidth() > 0)
+	{
+		BuildGrid(ContainerModel->GetGridWidth(), ContainerModel->GetGridHeight());
+		PopulateItems(ContainerModel->GetItems());
+	}
+	// Otherwise, snapshot will arrive on next Tick via OnContainerSnapshotReceived
 
-	BuildGrid(CachedGridWidth, CachedGridHeight);
-	RequestSnapshot();
+	UE_LOG(LogTemp, Log, TEXT("OpenInventory: ContainerId=%lld Model=%s Grid=%dx%d"),
+		ContainerEntityId, *ContainerModel->GetName(),
+		ContainerModel->GetGridWidth(), ContainerModel->GetGridHeight());
 }
 
 void UFlecsInventoryWidget::CloseInventory()
@@ -92,61 +76,81 @@ void UFlecsInventoryWidget::CloseInventory()
 	if (!bIsOpen) return;
 
 	bIsOpen = false;
-	ContainerEntityId = 0;
-	CachedItems.Empty();
-	LocalOccupancyMask.Empty();
 	ClearAll();
+
+	// Unbind and release model
+	if (ContainerModel)
+	{
+		ContainerModel->UnbindView(this);
+		if (UFlecsUISubsystem* UISub = UFlecsUISubsystem::SelfPtr)
+		{
+			UISub->ReleaseModel(ContainerEntityId);
+		}
+		ContainerModel = nullptr;
+	}
+
+	ContainerEntityId = 0;
 }
 
 void UFlecsInventoryWidget::RequestMoveItem(int64 ItemEntityId, FIntPoint NewGridPosition)
 {
-	if (ContainerEntityId == 0 || ItemEntityId == 0) return;
-	UFlecsContainerLibrary::MoveItemInContainer(this, ContainerEntityId, ItemEntityId, NewGridPosition);
+	if (!ContainerModel || ItemEntityId == 0) return;
+
+	// Optimistic: model updates instantly, then sends to sim thread
+	ContainerModel->MoveItem(ItemEntityId, NewGridPosition);
 }
 
 bool UFlecsInventoryWidget::CanFitAt(int64 ItemEntityId, FIntPoint Position) const
 {
-	FIntPoint ItemSize(1, 1);
-	FIntPoint CurrentPos(-1, -1);
-	for (const FInventoryItemSnapshot& Item : CachedItems)
-	{
-		if (Item.ItemEntityId == ItemEntityId)
-		{
-			ItemSize = Item.GridSize;
-			CurrentPos = Item.GridPosition;
-			break;
-		}
-	}
-
-	const bool bCanFit = LocalCanFit(Position, ItemSize, ItemEntityId);
-	const bool bCanStack = !bCanFit ? CanStackAt(ItemEntityId, Position) : false;
-
-	UE_LOG(LogTemp, Verbose, TEXT("CanFitAt: Item=%lld Pos=(%d,%d) CurPos=(%d,%d) Size=(%d,%d) CanFit=%d CanStack=%d CachedItems=%d OccMask=%d"),
-		ItemEntityId, Position.X, Position.Y, CurrentPos.X, CurrentPos.Y,
-		ItemSize.X, ItemSize.Y, bCanFit, bCanStack, CachedItems.Num(), LocalOccupancyMask.Num());
-
-	return bCanFit || bCanStack;
+	if (!ContainerModel) return false;
+	return ContainerModel->CanFitAt(ItemEntityId, Position);
 }
 
 bool UFlecsInventoryWidget::CanStackAt(int64 ItemEntityId, FIntPoint Position) const
 {
-	const FInventoryItemSnapshot* SourceItem = nullptr;
-	for (const FInventoryItemSnapshot& Item : CachedItems)
+	if (!ContainerModel) return false;
+	return ContainerModel->CanStackAt(ItemEntityId, Position);
+}
+
+int32 UFlecsInventoryWidget::GetGridWidth() const
+{
+	return ContainerModel ? ContainerModel->GetGridWidth() : 0;
+}
+
+int32 UFlecsInventoryWidget::GetGridHeight() const
+{
+	return ContainerModel ? ContainerModel->GetGridHeight() : 0;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// IFlecsContainerView
+// ═══════════════════════════════════════════════════════════════
+
+void UFlecsInventoryWidget::OnContainerSnapshotReceived(const FContainerSnapshot& Snapshot)
+{
+	if (!bIsOpen || Snapshot.ContainerEntityId != ContainerEntityId) return;
+
+	// Rebuild grid if dimensions changed
+	if (SlotWidgets.Num() != Snapshot.GridWidth * Snapshot.GridHeight)
 	{
-		if (Item.ItemEntityId == ItemEntityId)
-		{
-			SourceItem = &Item;
-			break;
-		}
+		BuildGrid(Snapshot.GridWidth, Snapshot.GridHeight);
 	}
-	if (!SourceItem || SourceItem->MaxStack <= 1) return false;
 
-	const FInventoryItemSnapshot* TargetItem = FindItemAtCell(Position, ItemEntityId);
-	if (!TargetItem) return false;
+	PopulateItems(Snapshot.Items);
+}
 
-	return TargetItem->ItemName == SourceItem->ItemName
-		&& TargetItem->MaxStack > 1
-		&& TargetItem->Count < TargetItem->MaxStack;
+void UFlecsInventoryWidget::OnItemMoved(int64 ItemEntityId, FIntPoint OldPos, FIntPoint NewPos)
+{
+	// Optimistic move already handled by model — just repopulate from model's Items
+	if (!bIsOpen || !ContainerModel) return;
+	PopulateItems(ContainerModel->GetItems());
+}
+
+void UFlecsInventoryWidget::OnOperationRolledBack(uint32 OpId)
+{
+	// Sim rejected the move — model already reconciled, repopulate
+	if (!bIsOpen || !ContainerModel) return;
+	PopulateItems(ContainerModel->GetItems());
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -176,7 +180,7 @@ void UFlecsInventoryWidget::BuildGrid(int32 GridWidth, int32 GridHeight)
 	}
 }
 
-void UFlecsInventoryWidget::PopulateItems(const TArray<FInventoryItemSnapshot>& Items)
+void UFlecsInventoryWidget::PopulateItems(const TArray<FContainerItemSnapshot>& Items)
 {
 	// Clear old item widgets
 	for (UFlecsInventoryItemWidget* W : ItemWidgets)
@@ -187,7 +191,7 @@ void UFlecsInventoryWidget::PopulateItems(const TArray<FInventoryItemSnapshot>& 
 
 	if (!GridCanvas) return;
 
-	for (const FInventoryItemSnapshot& Item : Items)
+	for (const FContainerItemSnapshot& Item : Items)
 	{
 		if (Item.GridPosition.X < 0) continue;
 
@@ -219,118 +223,4 @@ void UFlecsInventoryWidget::ClearAll()
 		if (W) W->RemoveFromParent();
 	}
 	ItemWidgets.Empty();
-}
-
-// ═══════════════════════════════════════════════════════════════
-// MESSAGE HANDLERS
-// ═══════════════════════════════════════════════════════════════
-
-void UFlecsInventoryWidget::HandleSnapshot(FGameplayTag Channel, const FUIInventorySnapshotMessage& Msg)
-{
-	if (Msg.ContainerEntityId != ContainerEntityId || !bIsOpen) return;
-
-	CachedGridWidth = Msg.GridWidth;
-	CachedGridHeight = Msg.GridHeight;
-	CachedItems = Msg.Items;
-	RebuildLocalOccupancy();
-	PopulateItems(CachedItems);
-}
-
-void UFlecsInventoryWidget::HandleChanged(FGameplayTag Channel, const FUIInventoryChangedMessage& Msg)
-{
-	if (Msg.ContainerEntityId != ContainerEntityId || !bIsOpen) return;
-	RequestSnapshot();
-}
-
-void UFlecsInventoryWidget::RequestSnapshot()
-{
-	if (ContainerEntityId == 0) return;
-	UFlecsContainerLibrary::RequestContainerSnapshot(this, ContainerEntityId);
-}
-
-// ═══════════════════════════════════════════════════════════════
-// LOCAL OCCUPANCY MIRROR
-// ═══════════════════════════════════════════════════════════════
-
-void UFlecsInventoryWidget::RebuildLocalOccupancy()
-{
-	const int32 TotalCells = CachedGridWidth * CachedGridHeight;
-	if (TotalCells <= 0)
-	{
-		LocalOccupancyMask.Empty();
-		return;
-	}
-
-	const int32 BytesNeeded = (TotalCells + 7) / 8;
-	LocalOccupancyMask.SetNumUninitialized(BytesNeeded);
-	FMemory::Memzero(LocalOccupancyMask.GetData(), BytesNeeded);
-
-	for (const FInventoryItemSnapshot& Item : CachedItems)
-	{
-		if (Item.GridPosition.X < 0) continue;
-
-		for (int32 Y = Item.GridPosition.Y; Y < Item.GridPosition.Y + Item.GridSize.Y; ++Y)
-		{
-			for (int32 X = Item.GridPosition.X; X < Item.GridPosition.X + Item.GridSize.X; ++X)
-			{
-				const int32 Idx = Y * CachedGridWidth + X;
-				LocalOccupancyMask[Idx / 8] |= (1 << (Idx % 8));
-			}
-		}
-	}
-}
-
-bool UFlecsInventoryWidget::LocalCanFit(FIntPoint Position, FIntPoint Size, int64 ExcludeItemEntityId) const
-{
-	if (Position.X < 0 || Position.Y < 0) return false;
-	if (Position.X + Size.X > CachedGridWidth || Position.Y + Size.Y > CachedGridHeight) return false;
-	if (LocalOccupancyMask.Num() == 0) return false;
-
-	TSet<int32> ExcludedCells;
-	if (ExcludeItemEntityId != 0)
-	{
-		for (const FInventoryItemSnapshot& Item : CachedItems)
-		{
-			if (Item.ItemEntityId == ExcludeItemEntityId && Item.GridPosition.X >= 0)
-			{
-				for (int32 Y = Item.GridPosition.Y; Y < Item.GridPosition.Y + Item.GridSize.Y; ++Y)
-				{
-					for (int32 X = Item.GridPosition.X; X < Item.GridPosition.X + Item.GridSize.X; ++X)
-					{
-						ExcludedCells.Add(Y * CachedGridWidth + X);
-					}
-				}
-				break;
-			}
-		}
-	}
-
-	for (int32 Y = Position.Y; Y < Position.Y + Size.Y; ++Y)
-	{
-		for (int32 X = Position.X; X < Position.X + Size.X; ++X)
-		{
-			const int32 Idx = Y * CachedGridWidth + X;
-			if (ExcludedCells.Contains(Idx)) continue;
-			if (LocalOccupancyMask[Idx / 8] & (1 << (Idx % 8)))
-			{
-				return false;
-			}
-		}
-	}
-	return true;
-}
-
-const FInventoryItemSnapshot* UFlecsInventoryWidget::FindItemAtCell(FIntPoint Cell, int64 ExcludeItemEntityId) const
-{
-	for (const FInventoryItemSnapshot& Item : CachedItems)
-	{
-		if (Item.ItemEntityId == ExcludeItemEntityId || Item.GridPosition.X < 0) continue;
-
-		if (Cell.X >= Item.GridPosition.X && Cell.X < Item.GridPosition.X + Item.GridSize.X
-			&& Cell.Y >= Item.GridPosition.Y && Cell.Y < Item.GridPosition.Y + Item.GridSize.Y)
-		{
-			return &Item;
-		}
-	}
-	return nullptr;
 }

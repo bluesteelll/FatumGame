@@ -6,19 +6,22 @@
 #include "FlecsGameTags.h"
 #include "FlecsEntityDefinition.h"
 #include "FlecsItemDefinition.h"
-#include "FlecsMessageSubsystem.h"
-#include "FlecsUIMessages.h"
+#include "FlecsUISubsystem.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogFlecsContainer, Log, All);
 
-static void NotifyInventoryChanged(int64 ContainerEntityId)
+/** Push fresh snapshot to triple buffer if a UI model is tracking this container. Called on sim thread. */
+static void NotifyContainerUI(int64 ContainerEntityId)
 {
-	if (UFlecsMessageSubsystem::SelfPtr)
-	{
-		FUIInventoryChangedMessage Msg;
-		Msg.ContainerEntityId = ContainerEntityId;
-		UFlecsMessageSubsystem::SelfPtr->EnqueueMessage(TAG_UI_InventoryChanged, Msg);
-	}
+	UFlecsUISubsystem* UISub = UFlecsUISubsystem::SelfPtr;
+	if (!UISub) return;
+
+	FContainerSharedState* Shared = UISub->FindContainerSharedState(ContainerEntityId);
+	if (!Shared) return;
+
+	FContainerSnapshot Snap = UISub->BuildContainerSnapshot(ContainerEntityId);
+	Shared->SnapshotBuffer.WriteAndSwap(MoveTemp(Snap));
+	Shared->SimVersion.fetch_add(1, std::memory_order_release);
 }
 
 static flecs::entity ResolveContainerEntity(UFlecsArtillerySubsystem* Sub, int64 EntityId)
@@ -153,7 +156,7 @@ bool UFlecsContainerLibrary::AddItemToContainer(
 			{
 				UE_LOG(LogFlecsContainer, Log, TEXT("AddItemToContainer: Stacked all %d '%s' into existing items in container %lld"),
 					Count, *ItemName.ToString(), ContainerEntityId);
-				NotifyInventoryChanged(ContainerEntityId);
+				NotifyContainerUI(ContainerEntityId);
 				return;
 			}
 		}
@@ -221,7 +224,7 @@ bool UFlecsContainerLibrary::AddItemToContainer(
 			return;
 		}
 
-		NotifyInventoryChanged(ContainerEntityId);
+		NotifyContainerUI(ContainerEntityId);
 	});
 
 	OutActuallyAdded = Count;
@@ -287,7 +290,7 @@ bool UFlecsContainerLibrary::RemoveItemFromContainer(
 		UE_LOG(LogFlecsContainer, Log, TEXT("RemoveItemFromContainer: Removed item %lld from container %lld"),
 			ItemEntityId, ContainerEntityId);
 		ItemEntity.destruct();
-		NotifyInventoryChanged(ContainerEntityId);
+		NotifyContainerUI(ContainerEntityId);
 	});
 
 	return true;
@@ -350,7 +353,7 @@ int32 UFlecsContainerLibrary::RemoveAllItemsFromContainer(
 
 		UE_LOG(LogFlecsContainer, Log, TEXT("RemoveAllItemsFromContainer: Removed %d items from container %lld"),
 			ItemsToRemove.Num(), ContainerEntityId);
-		NotifyInventoryChanged(ContainerEntityId);
+		NotifyContainerUI(ContainerEntityId);
 	});
 
 	return 0;
@@ -402,220 +405,3 @@ FSkeletonKey UFlecsContainerLibrary::DropItem(
 	return FSkeletonKey();
 }
 
-// ═══════════════════════════════════════════════════════════════
-// INVENTORY UI QUERIES
-// ═══════════════════════════════════════════════════════════════
-
-void UFlecsContainerLibrary::RequestContainerSnapshot(UObject* WorldContextObject, int64 ContainerEntityId)
-{
-	if (ContainerEntityId == 0) return;
-
-	UFlecsArtillerySubsystem* Subsystem = FlecsLibrary::GetSubsystem(WorldContextObject);
-	if (!Subsystem) return;
-
-	Subsystem->EnqueueCommand([Subsystem, ContainerEntityId]()
-	{
-		flecs::world* FlecsWorld = Subsystem->GetFlecsWorld();
-		if (!FlecsWorld) return;
-
-		flecs::entity ContainerEntity = ResolveContainerEntity(Subsystem, ContainerEntityId);
-		if (!ContainerEntity.is_valid()) return;
-
-		const FContainerStatic* ContainerStatic = ContainerEntity.try_get<FContainerStatic>();
-		const FContainerInstance* ContainerInstance = ContainerEntity.try_get<FContainerInstance>();
-		if (!ContainerStatic || !ContainerInstance) return;
-
-		FUIInventorySnapshotMessage Msg;
-		Msg.ContainerEntityId = ContainerEntityId;
-		Msg.GridWidth = ContainerStatic->GridWidth;
-		Msg.GridHeight = ContainerStatic->GridHeight;
-		Msg.MaxWeight = ContainerStatic->MaxWeight;
-		Msg.CurrentWeight = ContainerInstance->CurrentWeight;
-		Msg.CurrentCount = ContainerInstance->CurrentCount;
-
-		FlecsWorld->each([ContainerEntityId, &Msg](flecs::entity E, const FContainedIn& ContainedIn)
-		{
-			if (ContainedIn.ContainerEntityId != ContainerEntityId) return;
-
-			const FItemStaticData* StaticData = E.try_get<FItemStaticData>();
-			const FItemInstance* ItemInst = E.try_get<FItemInstance>();
-
-			FInventoryItemSnapshot Snap;
-			Snap.ItemEntityId = static_cast<int64>(E.id());
-			Snap.GridPosition = ContainedIn.GridPosition;
-			Snap.GridSize = StaticData ? StaticData->GridSize : FIntPoint(1, 1);
-			Snap.ItemName = StaticData ? StaticData->ItemName : NAME_None;
-			Snap.Count = ItemInst ? ItemInst->Count : 1;
-			Snap.MaxStack = StaticData ? StaticData->MaxStack : 99;
-			Snap.Weight = StaticData ? StaticData->Weight : 0.f;
-			Snap.ItemDefinition = StaticData ? StaticData->ItemDefinition : nullptr;
-			if (Snap.ItemDefinition)
-			{
-				Snap.RarityTier = Snap.ItemDefinition->RarityTier;
-			}
-
-			Msg.Items.Add(MoveTemp(Snap));
-		});
-
-		if (UFlecsMessageSubsystem::SelfPtr)
-		{
-			UFlecsMessageSubsystem::SelfPtr->EnqueueMessage(TAG_UI_InventorySnapshot, Msg);
-		}
-	});
-}
-
-void UFlecsContainerLibrary::MoveItemInContainer(
-	UObject* WorldContextObject,
-	int64 ContainerEntityId,
-	int64 ItemEntityId,
-	FIntPoint NewGridPosition)
-{
-	if (ContainerEntityId == 0 || ItemEntityId == 0) return;
-
-	UFlecsArtillerySubsystem* Subsystem = FlecsLibrary::GetSubsystem(WorldContextObject);
-	if (!Subsystem) return;
-
-	Subsystem->EnqueueCommand([Subsystem, ContainerEntityId, ItemEntityId, NewGridPosition]()
-	{
-		flecs::world* FlecsWorld = Subsystem->GetFlecsWorld();
-		if (!FlecsWorld) return;
-
-		flecs::entity ContainerEntity = ResolveContainerEntity(Subsystem, ContainerEntityId);
-		if (!ContainerEntity.is_valid()) return;
-
-		flecs::entity ItemEntity = FlecsWorld->entity(static_cast<flecs::entity_t>(ItemEntityId));
-		if (!ItemEntity.is_alive()) return;
-
-		FContainedIn* ContainedIn = ItemEntity.try_get_mut<FContainedIn>();
-		if (!ContainedIn || ContainedIn->ContainerEntityId != ContainerEntityId) return;
-
-		const FContainerStatic* ContainerStatic = ContainerEntity.try_get<FContainerStatic>();
-		if (!ContainerStatic || ContainerStatic->Type != EContainerType::Grid) return;
-
-		FContainerGridInstance* GridInstance = ContainerEntity.try_get_mut<FContainerGridInstance>();
-		if (!GridInstance) return;
-
-		const FItemStaticData* SourceStatic = ItemEntity.try_get<FItemStaticData>();
-		FIntPoint ItemSize = SourceStatic ? SourceStatic->GridSize : FIntPoint(1, 1);
-		FIntPoint OldPosition = ContainedIn->GridPosition;
-
-		// Free old position
-		GridInstance->Free(OldPosition, ItemSize, ContainerStatic->GridWidth);
-
-		// Try normal move first
-		if (GridInstance->CanFit(NewGridPosition, ItemSize, ContainerStatic->GridWidth, ContainerStatic->GridHeight))
-		{
-			GridInstance->Occupy(NewGridPosition, ItemSize, ContainerStatic->GridWidth);
-			ContainedIn->GridPosition = NewGridPosition;
-
-			UE_LOG(LogFlecsContainer, Log, TEXT("MoveItemInContainer: Moved item %lld from (%d,%d) to (%d,%d)"),
-				ItemEntityId, OldPosition.X, OldPosition.Y, NewGridPosition.X, NewGridPosition.Y);
-			NotifyInventoryChanged(ContainerEntityId);
-			return;
-		}
-
-		// Can't fit — try stacking onto item at target cell
-		FItemInstance* SourceInst = ItemEntity.try_get_mut<FItemInstance>();
-		if (SourceStatic && SourceStatic->IsStackable() && SourceInst)
-		{
-			// Find item that occupies the target cell
-			flecs::entity TargetItem;
-			const flecs::entity_t SourceId = static_cast<flecs::entity_t>(ItemEntityId);
-			FlecsWorld->each([ContainerEntityId, NewGridPosition, SourceId, &TargetItem](
-				flecs::entity E, const FContainedIn& C)
-			{
-				if (C.ContainerEntityId != ContainerEntityId || !C.IsInGrid() || E.id() == SourceId) return;
-				const FItemStaticData* S = E.try_get<FItemStaticData>();
-				FIntPoint Size = S ? S->GridSize : FIntPoint(1, 1);
-				if (NewGridPosition.X >= C.GridPosition.X && NewGridPosition.X < C.GridPosition.X + Size.X
-					&& NewGridPosition.Y >= C.GridPosition.Y && NewGridPosition.Y < C.GridPosition.Y + Size.Y)
-				{
-					TargetItem = E;
-				}
-			});
-
-			if (TargetItem.is_valid())
-			{
-				const FItemStaticData* TargetStatic = TargetItem.try_get<FItemStaticData>();
-				FItemInstance* TargetInst = TargetItem.try_get_mut<FItemInstance>();
-
-				if (TargetStatic && TargetInst
-					&& TargetStatic->ItemName == SourceStatic->ItemName
-					&& TargetStatic->IsStackable()
-					&& TargetInst->Count < TargetStatic->MaxStack)
-				{
-					const int32 SpaceInTarget = TargetStatic->MaxStack - TargetInst->Count;
-					const int32 ToTransfer = FMath::Min(SourceInst->Count, SpaceInTarget);
-					TargetInst->Count += ToTransfer;
-					SourceInst->Count -= ToTransfer;
-
-					if (SourceInst->Count <= 0)
-					{
-						// Fully merged — destroy source item
-						FContainerInstance* ContainerInstance = ContainerEntity.try_get_mut<FContainerInstance>();
-						if (ContainerInstance) ContainerInstance->CurrentCount--;
-						ItemEntity.destruct();
-
-						UE_LOG(LogFlecsContainer, Log, TEXT("MoveItemInContainer: Stacked item %lld into %llu (full merge, +%d)"),
-							ItemEntityId, TargetItem.id(), ToTransfer);
-					}
-					else
-					{
-						// Partially merged — put source back at old position
-						GridInstance->Occupy(OldPosition, ItemSize, ContainerStatic->GridWidth);
-
-						UE_LOG(LogFlecsContainer, Log, TEXT("MoveItemInContainer: Stacked %d from item %lld into %llu (partial, %d remaining)"),
-							ToTransfer, ItemEntityId, TargetItem.id(), SourceInst->Count);
-					}
-
-					NotifyInventoryChanged(ContainerEntityId);
-					return;
-				}
-			}
-		}
-
-		// Neither move nor stack possible — rollback
-		GridInstance->Occupy(OldPosition, ItemSize, ContainerStatic->GridWidth);
-		UE_LOG(LogFlecsContainer, Log, TEXT("MoveItemInContainer: Cannot fit or stack item %lld at (%d,%d)"),
-			ItemEntityId, NewGridPosition.X, NewGridPosition.Y);
-	});
-}
-
-bool UFlecsContainerLibrary::GetContainerInfo(
-	UObject* WorldContextObject,
-	int64 ContainerEntityId,
-	int32& OutGridWidth,
-	int32& OutGridHeight,
-	float& OutMaxWeight,
-	float& OutCurrentWeight,
-	int32& OutCurrentCount)
-{
-	OutGridWidth = 0;
-	OutGridHeight = 0;
-	OutMaxWeight = -1.f;
-	OutCurrentWeight = 0.f;
-	OutCurrentCount = 0;
-
-	if (ContainerEntityId == 0) return false;
-
-	UFlecsArtillerySubsystem* Subsystem = FlecsLibrary::GetSubsystem(WorldContextObject);
-	if (!Subsystem || !Subsystem->GetFlecsWorld()) return false;
-
-	flecs::world* FlecsWorld = Subsystem->GetFlecsWorld();
-	flecs::entity ContainerEntity = FlecsWorld->entity(static_cast<flecs::entity_t>(ContainerEntityId));
-	if (!ContainerEntity.is_alive() || !ContainerEntity.has<FTagContainer>()) return false;
-
-	const FContainerStatic* ContainerStatic = ContainerEntity.try_get<FContainerStatic>();
-	const FContainerInstance* ContainerInstance = ContainerEntity.try_get<FContainerInstance>();
-	if (!ContainerStatic) return false;
-
-	OutGridWidth = ContainerStatic->GridWidth;
-	OutGridHeight = ContainerStatic->GridHeight;
-	OutMaxWeight = ContainerStatic->MaxWeight;
-	if (ContainerInstance)
-	{
-		OutCurrentWeight = ContainerInstance->CurrentWeight;
-		OutCurrentCount = ContainerInstance->CurrentCount;
-	}
-	return true;
-}

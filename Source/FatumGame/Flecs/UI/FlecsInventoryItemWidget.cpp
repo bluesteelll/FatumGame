@@ -35,17 +35,17 @@ bool UFlecsInventoryItemWidget::Initialize()
 	return true;
 }
 
-void UFlecsInventoryItemWidget::SetItemData(const FInventoryItemSnapshot& Data)
+void UFlecsInventoryItemWidget::SetItemData(const FContainerItemSnapshot& Data)
 {
 	ItemEntityId = Data.ItemEntityId;
-	ItemName = Data.ItemName;
+	TypeId = Data.TypeId;
 	Count = Data.Count;
 	GridPosition = Data.GridPosition;
 	GridSize = Data.GridSize;
 
 	if (TextItemName)
 	{
-		TextItemName->SetText(FText::FromName(ItemName));
+		TextItemName->SetText(FText::FromName(TypeId));
 	}
 	if (TextCount)
 	{

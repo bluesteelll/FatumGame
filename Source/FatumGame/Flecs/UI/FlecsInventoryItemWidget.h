@@ -5,7 +5,7 @@
 
 #include "CoreMinimal.h"
 #include "Blueprint/UserWidget.h"
-#include "FlecsUIMessages.h"
+#include "FlecsContainerTypes.h"
 #include "FlecsInventoryItemWidget.generated.h"
 
 class UBorder;
@@ -19,7 +19,7 @@ class FATUMGAME_API UFlecsInventoryItemWidget : public UUserWidget
 
 public:
 	/** Set all item data and update visuals. Call after CreateWidget. */
-	void SetItemData(const FInventoryItemSnapshot& Data);
+	void SetItemData(const FContainerItemSnapshot& Data);
 
 	/** Must be set after creation so drops can be forwarded to the inventory. */
 	void SetParentInventory(UFlecsInventoryWidget* InParent) { ParentInventory = InParent; }
@@ -27,7 +27,7 @@ public:
 	int64 ItemEntityId = 0;
 	FIntPoint GridPosition;
 	FIntPoint GridSize = FIntPoint(1, 1);
-	FName ItemName;
+	FName TypeId;
 	int32 Count = 1;
 
 protected:
