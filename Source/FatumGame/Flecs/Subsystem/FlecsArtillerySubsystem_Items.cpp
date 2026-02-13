@@ -12,6 +12,7 @@
 #include "FlecsContainerProfile.h"
 #include "FlecsWeaponProfile.h"
 #include "FlecsInteractionProfile.h"
+#include "FlecsDestructibleProfile.h"
 
 // ═══════════════════════════════════════════════════════════════
 // ENTITY PREFAB REGISTRY IMPLEMENTATION
@@ -160,12 +161,19 @@ flecs::entity UFlecsArtillerySubsystem::GetOrCreateEntityPrefab(UFlecsEntityDefi
 		Prefab.set<FInteractionStatic>(InteractionStatic);
 	}
 
+	if (UFlecsDestructibleProfile* DestrProf = EntityDefinition->DestructibleProfile)
+	{
+		FDestructibleStatic DestrStatic;
+		DestrStatic.Profile = DestrProf;
+		Prefab.set<FDestructibleStatic>(DestrStatic);
+	}
+
 	// TODO: Add FLootStatic if needed
 
 	// Store in registry
 	EntityPrefabs.Add(EntityDefinition, Prefab);
 
-	UE_LOG(LogTemp, Log, TEXT("Created entity prefab: '%s' (Health=%d, Damage=%d, Projectile=%d, Container=%d, Item=%d, Weapon=%d, Interaction=%d)"),
+	UE_LOG(LogTemp, Log, TEXT("Created entity prefab: '%s' (Health=%d, Damage=%d, Projectile=%d, Container=%d, Item=%d, Weapon=%d, Interaction=%d, Destructible=%d)"),
 		*EntityDefinition->GetName(),
 		EntityDefinition->HealthProfile != nullptr,
 		EntityDefinition->DamageProfile != nullptr,
@@ -173,7 +181,8 @@ flecs::entity UFlecsArtillerySubsystem::GetOrCreateEntityPrefab(UFlecsEntityDefi
 		EntityDefinition->ContainerProfile != nullptr,
 		EntityDefinition->ItemDefinition != nullptr,
 		EntityDefinition->WeaponProfile != nullptr,
-		EntityDefinition->InteractionProfile != nullptr);
+		EntityDefinition->InteractionProfile != nullptr,
+		EntityDefinition->DestructibleProfile != nullptr);
 
 	return Prefab;
 }

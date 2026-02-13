@@ -433,6 +433,38 @@ public:
 		}
 	}
 
+	/**
+	 * Synchronously set a body's position via body_interface (NOT queued).
+	 * Use from sim thread when position must be committed before creating constraints.
+	 */
+	void SetBodyPositionDirect(FBarrageKey BarrageKey, const FVector& Position, bool bActivate = true)
+	{
+		if (!body_interface) return;
+
+		JPH::BodyID BodyID;
+		if (!BarrageToJoltMapping->find(BarrageKey, BodyID) || BodyID.IsInvalid()) return;
+
+		JPH::Vec3 JoltPos = CoordinateUtils::ToJoltCoordinates(FVector3d(Position));
+		body_interface->SetPosition(BodyID, JoltPos,
+			bActivate ? JPH::EActivation::Activate : JPH::EActivation::DontActivate);
+	}
+
+	/**
+	 * Synchronously set a body's rotation via body_interface (NOT queued).
+	 * Use from sim thread when rotation must be committed before creating constraints.
+	 */
+	void SetBodyRotationDirect(FBarrageKey BarrageKey, const FQuat& Rotation, bool bActivate = true)
+	{
+		if (!body_interface) return;
+
+		JPH::BodyID BodyID;
+		if (!BarrageToJoltMapping->find(BarrageKey, BodyID) || BodyID.IsInvalid()) return;
+
+		JPH::Quat JoltRot = CoordinateUtils::ToJoltRotation(FQuat4d(Rotation));
+		body_interface->SetRotation(BodyID, JoltRot,
+			bActivate ? JPH::EActivation::Activate : JPH::EActivation::DontActivate);
+	}
+
 	// Wake up all sleeping bodies in a given area - useful when removing support from stacked objects
 	void ActivateBodiesInArea(const FVector3d& Center, double HalfExtent)
 	{

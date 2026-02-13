@@ -69,3 +69,9 @@ struct FTagConsumable {};
 
 /** Entity can be interacted with (press E) */
 struct FTagInteractable {};
+
+/** Entity is a debris fragment from a destroyed object */
+struct FTagDebrisFragment {};
+
+/** Collision pair: projectile hit a fragmentable object */
+struct FTagCollisionFragmentation {};

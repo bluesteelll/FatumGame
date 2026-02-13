@@ -21,6 +21,12 @@
 #include "FlecsUIMessages.h"
 #include "FlecsNiagaraManager.h"
 #include "FlecsNiagaraProfile.h"
+#include "FlecsDestructibleProfile.h"
+#include "FlecsDestructibleGeometry.h"
+#include "FlecsHealthProfile.h"
+#include "FDebrisPool.h"
+#include "BarrageConstraintSystem.h"
+#include "FBConstraintParams.h"
 #include "PhysicsFilters/FastObjectLayerFilters.h"
 
 void UFlecsArtillerySubsystem::SetupFlecsSystems()
@@ -43,6 +49,7 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 	World.component<FContainerStatic>();
 	World.component<FEntityDefinitionRef>();
 	World.component<FInteractionStatic>();
+	World.component<FDestructibleStatic>();
 
 	// ─────────────────────────────────────────────────────────
 	// INSTANCE COMPONENTS (Per-entity mutable data)
@@ -56,6 +63,8 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 	World.component<FContainerSlotsInstance>();
 	World.component<FWorldItemInstance>();
 	World.component<FContainedIn>();
+	World.component<FDebrisInstance>();
+	World.component<FFragmentationData>();
 
 	// Damage Event System
 	World.component<FDamageHit>();
@@ -83,6 +92,7 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 	World.component<FTagConsumable>();
 	World.component<FTagInteractable>();
 	World.component<FTagConstrained>();
+	World.component<FTagDebrisFragment>();
 
 	// ─────────────────────────────────────────────────────────
 	// WEAPON COMPONENTS
@@ -102,6 +112,7 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 	World.component<FTagCollisionBounce>();
 	World.component<FTagCollisionDestructible>();
 	World.component<FTagCollisionCharacter>();
+	World.component<FTagCollisionFragmentation>();
 	World.component<FTagCollisionProcessed>();
 
 	// ─────────────────────────────────────────────────────────
@@ -200,6 +211,53 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 				UE_LOG(LogTemp, Log, TEXT("DAMAGE: Entity %llu total damage this tick: %.1f"),
 					Entity.id(), TotalDamageApplied);
 			}
+		});
+
+	// ═══════════════════════════════════════════════════════════════
+	// CONSTRAINT BREAK SYSTEM (runs FIRST — before gameplay systems)
+	// Calls Barrage ProcessBreakableConstraints(), removes broken constraints
+	// from FFlecsConstraintData on linked entities.
+	// ═══════════════════════════════════════════════════════════════
+
+	World.system<>("ConstraintBreakSystem")
+		.kind(flecs::OnUpdate)
+		.run([this](flecs::iter& It)
+		{
+			EnsureBarrageAccess();
+
+			FBarrageConstraintSystem* ConstraintSys = CachedBarrageDispatch
+				? CachedBarrageDispatch->GetConstraintSystem()
+				: nullptr;
+			if (!ConstraintSys) return;
+
+			TArray<FBarrageConstraintKey> BrokenConstraints;
+			int32 BrokenCount = ConstraintSys->ProcessBreakableConstraints(&BrokenConstraints);
+			if (BrokenCount == 0) return;
+
+			int32 Remaining = ConstraintSys->GetConstraintCount();
+			UE_LOG(LogTemp, Warning, TEXT("CONSTRAINT_BREAK: %d constraints BROKEN this tick (remaining: %d)"),
+				BrokenCount, Remaining);
+
+			flecs::world& World = *FlecsWorld;
+
+			// Remove broken constraint references from Flecs entities
+			// Query all entities with FFlecsConstraintData
+			World.each([&BrokenConstraints](flecs::entity Entity, FFlecsConstraintData& Data)
+			{
+				bool bChanged = false;
+				for (const FBarrageConstraintKey& BrokenKey : BrokenConstraints)
+				{
+					if (Data.RemoveConstraint(BrokenKey.Key))
+					{
+						bChanged = true;
+					}
+				}
+
+				if (bChanged && !Data.HasConstraints())
+				{
+					Entity.remove<FTagConstrained>();
+				}
+			});
 		});
 
 	// ═══════════════════════════════════════════════════════════════
@@ -316,10 +374,30 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 			}
 		});
 
+	// ─────────────────────────────────────────────────────────
+	// DEBRIS LIFETIME SYSTEM
+	// Counts down FDebrisInstance.LifetimeRemaining for auto-destroy fragments.
+	// Tags expired fragments with FTagDead.
+	// ─────────────────────────────────────────────────────────
+	World.system<FDebrisInstance>("DebrisLifetimeSystem")
+		.with<FTagDebrisFragment>()
+		.without<FTagDead>()
+		.each([](flecs::entity Entity, FDebrisInstance& Debris)
+		{
+			if (!Debris.bAutoDestroy) return;
+
+			const float DeltaTime = Entity.world().get_info()->delta_time;
+			Debris.LifetimeRemaining -= DeltaTime;
+			if (Debris.LifetimeRemaining <= 0.f)
+			{
+				Entity.add<FTagDead>();
+			}
+		});
+
 	// ═══════════════════════════════════════════════════════════════
 	// COLLISION PAIR SYSTEMS
 	// Process collision pairs created by OnBarrageContact().
-	// Order: Damage → Bounce → Pickup → Destructible
+	// Order: Damage → Bounce → Pickup → Destructible → Fragmentation
 	// ═══════════════════════════════════════════════════════════════
 
 	// ─────────────────────────────────────────────────────────
@@ -575,6 +653,383 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 
 			TryDestroyDestructible(Pair.EntityId1);
 			TryDestroyDestructible(Pair.EntityId2);
+
+			PairEntity.add<FTagCollisionProcessed>();
+		});
+
+	// ─────────────────────────────────────────────────────────
+	// FRAGMENTATION SYSTEM
+	// Processes FTagCollisionFragmentation pairs.
+	// Destroys the intact object and spawns pre-baked fragment bodies
+	// from FDebrisPool, connected by fixed constraints.
+	// ─────────────────────────────────────────────────────────
+	// NOTE: No .without<FTagCollisionProcessed>() — fragmentation co-exists with damage.
+	// A projectile hitting a fragmentable object triggers BOTH damage and fragmentation.
+	World.system<const FCollisionPair, const FFragmentationData>("FragmentationSystem")
+		.with<FTagCollisionFragmentation>()
+		.each([this, &World](flecs::entity PairEntity, const FCollisionPair& Pair, const FFragmentationData& FragData)
+		{
+			EnsureBarrageAccess();
+
+			FDebrisPool* Pool = GetDebrisPool();
+			if (!Pool || !Pool->IsInitialized()) return;
+
+			// Determine which entity is the destructible target
+			uint64 TargetId = 0;
+			FSkeletonKey TargetKey;
+			if (Pair.HasEntity2())
+			{
+				flecs::entity E2 = World.entity(Pair.EntityId2);
+				if (E2.is_valid() && E2.is_alive() && !E2.has<FTagDead>())
+				{
+					const FDestructibleStatic* Destr = E2.try_get<FDestructibleStatic>();
+					if (Destr && Destr->IsValid())
+					{
+						TargetId = Pair.EntityId2;
+						TargetKey = Pair.Key2;
+					}
+				}
+			}
+			if (TargetId == 0 && Pair.HasEntity1())
+			{
+				flecs::entity E1 = World.entity(Pair.EntityId1);
+				if (E1.is_valid() && E1.is_alive() && !E1.has<FTagDead>())
+				{
+					const FDestructibleStatic* Destr = E1.try_get<FDestructibleStatic>();
+					if (Destr && Destr->IsValid())
+					{
+						TargetId = Pair.EntityId1;
+						TargetKey = Pair.Key1;
+					}
+				}
+			}
+
+			if (TargetId == 0)
+			{
+				PairEntity.add<FTagCollisionProcessed>();
+				return;
+			}
+
+			flecs::entity TargetEntity = World.entity(TargetId);
+			if (!TargetEntity.is_valid() || !TargetEntity.is_alive() || TargetEntity.has<FTagDead>())
+			{
+				PairEntity.add<FTagCollisionProcessed>();
+				return;
+			}
+
+			const FDestructibleStatic* DestrStatic = TargetEntity.try_get<FDestructibleStatic>();
+			if (!DestrStatic || !DestrStatic->IsValid())
+			{
+				PairEntity.add<FTagCollisionProcessed>();
+				return;
+			}
+
+			UFlecsDestructibleProfile* Profile = DestrStatic->Profile;
+			UFlecsDestructibleGeometry* Geometry = Profile->Geometry;
+			if (!Geometry || Geometry->Fragments.Num() == 0)
+			{
+				PairEntity.add<FTagCollisionProcessed>();
+				return;
+			}
+
+			// Get the intact object's world transform from Barrage
+			FVector ObjectPosition = FVector::ZeroVector;
+			FQuat ObjectRotation = FQuat::Identity;
+			if (CachedBarrageDispatch && TargetKey.IsValid())
+			{
+				FBLet TargetPrim = CachedBarrageDispatch->GetShapeRef(TargetKey);
+				if (FBarragePrimitive::IsNotNull(TargetPrim))
+				{
+					ObjectPosition = FVector(FBarragePrimitive::GetPosition(TargetPrim));
+					ObjectRotation = FQuat(FBarragePrimitive::OptimisticGetAbsoluteRotation(TargetPrim));
+				}
+			}
+			FTransform ObjectTransform(ObjectRotation, ObjectPosition);
+
+			// ─────────────────────────────────────────────────────
+			// Kill the intact object (ISM remove, DEBRIS layer, tombstone)
+			// ─────────────────────────────────────────────────────
+			TargetEntity.add<FTagDead>();
+
+			UE_LOG(LogTemp, Log, TEXT("FRAGMENTATION: Destroying intact object %llu, spawning %d fragments at (%.0f,%.0f,%.0f)"),
+				TargetId, Geometry->Fragments.Num(), ObjectPosition.X, ObjectPosition.Y, ObjectPosition.Z);
+
+			// ─────────────────────────────────────────────────────
+			// Spawn fragments
+			// ─────────────────────────────────────────────────────
+			// Arrays parallel to Geometry->Fragments — same indices.
+			// Invalid entries for failed acquires or missing meshes.
+			const int32 FragCount = Geometry->Fragments.Num();
+			TArray<FSkeletonKey> FragmentKeys;
+			TArray<flecs::entity> FragmentEntities;
+			FragmentKeys.SetNumZeroed(FragCount);
+			FragmentEntities.SetNum(FragCount);
+
+			for (int32 FragIdx = 0; FragIdx < FragCount; ++FragIdx)
+			{
+				const FDestructibleFragment& Fragment = Geometry->Fragments[FragIdx];
+				if (!Fragment.Mesh) continue;
+
+				// Compute world transform for this fragment
+				FTransform FragWorldTransform = Fragment.RelativeTransform * ObjectTransform;
+				FVector FragPos = FragWorldTransform.GetLocation();
+				FQuat FragRot = FragWorldTransform.GetRotation();
+
+				// Acquire body from pool
+				FSkeletonKey FragKey = Pool->Acquire(FragPos, FragRot);
+				if (!FragKey.IsValid())
+				{
+					UE_LOG(LogTemp, Warning, TEXT("FRAGMENTATION: Failed to acquire debris body for fragment %d"), FragIdx);
+					continue;
+				}
+
+				// Get the FBLet for reverse binding
+				FBLet FragPrim = CachedBarrageDispatch->GetShapeRef(FragKey);
+
+				// Create Flecs entity for this fragment
+				flecs::entity FragEntity = World.entity();
+
+				FBarrageBody BarrageComp;
+				BarrageComp.BarrageKey = FragKey;
+				FragEntity.set<FBarrageBody>(BarrageComp);
+
+				// Reverse binding
+				if (FBarragePrimitive::IsNotNull(FragPrim))
+				{
+					FragPrim->SetFlecsEntity(FragEntity.id());
+				}
+
+				// Debris instance data
+				FDebrisInstance DebrisInst;
+				DebrisInst.LifetimeRemaining = Profile->DebrisLifetime;
+				DebrisInst.bAutoDestroy = Profile->bAutoDestroyDebris;
+				DebrisInst.PoolSlotIndex = 0; // Marks as pooled (not INDEX_NONE)
+				FragEntity.set<FDebrisInstance>(DebrisInst);
+
+				FragEntity.add<FTagDebrisFragment>();
+
+				// ISM render data
+				FISMRender Render;
+				Render.Mesh = Fragment.Mesh;
+				Render.Scale = FragWorldTransform.GetScale3D();
+				FragEntity.set<FISMRender>(Render);
+
+				// Determine fragment definition (per-fragment override or default)
+				UFlecsEntityDefinition* FragDef = Fragment.OverrideDefinition
+					? Fragment.OverrideDefinition
+					: Profile->DefaultFragmentDefinition;
+
+				// Apply profiles from fragment definition (if any)
+				if (FragDef)
+				{
+					if (FragDef->DamageProfile)
+					{
+						FDamageStatic DmgStatic;
+						DmgStatic.Damage = FragDef->DamageProfile->Damage;
+						DmgStatic.DamageType = FragDef->DamageProfile->DamageType;
+						DmgStatic.bAreaDamage = FragDef->DamageProfile->bAreaDamage;
+						DmgStatic.AreaRadius = FragDef->DamageProfile->AreaRadius;
+						DmgStatic.bDestroyOnHit = FragDef->DamageProfile->bDestroyOnHit;
+						DmgStatic.CritChance = FragDef->DamageProfile->CriticalChance;
+						DmgStatic.CritMultiplier = FragDef->DamageProfile->CriticalMultiplier;
+						FragEntity.set<FDamageStatic>(DmgStatic);
+					}
+
+					if (FragDef->HealthProfile)
+					{
+						FHealthStatic HealthStatic;
+						HealthStatic.MaxHP = FragDef->HealthProfile->MaxHealth;
+						HealthStatic.Armor = FragDef->HealthProfile->Armor;
+						HealthStatic.bDestroyOnDeath = FragDef->HealthProfile->bDestroyOnDeath;
+						FragEntity.set<FHealthStatic>(HealthStatic);
+
+						FHealthInstance HealthInst;
+						HealthInst.CurrentHP = FragDef->HealthProfile->GetStartingHealth();
+						FragEntity.set<FHealthInstance>(HealthInst);
+					}
+				}
+
+				// Queue ISM spawn for game thread
+				FPendingFragmentSpawn ISMSpawn;
+				ISMSpawn.EntityKey = FragKey;
+				ISMSpawn.Mesh = Fragment.Mesh;
+				ISMSpawn.Material = (FragDef && FragDef->RenderProfile)
+					? FragDef->RenderProfile->MaterialOverride
+					: nullptr;
+				ISMSpawn.WorldTransform = FragWorldTransform;
+				PendingFragmentSpawns.Enqueue(ISMSpawn);
+
+				// Niagara attached effects on fragments
+				if (FragDef && FragDef->NiagaraProfile && FragDef->NiagaraProfile->HasAttachedEffect())
+				{
+					// Queue Niagara registration via pending spawn system
+					// (NiagaraManager handles this when ISM is created on game thread)
+				}
+
+				// Death VFX on fragment death
+				if (FragDef && FragDef->NiagaraProfile && FragDef->NiagaraProfile->HasDeathEffect())
+				{
+					FNiagaraDeathEffect DeathVFX;
+					DeathVFX.Effect = FragDef->NiagaraProfile->DeathEffect;
+					DeathVFX.Scale = FragDef->NiagaraProfile->DeathEffectScale;
+					FragEntity.set<FNiagaraDeathEffect>(DeathVFX);
+				}
+
+				FragmentKeys[FragIdx] = FragKey;
+				FragmentEntities[FragIdx] = FragEntity;
+			}
+
+			// ─────────────────────────────────────────────────────
+			// Create constraints from adjacency graph
+			// ─────────────────────────────────────────────────────
+			FBarrageConstraintSystem* ConstraintSys = CachedBarrageDispatch
+				? CachedBarrageDispatch->GetConstraintSystem()
+				: nullptr;
+
+			UE_LOG(LogTemp, Warning, TEXT("FRAGMENTATION: === CONSTRAINT CREATION START ==="));
+			UE_LOG(LogTemp, Warning, TEXT("FRAGMENTATION: Geometry=%s, AdjacencyLinks=%d, ConstraintSys=%s, BreakForce=%.1f, BreakTorque=%.1f"),
+				*Geometry->GetName(), Geometry->AdjacencyLinks.Num(),
+				ConstraintSys ? TEXT("valid") : TEXT("NULL"),
+				Profile->ConstraintBreakForce, Profile->ConstraintBreakTorque);
+
+			// Log all fragment keys
+			for (int32 i = 0; i < FragmentKeys.Num(); ++i)
+			{
+				UE_LOG(LogTemp, Warning, TEXT("FRAGMENTATION:   FragKey[%d] valid=%s, Entity valid=%s"),
+					i,
+					FragmentKeys[i].IsValid() ? TEXT("YES") : TEXT("NO"),
+					FragmentEntities[i].is_valid() ? TEXT("YES") : TEXT("NO"));
+			}
+
+			if (ConstraintSys && Geometry->AdjacencyLinks.Num() > 0)
+			{
+				int32 ConstraintsCreated = 0;
+				int32 SkippedIndex = 0, SkippedKey = 0, SkippedPrim = 0, SkippedBarrage = 0, SkippedCreate = 0;
+
+				for (const FFragmentAdjacency& Link : Geometry->AdjacencyLinks)
+				{
+					UE_LOG(LogTemp, Warning, TEXT("FRAGMENTATION:   Link [%d]-[%d]:"), Link.FragmentIndexA, Link.FragmentIndexB);
+
+					if (Link.FragmentIndexA >= FragmentKeys.Num() || Link.FragmentIndexB >= FragmentKeys.Num())
+					{
+						UE_LOG(LogTemp, Error, TEXT("FRAGMENTATION:     SKIP index out of range (max=%d)"), FragmentKeys.Num());
+						++SkippedIndex;
+						continue;
+					}
+
+					FSkeletonKey KeyA = FragmentKeys[Link.FragmentIndexA];
+					FSkeletonKey KeyB = FragmentKeys[Link.FragmentIndexB];
+					if (!KeyA.IsValid() || !KeyB.IsValid())
+					{
+						UE_LOG(LogTemp, Error, TEXT("FRAGMENTATION:     SKIP invalid SkeletonKey A=%s B=%s"),
+							KeyA.IsValid() ? TEXT("ok") : TEXT("INVALID"),
+							KeyB.IsValid() ? TEXT("ok") : TEXT("INVALID"));
+						++SkippedKey;
+						continue;
+					}
+
+					FBLet PrimA = CachedBarrageDispatch->GetShapeRef(KeyA);
+					FBLet PrimB = CachedBarrageDispatch->GetShapeRef(KeyB);
+					if (!FBarragePrimitive::IsNotNull(PrimA) || !FBarragePrimitive::IsNotNull(PrimB))
+					{
+						UE_LOG(LogTemp, Error, TEXT("FRAGMENTATION:     SKIP GetShapeRef failed A=%s B=%s"),
+							FBarragePrimitive::IsNotNull(PrimA) ? TEXT("ok") : TEXT("NULL"),
+							FBarragePrimitive::IsNotNull(PrimB) ? TEXT("ok") : TEXT("NULL"));
+						++SkippedPrim;
+						continue;
+					}
+
+					FBarrageKey BodyA = PrimA->KeyIntoBarrage;
+					FBarrageKey BodyB = PrimB->KeyIntoBarrage;
+					UE_LOG(LogTemp, Warning, TEXT("FRAGMENTATION:     BarrageKey A=%llu B=%llu"),
+						BodyA.KeyIntoBarrage, BodyB.KeyIntoBarrage);
+
+					if (BodyA.KeyIntoBarrage == 0 || BodyB.KeyIntoBarrage == 0)
+					{
+						UE_LOG(LogTemp, Error, TEXT("FRAGMENTATION:     SKIP BarrageKey is 0"));
+						++SkippedBarrage;
+						continue;
+					}
+
+					FBarrageConstraintKey CKey = CachedBarrageDispatch->CreateFixedConstraint(
+						BodyA, BodyB, Profile->ConstraintBreakForce, Profile->ConstraintBreakTorque);
+
+					UE_LOG(LogTemp, Warning, TEXT("FRAGMENTATION:     CreateFixedConstraint -> Key=%llu valid=%s"),
+						CKey.Key, CKey.IsValid() ? TEXT("YES") : TEXT("NO"));
+
+					if (CKey.IsValid())
+					{
+						++ConstraintsCreated;
+
+						auto RegisterConstraint = [&](flecs::entity E, FSkeletonKey OtherKey)
+						{
+							FFlecsConstraintData& Data = E.obtain<FFlecsConstraintData>();
+							Data.AddConstraint(CKey.Key, OtherKey, Profile->ConstraintBreakForce, Profile->ConstraintBreakTorque);
+							E.add<FTagConstrained>();
+						};
+
+						flecs::entity EA = FragmentEntities[Link.FragmentIndexA];
+						flecs::entity EB = FragmentEntities[Link.FragmentIndexB];
+						if (EA.is_valid()) RegisterConstraint(EA, KeyB);
+						if (EB.is_valid()) RegisterConstraint(EB, KeyA);
+					}
+					else
+					{
+						++SkippedCreate;
+					}
+				}
+
+				UE_LOG(LogTemp, Warning, TEXT("FRAGMENTATION: === RESULT: %d/%d constraints created ==="),
+					ConstraintsCreated, Geometry->AdjacencyLinks.Num());
+				if (SkippedIndex + SkippedKey + SkippedPrim + SkippedBarrage + SkippedCreate > 0)
+				{
+					UE_LOG(LogTemp, Warning, TEXT("FRAGMENTATION:   Skips: Index=%d Key=%d Prim=%d Barrage=%d Create=%d"),
+						SkippedIndex, SkippedKey, SkippedPrim, SkippedBarrage, SkippedCreate);
+				}
+			}
+			else
+			{
+				UE_LOG(LogTemp, Error, TEXT("FRAGMENTATION: NO CONSTRAINTS — ConstraintSys=%s, AdjacencyLinks=%d"),
+					ConstraintSys ? TEXT("valid") : TEXT("NULL"), Geometry->AdjacencyLinks.Num());
+			}
+
+			// ─────────────────────────────────────────────────────
+			// Apply impulse to nearest fragment(s)
+			// ─────────────────────────────────────────────────────
+			if (FragData.ImpactImpulse > 0.f)
+			{
+				// Find the closest VALID fragment to impact point
+				float BestDistSq = TNumericLimits<float>::Max();
+				int32 BestIdx = INDEX_NONE;
+				for (int32 i = 0; i < FragCount; ++i)
+				{
+					if (!FragmentKeys[i].IsValid()) continue;
+
+					const FDestructibleFragment& Frag = Geometry->Fragments[i];
+					FVector FragPos = (Frag.RelativeTransform * ObjectTransform).GetLocation();
+					float DistSq = FVector::DistSquared(FragPos, FragData.ImpactPoint);
+					if (DistSq < BestDistSq)
+					{
+						BestDistSq = DistSq;
+						BestIdx = i;
+					}
+				}
+
+				if (BestIdx != INDEX_NONE)
+				{
+					// Apply impulse as velocity to the nearest fragment
+					FVector ImpulseDir = FragData.ImpactDirection.IsNearlyZero()
+						? FVector::UpVector
+						: FragData.ImpactDirection;
+					FVector ImpulseVelocity = ImpulseDir * FragData.ImpactImpulse * Profile->ImpulseMultiplier;
+
+					FBLet NearestPrim = CachedBarrageDispatch->GetShapeRef(FragmentKeys[BestIdx]);
+					if (FBarragePrimitive::IsNotNull(NearestPrim))
+					{
+						FBarragePrimitive::SetVelocity(FVector3d(ImpulseVelocity), NearestPrim);
+					}
+				}
+			}
 
 			PairEntity.add<FTagCollisionProcessed>();
 		});
@@ -1066,6 +1521,28 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 		{
 			EnsureBarrageAccess();
 
+			// ─────────────────────────────────────────────────────
+			// CONSTRAINT CLEANUP: Remove all constraints for this entity
+			// Must happen before body cleanup (constraints reference bodies).
+			// ─────────────────────────────────────────────────────
+			if (Entity.has<FTagConstrained>() && CachedBarrageDispatch)
+			{
+				const FBarrageBody* ConstrainedBody = Entity.try_get<FBarrageBody>();
+				if (ConstrainedBody && ConstrainedBody->IsValid())
+				{
+					// Use GetShapeRef→KeyIntoBarrage (pool bodies aren't in TranslationMapping)
+					FBLet ConstrainedPrim = CachedBarrageDispatch->GetShapeRef(ConstrainedBody->BarrageKey);
+					if (FBarragePrimitive::IsNotNull(ConstrainedPrim))
+					{
+						FBarrageConstraintSystem* ConstraintSys = CachedBarrageDispatch->GetConstraintSystem();
+						if (ConstraintSys)
+						{
+							ConstraintSys->RemoveAllForBody(ConstrainedPrim->KeyIntoBarrage);
+						}
+					}
+				}
+			}
+
 			const FBarrageBody* Body = Entity.try_get<FBarrageBody>();
 
 			if (Body && Body->IsValid())
@@ -1126,7 +1603,27 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 					NiagaraMgr->EnqueueRemoval(Key);
 				}
 
-				// Handle Barrage physics body cleanup
+				// ─────────────────────────────────────────────────
+				// POOLED DEBRIS: Release back to pool instead of tombstone
+				// ─────────────────────────────────────────────────
+				const FDebrisInstance* Debris = Entity.try_get<FDebrisInstance>();
+				if (Debris && Debris->PoolSlotIndex != INDEX_NONE)
+				{
+					FDebrisPool* Pool = GetDebrisPool();
+					if (Pool && Pool->IsInitialized())
+					{
+						FBLet Prim = CachedBarrageDispatch->GetShapeRef(Key);
+						if (FBarragePrimitive::IsNotNull(Prim))
+						{
+							Prim->ClearFlecsEntity();
+						}
+						Pool->Release(Key);
+						Entity.destruct();
+						return; // Skip normal tombstone path
+					}
+				}
+
+				// Handle Barrage physics body cleanup (normal path)
 				if (CachedBarrageDispatch)
 				{
 					FBLet Prim = CachedBarrageDispatch->GetShapeRef(Key);

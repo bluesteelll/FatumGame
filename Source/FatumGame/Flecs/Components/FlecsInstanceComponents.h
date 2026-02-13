@@ -350,3 +350,45 @@ struct FContainedIn
 	bool IsInGrid() const { return GridPosition.X >= 0 && GridPosition.Y >= 0; }
 	bool IsInSlot() const { return SlotIndex >= 0; }
 };
+
+// ═══════════════════════════════════════════════════════════════
+// DEBRIS INSTANCE
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Instance debris data - mutable per-fragment data.
+ * Present on each fragment entity spawned from a destructible object.
+ * Static data (BreakForce, ImpulseMultiplier) comes from UFlecsDestructibleProfile.
+ */
+struct FDebrisInstance
+{
+	/** Remaining lifetime in seconds (only used if bAutoDestroy) */
+	float LifetimeRemaining = 10.f;
+
+	/** Should this fragment auto-destroy after lifetime expires? */
+	bool bAutoDestroy = true;
+
+	/** Index into FDebrisPool for body reuse. INDEX_NONE = not pooled. */
+	int32 PoolSlotIndex = INDEX_NONE;
+};
+
+// ═══════════════════════════════════════════════════════════════
+// FRAGMENTATION DATA
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Fragmentation event data — stored on collision pair entity.
+ * Contains impact info needed by FragmentationSystem to apply impulse.
+ * NOT a USTRUCT — pure C++ for Flecs performance.
+ */
+struct FFragmentationData
+{
+	/** World-space impact point */
+	FVector ImpactPoint = FVector::ZeroVector;
+
+	/** Impact direction (normalized) */
+	FVector ImpactDirection = FVector::ZeroVector;
+
+	/** Impact impulse magnitude */
+	float ImpactImpulse = 0.f;
+};

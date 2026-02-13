@@ -729,8 +729,14 @@ bool FBarrageConstraintSystem::GetForces(FBarrageConstraintKey Key, FBConstraint
 	{
 		const TwoBodyConstraint* tbc = static_cast<const TwoBodyConstraint*>(Data->JoltConstraint.GetPtr());
 
-		// Get constraint impulses (lambda values) and convert to forces
-		// The exact method depends on constraint type
+		// Lambda = impulse (kg·m/s in Jolt coords). Divide by dt → force (Newtons).
+		// Forces are in Newtons — only need Jolt Y↔Z axis swap, NOT ×100 cm/m scaling.
+		// FromJoltCoordinatesD multiplies ×100 (position conversion) — WRONG for forces.
+		auto JoltForceToUE = [](JPH::Vec3 JoltForce) -> FVector3d
+		{
+			return FVector3d(JoltForce[0], JoltForce[2], JoltForce[1]);
+		};
+
 		switch (Data->JoltConstraint->GetSubType())
 		{
 		case EConstraintSubType::Fixed:
@@ -739,10 +745,9 @@ bool FBarrageConstraintSystem::GetForces(FBarrageConstraintKey Key, FBConstraint
 				Vec3 posLambda = fc->GetTotalLambdaPosition();
 				Vec3 rotLambda = fc->GetTotalLambdaRotation();
 
-				// Lambda is impulse, divide by delta time to get force (approximate)
 				float dt = Owner ? Owner->DeltaTime : 0.01f;
-				OutForces.LinearForce = CoordinateUtils::FromJoltCoordinatesD(posLambda / dt);
-				OutForces.AngularTorque = CoordinateUtils::FromJoltCoordinatesD(rotLambda / dt);
+				OutForces.LinearForce = JoltForceToUE(posLambda / dt);
+				OutForces.AngularTorque = JoltForceToUE(rotLambda / dt);
 			}
 			break;
 
@@ -752,7 +757,7 @@ bool FBarrageConstraintSystem::GetForces(FBarrageConstraintKey Key, FBConstraint
 				Vec3 lambda = pc->GetTotalLambdaPosition();
 
 				float dt = Owner ? Owner->DeltaTime : 0.01f;
-				OutForces.LinearForce = CoordinateUtils::FromJoltCoordinatesD(lambda / dt);
+				OutForces.LinearForce = JoltForceToUE(lambda / dt);
 				OutForces.AngularTorque = FVector3d::ZeroVector;
 			}
 			break;
@@ -761,19 +766,16 @@ bool FBarrageConstraintSystem::GetForces(FBarrageConstraintKey Key, FBConstraint
 			{
 				const HingeConstraint* hc = static_cast<const HingeConstraint*>(tbc);
 				Vec3 lambda1 = hc->GetTotalLambdaPosition();
-				// GetTotalLambdaRotation returns Vector<2> for hinge constraints
 				Vector<2> lambda2 = hc->GetTotalLambdaRotation();
 				float lambdaLimits = hc->GetTotalLambdaRotationLimits();
 
 				float dt = Owner ? Owner->DeltaTime : 0.01f;
-				OutForces.LinearForce = CoordinateUtils::FromJoltCoordinatesD(lambda1 / dt);
-				// Convert Vector<2> to torque (hinge only rotates around one axis)
+				OutForces.LinearForce = JoltForceToUE(lambda1 / dt);
 				OutForces.AngularTorque = FVector3d(lambda2[0] / dt, lambda2[1] / dt, lambdaLimits / dt);
 			}
 			break;
 
 		default:
-			// For other types, approximate with zero (user can extend)
 			OutForces.LinearForce = FVector3d::ZeroVector;
 			OutForces.AngularTorque = FVector3d::ZeroVector;
 			break;

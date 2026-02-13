@@ -93,6 +93,12 @@ void UFlecsArtillerySubsystem::OnBarrageContact(const BarrageContactEvent& Event
 	bool bEntity1IsProjectile = bEntity1Valid && Entity1.has<FTagProjectile>();
 	bool bEntity2IsProjectile = bEntity2Valid && Entity2.has<FTagProjectile>();
 
+	// Fragmentable objects (have FDestructibleStatic, different from simple FTagDestructible)
+	const FDestructibleStatic* Destr1 = bEntity1Valid ? Entity1.try_get<FDestructibleStatic>() : nullptr;
+	const FDestructibleStatic* Destr2 = bEntity2Valid ? Entity2.try_get<FDestructibleStatic>() : nullptr;
+	bool bEntity1IsFragmentable = Destr1 != nullptr && Destr1->IsValid();
+	bool bEntity2IsFragmentable = Destr2 != nullptr && Destr2->IsValid();
+
 	// ─────────────────────────────────────────────────────────
 	// DAMAGE CLASSIFICATION
 	// Projectile/DamageSource hits entity with Health
@@ -151,6 +157,38 @@ void UFlecsArtillerySubsystem::OnBarrageContact(const BarrageContactEvent& Event
 	else if ((bBody2IsProjectile || bEntity2HasDamage) && bEntity1IsDestructible)
 	{
 		PairEntity.add<FTagCollisionDestructible>();
+	}
+
+	// ─────────────────────────────────────────────────────────
+	// FRAGMENTATION CLASSIFICATION
+	// Projectile or damage source hits fragmentable object (has FDestructibleStatic)
+	// ─────────────────────────────────────────────────────────
+	if ((bBody1IsProjectile || bEntity1HasDamage) && bEntity2IsFragmentable)
+	{
+		FFragmentationData FragData;
+		FragData.ImpactPoint = Event.PointIfAny;
+		FragData.ImpactDirection = (Event.PointIfAny - (FBarragePrimitive::IsNotNull(Body1) ?
+			FVector(FBarragePrimitive::GetPosition(Body1)) : Event.PointIfAny)).GetSafeNormal();
+		// Estimate impulse from projectile velocity (BarrageContactEvent has no impulse field)
+		if (FBarragePrimitive::IsNotNull(Body1))
+		{
+			FragData.ImpactImpulse = FBarragePrimitive::GetVelocity(Body1).Length();
+		}
+		PairEntity.set<FFragmentationData>(FragData);
+		PairEntity.add<FTagCollisionFragmentation>();
+	}
+	else if ((bBody2IsProjectile || bEntity2HasDamage) && bEntity1IsFragmentable)
+	{
+		FFragmentationData FragData;
+		FragData.ImpactPoint = Event.PointIfAny;
+		FragData.ImpactDirection = (Event.PointIfAny - (FBarragePrimitive::IsNotNull(Body2) ?
+			FVector(FBarragePrimitive::GetPosition(Body2)) : Event.PointIfAny)).GetSafeNormal();
+		if (FBarragePrimitive::IsNotNull(Body2))
+		{
+			FragData.ImpactImpulse = FBarragePrimitive::GetVelocity(Body2).Length();
+		}
+		PairEntity.set<FFragmentationData>(FragData);
+		PairEntity.add<FTagCollisionFragmentation>();
 	}
 
 	// ─────────────────────────────────────────────────────────
@@ -214,10 +252,11 @@ void UFlecsArtillerySubsystem::OnBarrageContact(const BarrageContactEvent& Event
 		TryKillNonBouncingProjectile(FlecsId2, FlecsId1);
 
 	// Log collision pair creation (verbose)
-	UE_LOG(LogTemp, Verbose, TEXT("COLLISION PAIR: E1=%llu E2=%llu Damage=%d Bounce=%d Pickup=%d Destr=%d"),
+	UE_LOG(LogTemp, Verbose, TEXT("COLLISION PAIR: E1=%llu E2=%llu Damage=%d Bounce=%d Pickup=%d Destr=%d Frag=%d"),
 		FlecsId1, FlecsId2,
 		PairEntity.has<FTagCollisionDamage>(),
 		PairEntity.has<FTagCollisionBounce>(),
 		PairEntity.has<FTagCollisionPickup>(),
-		PairEntity.has<FTagCollisionDestructible>());
+		PairEntity.has<FTagCollisionDestructible>(),
+		PairEntity.has<FTagCollisionFragmentation>());
 }

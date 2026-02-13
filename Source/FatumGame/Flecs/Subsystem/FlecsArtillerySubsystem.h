@@ -21,6 +21,7 @@ class UFlecsItemDefinition;
 class UNiagaraSystem;
 struct BarrageContactEvent;
 struct FItemStaticData;
+class FDebrisPool;
 
 /**
  * Pending ISM render instance for a sim-thread-spawned entity.
@@ -50,6 +51,19 @@ struct FPendingProjectileSpawn
 	/** Death Niagara VFX (set on Flecs entity as FNiagaraDeathEffect). */
 	UNiagaraSystem* DeathEffect = nullptr;
 	float DeathEffectScale = 1.0f;
+};
+
+/**
+ * Pending ISM render instance for a fragment from a destroyed object.
+ * Fragment bodies are acquired from FDebrisPool on sim thread.
+ * Game thread creates ISM instances from this queue.
+ */
+struct FPendingFragmentSpawn
+{
+	FSkeletonKey EntityKey;
+	UStaticMesh* Mesh = nullptr;
+	UMaterialInterface* Material = nullptr;
+	FTransform WorldTransform;
 };
 
 /**
@@ -256,6 +270,27 @@ public:
 	 */
 	TQueue<FPendingProjectileSpawn, EQueueMode::Mpsc>& GetPendingProjectileSpawns() { return PendingProjectileSpawns; }
 
+	// ═══════════════════════════════════════════════════════════════
+	// DESTRUCTIBLE SYSTEM API
+	// Fragment spawns from FragmentationSystem, debris pool.
+	// ═══════════════════════════════════════════════════════════════
+
+	/**
+	 * Process pending fragment ISM render instances from destructible fragmentation.
+	 * Must be called on Game thread (UE rendering requires it).
+	 * Called after ProcessPendingProjectileSpawns in Tick().
+	 */
+	void ProcessPendingFragmentSpawns();
+
+	/**
+	 * Get pending fragment spawn queue.
+	 * For internal use by FragmentationSystem.
+	 */
+	TQueue<FPendingFragmentSpawn, EQueueMode::Mpsc>& GetPendingFragmentSpawns() { return PendingFragmentSpawns; }
+
+	/** Get the debris pool for fragment body reuse. */
+	FDebrisPool* GetDebrisPool() const { return DebrisPool; }
+
 	/**
 	 * Get EntityDefinition from an item entity (via its prefab).
 	 * @param ItemEntity Item entity with is_a relationship to prefab.
@@ -354,6 +389,17 @@ private:
 
 	/** Queue of projectile spawns from weapon fire. Sim → Game thread. */
 	TQueue<FPendingProjectileSpawn, EQueueMode::Mpsc> PendingProjectileSpawns;
+
+	// ═══════════════════════════════════════════════════════════════
+	// DESTRUCTIBLE SYSTEM
+	// Fragment spawns + debris body pool.
+	// ═══════════════════════════════════════════════════════════════
+
+	/** Queue of fragment ISM spawns from FragmentationSystem. Sim → Game thread. */
+	TQueue<FPendingFragmentSpawn, EQueueMode::Mpsc> PendingFragmentSpawns;
+
+	/** Reusable Barrage body pool for debris fragments. */
+	FDebrisPool* DebrisPool = nullptr;
 
 	/** Bridge for lock-free game→sim "latest wins" data. */
 	TUniquePtr<FLateSyncBridge> LateSyncBridge;

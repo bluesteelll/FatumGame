@@ -392,6 +392,22 @@ void UBarrageDispatch::SetBodyObjectLayer(FBarrageKey BarrageKey, uint8 NewLayer
 	}
 }
 
+void UBarrageDispatch::SetBodyPositionDirect(FBarrageKey BarrageKey, const FVector& Position, bool bActivate)
+{
+	if (JoltGameSim)
+	{
+		JoltGameSim->SetBodyPositionDirect(BarrageKey, Position, bActivate);
+	}
+}
+
+void UBarrageDispatch::SetBodyRotationDirect(FBarrageKey BarrageKey, const FQuat& Rotation, bool bActivate)
+{
+	if (JoltGameSim)
+	{
+		JoltGameSim->SetBodyRotationDirect(BarrageKey, Rotation, bActivate);
+	}
+}
+
 void UBarrageDispatch::ActivateBodiesInArea(const FVector3d& Center, double HalfExtent)
 {
 	if (JoltGameSim)

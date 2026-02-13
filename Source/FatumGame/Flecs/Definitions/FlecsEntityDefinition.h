@@ -16,6 +16,7 @@ class UFlecsContainerProfile;
 class UFlecsWeaponProfile;
 class UFlecsInteractionProfile;
 class UFlecsNiagaraProfile;
+class UFlecsDestructibleProfile;
 
 /**
  * Unified entity definition - a preset combining multiple profiles.
@@ -104,6 +105,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Instanced, Category = "Profiles")
 	TObjectPtr<UFlecsNiagaraProfile> NiagaraProfile;
 
+	/** Destructible - makes entity fragment into pieces on impact */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Instanced, Category = "Profiles")
+	TObjectPtr<UFlecsDestructibleProfile> DestructibleProfile;
+
 	// ═══════════════════════════════════════════════════════════════
 	// DEFAULT TAGS
 	// ═══════════════════════════════════════════════════════════════
@@ -152,7 +157,8 @@ public:
 			|| ContainerProfile != nullptr
 			|| WeaponProfile != nullptr
 			|| InteractionProfile != nullptr
-			|| NiagaraProfile != nullptr;
+			|| NiagaraProfile != nullptr
+			|| DestructibleProfile != nullptr;
 	}
 
 	/** Check if this will create a world entity (physics or render) */
@@ -175,6 +181,9 @@ public:
 
 	/** Check if this is interactable */
 	bool IsInteractable() const { return InteractionProfile != nullptr; }
+
+	/** Check if this is a fragmentable destructible */
+	bool IsDestructible() const { return DestructibleProfile != nullptr; }
 
 	virtual FPrimaryAssetId GetPrimaryAssetId() const override
 	{

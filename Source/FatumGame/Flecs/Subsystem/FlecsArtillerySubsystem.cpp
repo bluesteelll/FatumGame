@@ -18,6 +18,7 @@
 #include "FlecsGameTags.h"
 #include "FlecsRenderManager.h"
 #include "FlecsNiagaraManager.h"
+#include "FDebrisPool.h"
 #include "HAL/PlatformTime.h"
 
 // ═══════════════════════════════════════════════════════════════
@@ -112,6 +113,10 @@ void UFlecsArtillerySubsystem::OnWorldBeginPlay(UWorld& InWorld)
 	FlecsWorld->set_threads(NumWorkers);
 	UE_LOG(LogTemp, Warning, TEXT("FlecsArtillerySubsystem: %d Flecs worker threads enabled"), NumWorkers);
 
+	// Create debris pool for fragment body reuse
+	DebrisPool = new FDebrisPool();
+	DebrisPool->Initialize(CachedBarrageDispatch);
+
 	SetupFlecsSystems();
 	SubscribeToBarrageEvents();
 
@@ -147,6 +152,8 @@ void UFlecsArtillerySubsystem::Deinitialize()
 	CachedBarrageDispatch = nullptr;
 	SelfPtr = nullptr;
 
+	delete DebrisPool;
+	DebrisPool = nullptr;
 	LateSyncBridge.Reset();
 	FlecsWorld.Reset();
 
@@ -244,4 +251,31 @@ void UFlecsArtillerySubsystem::Tick(float DeltaTime)
 	// Uses inverted flow: game-thread recomputes position from fresh camera + raw offset.
 	// Since UpdateTransforms already ran, new positions won't be overwritten.
 	ProcessPendingProjectileSpawns();
+
+	// Step 4: Add new ISM instances for fragments from destroyed objects.
+	ProcessPendingFragmentSpawns();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// FRAGMENT SPAWN PROCESSING (Game Thread)
+// ═══════════════════════════════════════════════════════════════
+
+void UFlecsArtillerySubsystem::ProcessPendingFragmentSpawns()
+{
+	UFlecsRenderManager* Renderer = GetRenderManager();
+	if (!Renderer)
+	{
+		return;
+	}
+
+	FPendingFragmentSpawn Spawn;
+	while (PendingFragmentSpawns.Dequeue(Spawn))
+	{
+		if (!Spawn.Mesh || !Spawn.EntityKey.IsValid())
+		{
+			continue;
+		}
+
+		Renderer->AddInstance(Spawn.Mesh, Spawn.Material, Spawn.WorldTransform, Spawn.EntityKey);
+	}
 }

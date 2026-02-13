@@ -121,6 +121,12 @@ public:
 	 */
 	void SetBodyObjectLayer(FBarrageKey BarrageKey, uint8 NewLayer);
 
+	/** Synchronously set body position (NOT queued). Use from sim thread. */
+	void SetBodyPositionDirect(FBarrageKey BarrageKey, const FVector& Position, bool bActivate = true);
+
+	/** Synchronously set body rotation (NOT queued). Use from sim thread. */
+	void SetBodyRotationDirect(FBarrageKey BarrageKey, const FQuat& Rotation, bool bActivate = true);
+
 	// Wake up all sleeping bodies in a given area - useful when removing support from stacked objects
 	void ActivateBodiesInArea(const FVector3d& Center, double HalfExtent);
 

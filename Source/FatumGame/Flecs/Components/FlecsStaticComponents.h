@@ -271,3 +271,21 @@ struct FEntityDefinitionRef
 
 	bool IsValid() const { return Definition != nullptr; }
 };
+
+// ═══════════════════════════════════════════════════════════════
+// DESTRUCTIBLE STATIC
+// ═══════════════════════════════════════════════════════════════
+
+class UFlecsDestructibleProfile;
+
+/**
+ * Static destructible data — lives on entity (not prefab, since it holds a UObject*).
+ * Presence of this component identifies an entity as fragmentable.
+ */
+struct FDestructibleStatic
+{
+	/** Reference to the destructible profile (fragment geometry, break force, etc.) */
+	UFlecsDestructibleProfile* Profile = nullptr;
+
+	bool IsValid() const { return Profile != nullptr; }
+};
