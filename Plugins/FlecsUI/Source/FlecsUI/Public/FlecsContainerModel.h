@@ -34,6 +34,10 @@ public:
 	/** Find item snapshot by entity ID. Returns nullptr if not found. */
 	const FContainerItemSnapshot* FindItem(int64 ItemEntityId) const;
 
+	/** Check if a given size can fit at position (bounds + occupancy, no item lookup).
+	 *  Used for cross-container drag highlight where the item is not in this model. */
+	bool CanFitSizeAt(FIntPoint Position, FIntPoint Size) const;
+
 	// ═══ Commands (optimistic + async confirm) ═══
 
 	/** Move an item. Returns handle for tracking. Visual updates INSTANTLY. */

@@ -1,7 +1,7 @@
 // UFlecsInventoryItemWidget: item visual + drag initiation.
 
 #include "FlecsInventoryItemWidget.h"
-#include "FlecsInventoryWidget.h"
+#include "FlecsContainerGridWidget.h"
 #include "FlecsInventoryDragPayload.h"
 #include "Blueprint/WidgetTree.h"
 #include "Components/Border.h"
@@ -88,6 +88,7 @@ void UFlecsInventoryItemWidget::NativeOnDragDetected(const FGeometry& InGeometry
 	DragOp->ItemEntityId = ItemEntityId;
 	DragOp->OriginalPosition = GridPosition;
 	DragOp->GridSize = GridSize;
+	DragOp->SourceContainerEntityId = ParentGrid ? ParentGrid->GetContainerEntityId() : 0;
 	DragOp->DefaultDragVisual = this;
 	DragOp->Pivot = EDragPivot::CenterCenter;
 
@@ -96,7 +97,7 @@ void UFlecsInventoryItemWidget::NativeOnDragDetected(const FGeometry& InGeometry
 
 // ═══════════════════════════════════════════════════════════════
 // DROP FORWARDING — item widgets sit at z=1 above slots,
-// so they must forward drag-drop events to the inventory.
+// so they must forward drag-drop events to the grid.
 // Without this, drops on occupied cells silently fail.
 // ═══════════════════════════════════════════════════════════════
 
@@ -104,14 +105,27 @@ bool UFlecsInventoryItemWidget::NativeOnDrop(const FGeometry& InGeometry, const 
 	UDragDropOperation* InOperation)
 {
 	UFlecsInventoryDragOperation* DragOp = Cast<UFlecsInventoryDragOperation>(InOperation);
-	if (!DragOp || !ParentInventory) return false;
+	if (!DragOp || !ParentGrid) return false;
 
 	// Don't drop on yourself
 	if (DragOp->ItemEntityId == ItemEntityId) return false;
 
-	if (ParentInventory->CanFitAt(DragOp->ItemEntityId, GridPosition))
+	// Cross-container drop?
+	if (DragOp->SourceContainerEntityId != 0 &&
+		DragOp->SourceContainerEntityId != ParentGrid->GetContainerEntityId())
 	{
-		ParentInventory->RequestMoveItem(DragOp->ItemEntityId, GridPosition);
+		if (ParentGrid->OnCrossContainerDrop)
+		{
+			ParentGrid->OnCrossContainerDrop(DragOp->SourceContainerEntityId, DragOp->ItemEntityId, GridPosition);
+			return true;
+		}
+		return false;
+	}
+
+	// Same-container drop
+	if (ParentGrid->CanFitAt(DragOp->ItemEntityId, GridPosition))
+	{
+		ParentGrid->RequestMoveItem(DragOp->ItemEntityId, GridPosition);
 		return true;
 	}
 

@@ -37,6 +37,7 @@
 #include "FlecsUIMessages.h"
 #include "FlecsHUDWidget.h"
 #include "FlecsInventoryWidget.h"
+#include "FlecsLootPanel.h"
 
 AFlecsCharacter::AFlecsCharacter(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
@@ -315,13 +316,37 @@ void AFlecsCharacter::BeginPlay()
 			}
 		}
 	}
+
+	// Create loot panel (hidden by default)
+	if (LootPanelClass)
+	{
+		if (APlayerController* PC = Cast<APlayerController>(Controller))
+		{
+			LootPanel = CreateWidget<UFlecsLootPanel>(PC, LootPanelClass);
+			if (LootPanel)
+			{
+				LootPanel->SetOwningCharacter(this);
+				LootPanel->GameplayMappingContext = GameplayMappingContext;
+				LootPanel->PanelMappingContext = InventoryMappingContext;
+				LootPanel->AddToViewport(10);
+				LootPanel->SetVisibility(ESlateVisibility::Collapsed);
+			}
+		}
+	}
 }
 
 void AFlecsCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	if (LootPanel)
+	{
+		LootPanel->CloseLoot();
+		LootPanel->RemoveFromParent();
+		LootPanel = nullptr;
+	}
+
 	if (InventoryWidget)
 	{
-		InventoryWidget->CloseInventory(); // Calls DeactivateWidget internally
+		InventoryWidget->CloseInventory();
 		InventoryWidget->RemoveFromParent();
 		InventoryWidget = nullptr;
 	}
@@ -792,6 +817,13 @@ void AFlecsCharacter::DestroyLastSpawnedEntity()
 
 void AFlecsCharacter::OnSpawnItem(const FInputActionValue& Value)
 {
+	// E closes loot panel if open
+	if (IsLootOpen())
+	{
+		CloseLootPanel();
+		return;
+	}
+
 	// If we have an interaction target, interact with it
 	if (CurrentInteractionTarget.IsValid())
 	{
@@ -1072,6 +1104,12 @@ void AFlecsCharacter::PerformInteractionTrace()
 		else
 		{
 			CachedInteractionPrompt = FText::GetEmpty();
+
+			// Auto-close loot panel when target lost (walked away)
+			if (IsLootOpen())
+			{
+				CloseLootPanel();
+			}
 		}
 
 		OnInteractionTargetChanged(NewTarget.IsValid(), NewTarget);
@@ -1099,8 +1137,12 @@ void AFlecsCharacter::TryInteract()
 	UFlecsArtillerySubsystem* FlecsSubsystem = GetWorld()->GetSubsystem<UFlecsArtillerySubsystem>();
 	if (!FlecsSubsystem) return;
 
+	// Capture WeakSelf on game thread — TWeakObjectPtr constructor reads GUObjectArray (NOT thread-safe)
+	TWeakObjectPtr<AFlecsCharacter> WeakSelf = this;
+	FText InteractionTitle = CachedInteractionPrompt;
+
 	FSkeletonKey TargetKey = CurrentInteractionTarget;
-	FlecsSubsystem->EnqueueCommand([FlecsSubsystem, TargetKey]()
+	FlecsSubsystem->EnqueueCommand([FlecsSubsystem, TargetKey, WeakSelf, InteractionTitle]()
 	{
 		flecs::entity Target = FlecsSubsystem->GetEntityForBarrageKey(TargetKey);
 		if (!Target.is_valid() || Target.has<FTagDead>() || !Target.has<FTagInteractable>())
@@ -1120,9 +1162,17 @@ void AFlecsCharacter::TryInteract()
 		}
 		else if (Target.has<FTagContainer>())
 		{
-			// Open container (TODO: container UI)
-			UE_LOG(LogTemp, Log, TEXT("Interact: Open container %llu (Key=%llu)"),
-				Target.id(), static_cast<uint64>(TargetKey));
+			// Open container UI — dispatch to game thread
+			const int64 ContainerEntityId = static_cast<int64>(Target.id());
+			UE_LOG(LogTemp, Log, TEXT("Interact: Open container %lld (Key=%llu)"),
+				ContainerEntityId, static_cast<uint64>(TargetKey));
+			AsyncTask(ENamedThreads::GameThread, [WeakSelf, ContainerEntityId, InteractionTitle]()
+			{
+				if (AFlecsCharacter* Self = WeakSelf.Get())
+				{
+					Self->OpenLootPanel(ContainerEntityId, InteractionTitle);
+				}
+			});
 		}
 		else
 		{
@@ -1348,20 +1398,58 @@ bool AFlecsCharacter::IsInventoryOpen() const
 	return InventoryWidget && InventoryWidget->IsInventoryOpen();
 }
 
+bool AFlecsCharacter::IsLootOpen() const
+{
+	return LootPanel && LootPanel->IsLootOpen();
+}
+
 void AFlecsCharacter::ToggleInventory(const FInputActionValue& Value)
 {
+	// I key closes loot panel if open
+	if (IsLootOpen())
+	{
+		CloseLootPanel();
+		return;
+	}
+
 	if (!InventoryWidget || InventoryEntityId == 0) return;
 
 	if (InventoryWidget->IsInventoryOpen())
 	{
-		InventoryWidget->CloseInventory();    // Calls DeactivateWidget → restores input
+		InventoryWidget->CloseInventory();
 		InventoryWidget->SetVisibility(ESlateVisibility::Collapsed);
 	}
 	else
 	{
 		InventoryWidget->SetVisibility(ESlateVisibility::SelfHitTestInvisible);
-		InventoryWidget->OpenInventory(InventoryEntityId);  // Calls ActivateWidget → switches input
+		InventoryWidget->OpenInventory(InventoryEntityId);
 	}
+}
+
+void AFlecsCharacter::OpenLootPanel(int64 ExternalContainerEntityId, const FText& ExternalTitle)
+{
+	if (!LootPanel || InventoryEntityId == 0) return;
+
+	// Close existing loot if open
+	if (IsLootOpen()) CloseLootPanel();
+
+	// Close standalone inventory if open
+	if (IsInventoryOpen())
+	{
+		InventoryWidget->CloseInventory();
+		InventoryWidget->SetVisibility(ESlateVisibility::Collapsed);
+	}
+
+	LootPanel->SetVisibility(ESlateVisibility::SelfHitTestInvisible);
+	LootPanel->OpenLoot(InventoryEntityId, ExternalContainerEntityId, ExternalTitle);
+}
+
+void AFlecsCharacter::CloseLootPanel()
+{
+	if (!LootPanel || !LootPanel->IsLootOpen()) return;
+
+	LootPanel->CloseLoot();
+	LootPanel->SetVisibility(ESlateVisibility::Collapsed);
 }
 
 

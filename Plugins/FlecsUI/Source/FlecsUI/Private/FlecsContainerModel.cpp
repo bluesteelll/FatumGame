@@ -91,6 +91,29 @@ bool UFlecsContainerModel::CanStackAt(int64 ItemEntityId, FIntPoint Position) co
 	return false;
 }
 
+bool UFlecsContainerModel::CanFitSizeAt(FIntPoint Position, FIntPoint Size) const
+{
+	if (Position.X < 0 || Position.Y < 0 ||
+		Position.X + Size.X > GridWidth || Position.Y + Size.Y > GridHeight)
+	{
+		return false;
+	}
+
+	for (int32 dy = 0; dy < Size.Y; ++dy)
+	{
+		for (int32 dx = 0; dx < Size.X; ++dx)
+		{
+			const int32 Idx = (Position.Y + dy) * GridWidth + (Position.X + dx);
+			if (OccupancyMask.IsValidIndex(Idx) && OccupancyMask[Idx] != 0)
+			{
+				return false;
+			}
+		}
+	}
+
+	return true;
+}
+
 const FContainerItemSnapshot* UFlecsContainerModel::FindItem(int64 ItemEntityId) const
 {
 	for (const auto& Item : Items)

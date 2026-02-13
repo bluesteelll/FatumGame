@@ -69,4 +69,13 @@ public:
 		FVector DropLocation,
 		int32 Count = -1);
 
+	/** Transfer an item between two containers. Handles grid occupancy, weight, and stacking. */
+	UFUNCTION(BlueprintCallable, Category = "Flecs|Container", meta = (WorldContext = "WorldContextObject"))
+	static bool TransferItem(
+		UObject* WorldContextObject,
+		int64 SourceContainerId,
+		int64 DestContainerId,
+		int64 ItemEntityId,
+		FIntPoint DestGridPosition);
+
 };

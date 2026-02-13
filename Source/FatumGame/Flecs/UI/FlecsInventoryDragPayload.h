@@ -23,4 +23,8 @@ public:
 	/** Item grid size (from FItemStaticData). */
 	UPROPERTY(BlueprintReadWrite, Category = "Inventory")
 	FIntPoint GridSize = FIntPoint(1, 1);
+
+	/** Source container entity ID (for cross-container drag detection). */
+	UPROPERTY(BlueprintReadWrite, Category = "Inventory")
+	int64 SourceContainerEntityId = 0;
 };

@@ -18,7 +18,7 @@
 
 class UBorder;
 class UTextBlock;
-class UFlecsInventoryWidget;
+class UFlecsContainerGridWidget;
 
 UCLASS()
 class FATUMGAME_API UFlecsInventoryItemWidget : public UFlecsUIWidget
@@ -29,8 +29,8 @@ public:
 	/** Set all item data and update visuals. Call after CreateWidget. */
 	void SetItemData(const FContainerItemSnapshot& Data);
 
-	/** Must be set after creation so drops can be forwarded to the inventory. */
-	void SetParentInventory(UFlecsInventoryWidget* InParent) { ParentInventory = InParent; }
+	/** Must be set after creation so drops can be forwarded to the grid. */
+	void SetParentGrid(UFlecsContainerGridWidget* InParent) { ParentGrid = InParent; }
 
 	// ═══════════════════════════════════════════════════════════════
 	// ITEM DATA (readable from BP)
@@ -107,5 +107,5 @@ protected:
 
 private:
 	UPROPERTY()
-	TObjectPtr<UFlecsInventoryWidget> ParentInventory;
+	TObjectPtr<UFlecsContainerGridWidget> ParentGrid;
 };

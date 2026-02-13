@@ -10,6 +10,7 @@
 class UFlecsEntityDefinition;
 class UFlecsHUDWidget;
 class UFlecsInventoryWidget;
+class UFlecsLootPanel;
 class UInputAction;
 class UInputMappingContext;
 class USpringArmComponent;
@@ -341,6 +342,24 @@ public:
 	/** Is inventory currently open? */
 	UFUNCTION(BlueprintPure, Category = "Inventory UI")
 	bool IsInventoryOpen() const;
+
+	// ═══════════════════════════════════════════════════════════════
+	// LOOT PANEL UI
+	// ═══════════════════════════════════════════════════════════════
+
+	/** Widget class for side-by-side loot panel. */
+	UPROPERTY(EditAnywhere, Category = "Inventory UI")
+	TSubclassOf<UFlecsLootPanel> LootPanelClass;
+
+	/** Active loot panel instance. */
+	UPROPERTY(BlueprintReadOnly, Category = "Inventory UI")
+	TObjectPtr<UFlecsLootPanel> LootPanel;
+
+	UFUNCTION(BlueprintPure, Category = "Inventory UI")
+	bool IsLootOpen() const;
+
+	void OpenLootPanel(int64 ExternalContainerEntityId, const FText& ExternalTitle);
+	void CloseLootPanel();
 
 	// ═══════════════════════════════════════════════════════════════
 	// IDENTITY

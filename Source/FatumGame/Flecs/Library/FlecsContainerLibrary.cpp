@@ -405,3 +405,195 @@ FSkeletonKey UFlecsContainerLibrary::DropItem(
 	return FSkeletonKey();
 }
 
+bool UFlecsContainerLibrary::TransferItem(
+	UObject* WorldContextObject,
+	int64 SourceContainerId,
+	int64 DestContainerId,
+	int64 ItemEntityId,
+	FIntPoint DestGridPosition)
+{
+	if (SourceContainerId == 0 || DestContainerId == 0 || ItemEntityId == 0)
+	{
+		UE_LOG(LogFlecsContainer, Warning, TEXT("TransferItem: Invalid parameters"));
+		return false;
+	}
+
+	UFlecsArtillerySubsystem* Subsystem = FlecsLibrary::GetSubsystem(WorldContextObject);
+	if (!Subsystem) return false;
+
+	Subsystem->EnqueueCommand([Subsystem, SourceContainerId, DestContainerId, ItemEntityId, DestGridPosition]()
+	{
+		flecs::world* FlecsWorld = Subsystem->GetFlecsWorld();
+		if (!FlecsWorld) return;
+
+		// Validate source and dest containers
+		flecs::entity SrcEntity = ResolveContainerEntity(Subsystem, SourceContainerId);
+		flecs::entity DstEntity = ResolveContainerEntity(Subsystem, DestContainerId);
+		if (!SrcEntity.is_valid() || !DstEntity.is_valid())
+		{
+			UE_LOG(LogFlecsContainer, Warning, TEXT("TransferItem: Source or dest container not found"));
+			return;
+		}
+
+		// Validate item
+		flecs::entity ItemEntity = FlecsWorld->entity(static_cast<flecs::entity_t>(ItemEntityId));
+		if (!ItemEntity.is_alive())
+		{
+			UE_LOG(LogFlecsContainer, Warning, TEXT("TransferItem: Item %lld not found"), ItemEntityId);
+			return;
+		}
+
+		FContainedIn* ContainedIn = ItemEntity.try_get_mut<FContainedIn>();
+		if (!ContainedIn || ContainedIn->ContainerEntityId != SourceContainerId)
+		{
+			UE_LOG(LogFlecsContainer, Warning, TEXT("TransferItem: Item %lld not in source container %lld"),
+				ItemEntityId, SourceContainerId);
+			return;
+		}
+
+		const FItemStaticData* ItemStatic = ItemEntity.try_get<FItemStaticData>();
+		const FIntPoint ItemSize = ItemStatic ? ItemStatic->GridSize : FIntPoint(1, 1);
+		const float ItemWeight = ItemStatic ? ItemStatic->Weight : 0.f;
+
+		FItemInstance* ItemInstance = ItemEntity.try_get_mut<FItemInstance>();
+		if (!ItemInstance)
+		{
+			UE_LOG(LogFlecsContainer, Warning, TEXT("TransferItem: Item %lld has no FItemInstance"), ItemEntityId);
+			return;
+		}
+
+		const FContainerStatic* SrcStatic = SrcEntity.try_get<FContainerStatic>();
+		FContainerInstance* SrcInstance = SrcEntity.try_get_mut<FContainerInstance>();
+		const FContainerStatic* DstStatic = DstEntity.try_get<FContainerStatic>();
+		FContainerInstance* DstInstance = DstEntity.try_get_mut<FContainerInstance>();
+
+		if (!SrcStatic || !SrcInstance || !DstStatic || !DstInstance)
+		{
+			UE_LOG(LogFlecsContainer, Warning, TEXT("TransferItem: Missing container components"));
+			return;
+		}
+
+		// Weight check on dest
+		const float TotalItemWeight = ItemWeight * ItemInstance->Count;
+		if (DstStatic->MaxWeight >= 0.f && DstInstance->CurrentWeight + TotalItemWeight > DstStatic->MaxWeight)
+		{
+			UE_LOG(LogFlecsContainer, Warning, TEXT("TransferItem: Dest container %lld weight limit exceeded"), DestContainerId);
+			NotifyContainerUI(SourceContainerId);
+			NotifyContainerUI(DestContainerId);
+			return;
+		}
+
+		// Try auto-stack in dest
+		if (ItemStatic && ItemStatic->IsStackable() && DstStatic->bAutoStack)
+		{
+			bool bFullyStacked = false;
+			FlecsWorld->each([DestContainerId, ItemStatic, ItemInstance, &bFullyStacked](
+				flecs::entity E, const FContainedIn& Contained, FItemInstance& DestItemInst)
+			{
+				if (bFullyStacked || ItemInstance->Count <= 0) return;
+				if (Contained.ContainerEntityId != DestContainerId) return;
+
+				const FItemStaticData* DestStatic = E.try_get<FItemStaticData>();
+				if (!DestStatic || DestStatic->ItemName != ItemStatic->ItemName) return;
+				if (DestItemInst.Count >= DestStatic->MaxStack) return;
+
+				const int32 Space = DestStatic->MaxStack - DestItemInst.Count;
+				const int32 ToTransfer = FMath::Min(ItemInstance->Count, Space);
+				DestItemInst.Count += ToTransfer;
+				ItemInstance->Count -= ToTransfer;
+
+				if (ItemInstance->Count <= 0)
+				{
+					bFullyStacked = true;
+				}
+			});
+
+			if (bFullyStacked)
+			{
+				// Item fully absorbed — remove from source
+				if (SrcStatic->Type == EContainerType::Grid && ContainedIn->IsInGrid())
+				{
+					if (FContainerGridInstance* SrcGrid = SrcEntity.try_get_mut<FContainerGridInstance>())
+					{
+						SrcGrid->Free(ContainedIn->GridPosition, ItemSize, SrcStatic->GridWidth);
+					}
+				}
+				SrcInstance->CurrentCount = FMath::Max(0, SrcInstance->CurrentCount - 1);
+				SrcInstance->CurrentWeight -= TotalItemWeight;
+
+				ItemEntity.destruct();
+
+				UE_LOG(LogFlecsContainer, Log, TEXT("TransferItem: Item %lld fully stacked into dest %lld"),
+					ItemEntityId, DestContainerId);
+				NotifyContainerUI(SourceContainerId);
+				NotifyContainerUI(DestContainerId);
+				return;
+			}
+		}
+
+		// Grid transfer — need occupancy management
+		if (DstStatic->Type == EContainerType::Grid)
+		{
+			FContainerGridInstance* DstGrid = DstEntity.try_get_mut<FContainerGridInstance>();
+			if (!DstGrid)
+			{
+				UE_LOG(LogFlecsContainer, Warning, TEXT("TransferItem: Dest grid container %lld has no FContainerGridInstance"), DestContainerId);
+				NotifyContainerUI(SourceContainerId);
+				NotifyContainerUI(DestContainerId);
+				return;
+			}
+
+			if (!DstGrid->CanFit(DestGridPosition, ItemSize, DstStatic->GridWidth, DstStatic->GridHeight))
+			{
+				UE_LOG(LogFlecsContainer, Warning, TEXT("TransferItem: Cannot fit at (%d,%d) in dest %lld"),
+					DestGridPosition.X, DestGridPosition.Y, DestContainerId);
+				NotifyContainerUI(SourceContainerId);
+				NotifyContainerUI(DestContainerId);
+				return;
+			}
+
+			// Free from source grid
+			if (SrcStatic->Type == EContainerType::Grid && ContainedIn->IsInGrid())
+			{
+				if (FContainerGridInstance* SrcGrid = SrcEntity.try_get_mut<FContainerGridInstance>())
+				{
+					SrcGrid->Free(ContainedIn->GridPosition, ItemSize, SrcStatic->GridWidth);
+				}
+			}
+
+			// Occupy in dest grid
+			DstGrid->Occupy(DestGridPosition, ItemSize, DstStatic->GridWidth);
+		}
+		else
+		{
+			// Free from source grid if applicable
+			if (SrcStatic->Type == EContainerType::Grid && ContainedIn->IsInGrid())
+			{
+				if (FContainerGridInstance* SrcGrid = SrcEntity.try_get_mut<FContainerGridInstance>())
+				{
+					SrcGrid->Free(ContainedIn->GridPosition, ItemSize, SrcStatic->GridWidth);
+				}
+			}
+		}
+
+		// Update counts and weights
+		SrcInstance->CurrentCount = FMath::Max(0, SrcInstance->CurrentCount - 1);
+		SrcInstance->CurrentWeight = FMath::Max(0.f, SrcInstance->CurrentWeight - TotalItemWeight);
+		DstInstance->CurrentCount++;
+		DstInstance->CurrentWeight += TotalItemWeight;
+
+		// Reparent: update FContainedIn
+		ContainedIn->ContainerEntityId = DestContainerId;
+		ContainedIn->GridPosition = (DstStatic->Type == EContainerType::Grid) ? DestGridPosition : FIntPoint(-1, -1);
+		ContainedIn->SlotIndex = (DstStatic->Type == EContainerType::List) ? DstInstance->CurrentCount - 1 : -1;
+
+		UE_LOG(LogFlecsContainer, Log, TEXT("TransferItem: Moved item %lld from container %lld to %lld at (%d,%d)"),
+			ItemEntityId, SourceContainerId, DestContainerId, DestGridPosition.X, DestGridPosition.Y);
+
+		NotifyContainerUI(SourceContainerId);
+		NotifyContainerUI(DestContainerId);
+	});
+
+	return true;
+}
+

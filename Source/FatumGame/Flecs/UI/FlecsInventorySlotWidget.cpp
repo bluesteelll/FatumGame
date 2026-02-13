@@ -1,7 +1,7 @@
 // UFlecsInventorySlotWidget: grid cell with drag-drop + highlight.
 
 #include "FlecsInventorySlotWidget.h"
-#include "FlecsInventoryWidget.h"
+#include "FlecsContainerGridWidget.h"
 #include "FlecsInventoryDragPayload.h"
 #include "Blueprint/WidgetTree.h"
 #include "Components/Border.h"
@@ -13,11 +13,11 @@ void UFlecsInventorySlotWidget::BuildDefaultWidgetTree()
 	WidgetTree->RootWidget = SlotBorder;
 }
 
-void UFlecsInventorySlotWidget::InitSlot(int32 InGridX, int32 InGridY, UFlecsInventoryWidget* InInventoryWidget)
+void UFlecsInventorySlotWidget::InitSlot(int32 InGridX, int32 InGridY, UFlecsContainerGridWidget* InParentGrid)
 {
 	GridX = InGridX;
 	GridY = InGridY;
-	ParentInventory = InInventoryWidget;
+	ParentGrid = InParentGrid;
 }
 
 bool UFlecsInventorySlotWidget::NativeOnDrop(const FGeometry& InGeometry, const FDragDropEvent& InDragDropEvent,
@@ -26,12 +26,26 @@ bool UFlecsInventorySlotWidget::NativeOnDrop(const FGeometry& InGeometry, const 
 	OnDragHighlightClear();
 
 	UFlecsInventoryDragOperation* DragOp = Cast<UFlecsInventoryDragOperation>(InOperation);
-	if (!DragOp || !ParentInventory) return false;
+	if (!DragOp || !ParentGrid) return false;
 
-	FIntPoint DropPosition(GridX, GridY);
-	if (ParentInventory->CanFitAt(DragOp->ItemEntityId, DropPosition))
+	const FIntPoint DropPosition(GridX, GridY);
+
+	// Cross-container drop?
+	if (DragOp->SourceContainerEntityId != 0 &&
+		DragOp->SourceContainerEntityId != ParentGrid->GetContainerEntityId())
 	{
-		ParentInventory->RequestMoveItem(DragOp->ItemEntityId, DropPosition);
+		if (ParentGrid->OnCrossContainerDrop)
+		{
+			ParentGrid->OnCrossContainerDrop(DragOp->SourceContainerEntityId, DragOp->ItemEntityId, DropPosition);
+			return true;
+		}
+		return false;
+	}
+
+	// Same-container drop
+	if (ParentGrid->CanFitAt(DragOp->ItemEntityId, DropPosition))
+	{
+		ParentGrid->RequestMoveItem(DragOp->ItemEntityId, DropPosition);
 		return true;
 	}
 
@@ -42,9 +56,15 @@ void UFlecsInventorySlotWidget::NativeOnDragEnter(const FGeometry& InGeometry, c
 	UDragDropOperation* InOperation)
 {
 	UFlecsInventoryDragOperation* DragOp = Cast<UFlecsInventoryDragOperation>(InOperation);
-	if (!DragOp || !ParentInventory) return;
+	if (!DragOp || !ParentGrid) return;
 
-	bool bCanPlace = ParentInventory->CanFitAt(DragOp->ItemEntityId, FIntPoint(GridX, GridY));
+	const bool bCross = DragOp->SourceContainerEntityId != 0 &&
+		DragOp->SourceContainerEntityId != ParentGrid->GetContainerEntityId();
+
+	const bool bCanPlace = bCross
+		? ParentGrid->CanFitSizeAt(FIntPoint(GridX, GridY), DragOp->GridSize)
+		: ParentGrid->CanFitAt(DragOp->ItemEntityId, FIntPoint(GridX, GridY));
+
 	OnDragHighlight(bCanPlace);
 }
 

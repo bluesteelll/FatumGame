@@ -13,7 +13,7 @@
 #include "FlecsInventorySlotWidget.generated.h"
 
 class UBorder;
-class UFlecsInventoryWidget;
+class UFlecsContainerGridWidget;
 
 UCLASS()
 class FATUMGAME_API UFlecsInventorySlotWidget : public UFlecsUIWidget
@@ -21,7 +21,7 @@ class FATUMGAME_API UFlecsInventorySlotWidget : public UFlecsUIWidget
 	GENERATED_BODY()
 
 public:
-	void InitSlot(int32 InGridX, int32 InGridY, UFlecsInventoryWidget* InInventoryWidget);
+	void InitSlot(int32 InGridX, int32 InGridY, UFlecsContainerGridWidget* InParentGrid);
 
 	UPROPERTY(BlueprintReadOnly, Category = "Inventory|Slot")
 	int32 GridX = 0;
@@ -69,5 +69,5 @@ protected:
 
 private:
 	UPROPERTY()
-	TObjectPtr<UFlecsInventoryWidget> ParentInventory;
+	TObjectPtr<UFlecsContainerGridWidget> ParentGrid;
 };
