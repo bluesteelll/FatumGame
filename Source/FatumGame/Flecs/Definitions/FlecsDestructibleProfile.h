@@ -56,6 +56,25 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics", meta = (ClampMin = "0.0"))
 	float ImpulseMultiplier = 1.0f;
 
+	/** Anchor bottom fragments to the world via breakable constraints.
+	 *  All bottom-layer fragments (lowest Z) get a Fixed constraint to Body::sFixedToWorld.
+	 *  They remain Dynamic but held in place until the constraint breaks.
+	 *  Use for objects attached to surfaces: statues, wall-mounted fixtures, etc. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics")
+	bool bAnchorToWorld = false;
+
+	/** Force threshold to detach a fragment from the world (Newtons).
+	 *  Separate from ConstraintBreakForce so you can tune "rip off wall" vs "break apart".
+	 *  Only used when bAnchorToWorld is true. 0 = unbreakable anchor. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics",
+		meta = (EditCondition = "bAnchorToWorld", ClampMin = "0.0"))
+	float AnchorBreakForce = 10000.0f;
+
+	/** Torque threshold to detach from world. 0 = don't check torque. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics",
+		meta = (EditCondition = "bAnchorToWorld", ClampMin = "0.0"))
+	float AnchorBreakTorque = 0.0f;
+
 	// ═══════════════════════════════════════════════════════════════
 	// CLEANUP
 	// ═══════════════════════════════════════════════════════════════

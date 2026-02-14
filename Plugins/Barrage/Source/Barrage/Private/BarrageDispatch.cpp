@@ -408,6 +408,14 @@ void UBarrageDispatch::SetBodyRotationDirect(FBarrageKey BarrageKey, const FQuat
 	}
 }
 
+void UBarrageDispatch::SetBodyMotionType(FBarrageKey BarrageKey, JPH::EMotionType MotionType, bool bActivate)
+{
+	if (JoltGameSim)
+	{
+		JoltGameSim->SetBodyMotionType(BarrageKey, MotionType, bActivate);
+	}
+}
+
 void UBarrageDispatch::ActivateBodiesInArea(const FVector3d& Center, double HalfExtent)
 {
 	if (JoltGameSim)

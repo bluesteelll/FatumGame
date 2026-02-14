@@ -765,6 +765,35 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 			FragmentKeys.SetNumZeroed(FragCount);
 			FragmentEntities.SetNum(FragCount);
 
+			// World anchor mode: find ALL bottom-layer fragments (lowest Z within tolerance).
+			// Each gets a breakable Fixed constraint to Body::sFixedToWorld.
+			const bool bAnchorToWorld = Profile->bAnchorToWorld;
+			TArray<int32> AnchorIndices;
+			if (bAnchorToWorld)
+			{
+				// Find minimum Z across all fragments
+				float LowestZ = TNumericLimits<float>::Max();
+				for (int32 i = 0; i < FragCount; ++i)
+				{
+					const FDestructibleFragment& Frag = Geometry->Fragments[i];
+					if (!Frag.Mesh) continue;
+					const float FragZ = (Frag.RelativeTransform * ObjectTransform).GetLocation().Z;
+					if (FragZ < LowestZ) LowestZ = FragZ;
+				}
+				// All fragments within 1cm of lowest Z are "bottom layer"
+				constexpr float AnchorZTolerance = 1.0f;
+				for (int32 i = 0; i < FragCount; ++i)
+				{
+					const FDestructibleFragment& Frag = Geometry->Fragments[i];
+					if (!Frag.Mesh) continue;
+					const float FragZ = (Frag.RelativeTransform * ObjectTransform).GetLocation().Z;
+					if (FragZ <= LowestZ + AnchorZTolerance)
+					{
+						AnchorIndices.Add(i);
+					}
+				}
+			}
+
 			for (int32 FragIdx = 0; FragIdx < FragCount; ++FragIdx)
 			{
 				const FDestructibleFragment& Fragment = Geometry->Fragments[FragIdx];
@@ -783,8 +812,14 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 					continue;
 				}
 
-				// Get the FBLet for reverse binding
+				// Get the FBLet for reverse binding — must succeed for a just-acquired pool body
 				FBLet FragPrim = CachedBarrageDispatch->GetShapeRef(FragKey);
+				if (!FBarragePrimitive::IsNotNull(FragPrim))
+				{
+					UE_LOG(LogTemp, Error, TEXT("FRAGMENTATION: GetShapeRef null for just-acquired key — skipping fragment %d"), FragIdx);
+					Pool->Release(FragKey);
+					continue;
+				}
 
 				// Create Flecs entity for this fragment
 				flecs::entity FragEntity = World.entity();
@@ -794,10 +829,7 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 				FragEntity.set<FBarrageBody>(BarrageComp);
 
 				// Reverse binding
-				if (FBarragePrimitive::IsNotNull(FragPrim))
-				{
-					FragPrim->SetFlecsEntity(FragEntity.id());
-				}
+				FragPrim->SetFlecsEntity(FragEntity.id());
 
 				// Debris instance data
 				FDebrisInstance DebrisInst;
@@ -994,39 +1026,76 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 			}
 
 			// ─────────────────────────────────────────────────────
-			// Apply impulse to nearest fragment(s)
+			// World anchor constraints — pin bottom fragments to world
+			// ─────────────────────────────────────────────────────
+			if (bAnchorToWorld && AnchorIndices.Num() > 0 && ConstraintSys)
+			{
+				int32 WorldConstraintsCreated = 0;
+				const FBarrageKey InvalidWorldBody; // KeyIntoBarrage == 0 → Body::sFixedToWorld
+
+				for (int32 AnchorFragIdx : AnchorIndices)
+				{
+					FSkeletonKey FragKey = FragmentKeys[AnchorFragIdx];
+					if (!FragKey.IsValid()) continue;
+
+					FBLet FragPrim = CachedBarrageDispatch->GetShapeRef(FragKey);
+					if (!FBarragePrimitive::IsNotNull(FragPrim)) continue;
+
+					FBarrageConstraintKey CKey = CachedBarrageDispatch->CreateFixedConstraint(
+						FragPrim->KeyIntoBarrage, InvalidWorldBody,
+						Profile->AnchorBreakForce, Profile->AnchorBreakTorque);
+
+					if (CKey.IsValid())
+					{
+						++WorldConstraintsCreated;
+
+						// Register on the fragment entity so ConstraintBreakSystem can track it
+						flecs::entity FragEntity = FragmentEntities[AnchorFragIdx];
+						if (FragEntity.is_valid())
+						{
+							FFlecsConstraintData& Data = FragEntity.obtain<FFlecsConstraintData>();
+							Data.AddConstraint(CKey.Key, FSkeletonKey(), Profile->AnchorBreakForce, Profile->AnchorBreakTorque);
+							FragEntity.add<FTagConstrained>();
+						}
+					}
+				}
+
+				UE_LOG(LogTemp, Log, TEXT("FRAGMENTATION: Created %d world anchor constraints for %d bottom fragments (BreakForce=%.0f)"),
+					WorldConstraintsCreated, AnchorIndices.Num(), Profile->AnchorBreakForce);
+			}
+
+			// ─────────────────────────────────────────────────────
+			// Apply impulse to nearest fragment
 			// ─────────────────────────────────────────────────────
 			if (FragData.ImpactImpulse > 0.f)
 			{
-				// Find the closest VALID fragment to impact point
+				const FVector ImpulseDir = FragData.ImpactDirection.IsNearlyZero()
+					? FVector::UpVector
+					: FragData.ImpactDirection;
+				const float BaseImpulse = FragData.ImpactImpulse * Profile->ImpulseMultiplier;
+
 				float BestDistSq = TNumericLimits<float>::Max();
 				int32 BestIdx = INDEX_NONE;
 				for (int32 i = 0; i < FragCount; ++i)
 				{
 					if (!FragmentKeys[i].IsValid()) continue;
 
-					const FDestructibleFragment& Frag = Geometry->Fragments[i];
-					FVector FragPos = (Frag.RelativeTransform * ObjectTransform).GetLocation();
-					float DistSq = FVector::DistSquared(FragPos, FragData.ImpactPoint);
+					const float DistSq = FVector::DistSquared(
+						(Geometry->Fragments[i].RelativeTransform * ObjectTransform).GetLocation(),
+						FragData.ImpactPoint);
 					if (DistSq < BestDistSq)
 					{
 						BestDistSq = DistSq;
 						BestIdx = i;
 					}
 				}
-
 				if (BestIdx != INDEX_NONE)
 				{
-					// Apply impulse as velocity to the nearest fragment
-					FVector ImpulseDir = FragData.ImpactDirection.IsNearlyZero()
-						? FVector::UpVector
-						: FragData.ImpactDirection;
-					FVector ImpulseVelocity = ImpulseDir * FragData.ImpactImpulse * Profile->ImpulseMultiplier;
-
 					FBLet NearestPrim = CachedBarrageDispatch->GetShapeRef(FragmentKeys[BestIdx]);
 					if (FBarragePrimitive::IsNotNull(NearestPrim))
 					{
-						FBarragePrimitive::SetVelocity(FVector3d(ImpulseVelocity), NearestPrim);
+						FBarragePrimitive::SetVelocity(
+							FVector3d(ImpulseDir * BaseImpulse), NearestPrim);
 					}
 				}
 			}

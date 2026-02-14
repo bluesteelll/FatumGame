@@ -127,6 +127,9 @@ public:
 	/** Synchronously set body rotation (NOT queued). Use from sim thread. */
 	void SetBodyRotationDirect(FBarrageKey BarrageKey, const FQuat& Rotation, bool bActivate = true);
 
+	/** Synchronously change body motion type (Static/Dynamic/Kinematic). Use from sim thread. */
+	void SetBodyMotionType(FBarrageKey BarrageKey, JPH::EMotionType MotionType, bool bActivate = true);
+
 	// Wake up all sleeping bodies in a given area - useful when removing support from stacked objects
 	void ActivateBodiesInArea(const FVector3d& Center, double HalfExtent);
 

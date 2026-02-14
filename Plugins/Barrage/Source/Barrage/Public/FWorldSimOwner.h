@@ -465,6 +465,21 @@ public:
 			bActivate ? JPH::EActivation::Activate : JPH::EActivation::DontActivate);
 	}
 
+	/**
+	 * Synchronously change a body's motion type (Static/Dynamic/Kinematic).
+	 * Use from sim thread. Thread-safe: body_interface uses locking variant.
+	 */
+	void SetBodyMotionType(FBarrageKey BarrageKey, JPH::EMotionType MotionType, bool bActivate = true)
+	{
+		if (!body_interface) return;
+
+		JPH::BodyID BodyID;
+		if (!BarrageToJoltMapping->find(BarrageKey, BodyID) || BodyID.IsInvalid()) return;
+
+		body_interface->SetMotionType(BodyID, MotionType,
+			bActivate ? JPH::EActivation::Activate : JPH::EActivation::DontActivate);
+	}
+
 	// Wake up all sleeping bodies in a given area - useful when removing support from stacked objects
 	void ActivateBodiesInArea(const FVector3d& Center, double HalfExtent)
 	{
