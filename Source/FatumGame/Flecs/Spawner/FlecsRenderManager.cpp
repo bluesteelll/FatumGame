@@ -36,7 +36,11 @@ UInstancedStaticMeshComponent* UFlecsRenderManager::GetOrCreateISM(UStaticMesh* 
 		return nullptr;
 	}
 
-	FMeshGroup* Group = MeshGroups.Find(InMesh);
+	FMeshMaterialKey GroupKey;
+	GroupKey.Mesh = InMesh;
+	GroupKey.Material = InMaterial;
+
+	FMeshGroup* Group = MeshGroups.Find(GroupKey);
 	if (Group && Group->ISM)
 	{
 		return Group->ISM;
@@ -64,10 +68,27 @@ UInstancedStaticMeshComponent* UFlecsRenderManager::GetOrCreateISM(UStaticMesh* 
 	if (InMaterial)
 	{
 		ISM->SetMaterial(0, InMaterial);
+		UE_LOG(LogTemp, Log, TEXT("ISM: Created group Mesh='%s' Mat='%s'"),
+			*InMesh->GetName(), *InMaterial->GetName());
+	}
+	else
+	{
+		// ISM does NOT inherit materials from SetStaticMesh — apply mesh defaults explicitly
+		const int32 NumMats = InMesh->GetStaticMaterials().Num();
+		for (int32 i = 0; i < NumMats; ++i)
+		{
+			UMaterialInterface* MeshMat = InMesh->GetMaterial(i);
+			if (MeshMat)
+			{
+				ISM->SetMaterial(i, MeshMat);
+			}
+		}
+		UE_LOG(LogTemp, Log, TEXT("ISM: Created group Mesh='%s' Mat=MeshDefaults(%d slots)"),
+			*InMesh->GetName(), NumMats);
 	}
 
 	// Store
-	FMeshGroup& NewGroup = MeshGroups.Add(InMesh);
+	FMeshGroup& NewGroup = MeshGroups.Add(GroupKey);
 	NewGroup.ISM = ISM;
 
 	// Calculate pivot offset
@@ -85,7 +106,11 @@ int32 UFlecsRenderManager::AddInstance(UStaticMesh* InMesh, UMaterialInterface* 
 		return INDEX_NONE;
 	}
 
-	FMeshGroup& Group = MeshGroups.FindChecked(InMesh);
+	FMeshMaterialKey GroupKey;
+	GroupKey.Mesh = InMesh;
+	GroupKey.Material = InMaterial;
+
+	FMeshGroup& Group = MeshGroups.FindChecked(GroupKey);
 
 	// Prevent duplicate keys
 	if (Group.KeyToIndex.Contains(Key))
@@ -177,10 +202,6 @@ void UFlecsRenderManager::UpdateTransforms(float Alpha, uint64 CurrentSimTick)
 		return;
 	}
 
-	// Periodic log counter (~1/sec at 60fps)
-	static uint32 InterpLogCounter = 0;
-	const bool bLogThisFrame = (++InterpLogCounter % 60 == 0);
-
 	for (auto& Pair : MeshGroups)
 	{
 		FMeshGroup& Group = Pair.Value;
@@ -220,7 +241,6 @@ void UFlecsRenderManager::UpdateTransforms(float Alpha, uint64 CurrentSimTick)
 			FEntityTransformState* State = Group.TransformStates.Find(Key);
 			if (!State)
 			{
-				// Entity added without TransformState (shouldn't happen, but be safe)
 				KeysToRemove.Add(Key);
 				continue;
 			}
@@ -245,35 +265,11 @@ void UFlecsRenderManager::UpdateTransforms(float Alpha, uint64 CurrentSimTick)
 				RenderPos = State->CurrPosition;
 				RenderRot = State->CurrRotation;
 				State->bJustSpawned = false;
-
-				UE_LOG(LogTemp, Log, TEXT("INTERP [Snap] Key=%llu Pos=(%.1f,%.1f,%.1f)"),
-					static_cast<uint64>(Key), RenderPos.X, RenderPos.Y, RenderPos.Z);
 			}
 			else
 			{
 				RenderPos = FMath::Lerp(State->PrevPosition, State->CurrPosition, Alpha);
 				RenderRot = FQuat::Slerp(State->PrevRotation, State->CurrRotation, Alpha);
-
-				// Log first entity per group, ~1/sec: shows interpolation + velocity in action
-				if (bLogThisFrame && KeyIndex.Key == Group.KeyToIndex.begin()->Key)
-				{
-					float PrevCurrDist = FVector::Dist(State->PrevPosition, State->CurrPosition);
-
-					// Also log physics velocity direction to diagnose flight path issues
-					FVector3f Vel3f = FBarragePrimitive::GetVelocity(Body);
-					FVector Vel(Vel3f);
-					FVector VelDir = Vel.GetSafeNormal();
-					float Speed = Vel.Size();
-
-					UE_LOG(LogTemp, Log, TEXT("INTERP [Lerp] Key=%llu Alpha=%.3f Tick=%llu Prev=(%.1f,%.1f,%.1f) Curr=(%.1f,%.1f,%.1f) Render=(%.1f,%.1f,%.1f) PrevCurrDist=%.2f Vel=(%.3f,%.3f,%.3f) Speed=%.0f Entities=%d"),
-						static_cast<uint64>(Key), Alpha, CurrentSimTick,
-						State->PrevPosition.X, State->PrevPosition.Y, State->PrevPosition.Z,
-						State->CurrPosition.X, State->CurrPosition.Y, State->CurrPosition.Z,
-						RenderPos.X, RenderPos.Y, RenderPos.Z,
-						PrevCurrDist,
-						VelDir.X, VelDir.Y, VelDir.Z, Speed,
-						Group.KeyToIndex.Num());
-				}
 			}
 
 			// Apply pivot offset AFTER interpolation

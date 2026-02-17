@@ -61,6 +61,16 @@ public:
 		int64 ContainerEntityId,
 		int32& OutPickedUp);
 
+	/** Pick up a world item into a container. SIM THREAD ONLY.
+	 *  Reads EntityDefinition and Count from the world item entity.
+	 *  Adds FTagDead if fully consumed, decrements Count if partial.
+	 *  @return true if any items were picked up */
+	static bool PickupWorldItem(
+		class UFlecsArtillerySubsystem* Subsystem,
+		int64 WorldItemEntityId,
+		int64 ContainerEntityId,
+		int32& OutPickedUp);
+
 	UFUNCTION(BlueprintCallable, Category = "Flecs|Container", meta = (WorldContext = "WorldContextObject"))
 	static FSkeletonKey DropItem(
 		UObject* WorldContextObject,

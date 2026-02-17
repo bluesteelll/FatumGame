@@ -11,6 +11,12 @@ Use `check()`, `ensure()`, `checkf()`. Don't silently swallow errors.
 ### 3. AVOID BOILERPLATE
 Extract to functions/templates. Use auto, range-based for, structured bindings.
 
+### 4. ARCHITECTURE APPROVAL REQUIRED
+**NEVER start implementing non-trivial changes without user approval.** Before writing code, present the architecture/plan and get explicit confirmation. Use plan mode for any feature that touches multiple files or involves design decisions.
+
+### 5. ASK CLARIFYING QUESTIONS
+**ALWAYS ask clarifying questions** when a request is ambiguous, has multiple valid approaches, or lacks important details. Don't assume — ask. It's better to ask 3 questions upfront than to rewrite code because of a wrong assumption.
+
 ---
 
 ## Quick Reference

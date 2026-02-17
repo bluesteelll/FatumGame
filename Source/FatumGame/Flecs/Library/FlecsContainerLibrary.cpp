@@ -62,6 +62,155 @@ void UFlecsContainerLibrary::SetItemDespawnTimer(UObject* WorldContextObject, FS
 // CONTAINER OPERATIONS
 // ═══════════════════════════════════════════════════════════════
 
+/** Core container-add logic. MUST be called on simulation thread only.
+ *  Returns number of items actually added (0 = container full). */
+static int32 AddItemToContainerDirect(
+	UFlecsArtillerySubsystem* Subsystem,
+	int64 ContainerEntityId,
+	UFlecsEntityDefinition* EntityDefinition,
+	int32 Count,
+	bool bAutoStack)
+{
+	flecs::world* FlecsWorld = Subsystem->GetFlecsWorld();
+	if (!FlecsWorld) return 0;
+
+	flecs::entity ContainerEntity = ResolveContainerEntity(Subsystem, ContainerEntityId);
+	if (!ContainerEntity.is_valid())
+	{
+		UE_LOG(LogFlecsContainer, Warning, TEXT("AddItemToContainerDirect: Container %lld not found or not a container"), ContainerEntityId);
+		return 0;
+	}
+
+	flecs::entity ItemPrefab = Subsystem->GetOrCreateItemPrefab(EntityDefinition);
+	if (!ItemPrefab.is_valid())
+	{
+		const FName ItemName = EntityDefinition->ItemDefinition ? EntityDefinition->ItemDefinition->ItemName : NAME_None;
+		UE_LOG(LogFlecsContainer, Warning, TEXT("AddItemToContainerDirect: Failed to create prefab for '%s'"),
+			*ItemName.ToString());
+		return 0;
+	}
+
+	const FContainerStatic* ContainerStatic = ContainerEntity.try_get<FContainerStatic>();
+	if (!ContainerStatic)
+	{
+		UE_LOG(LogFlecsContainer, Warning, TEXT("AddItemToContainerDirect: Container %lld has no FContainerStatic"), ContainerEntityId);
+		return 0;
+	}
+
+	FContainerInstance* ContainerInstance = ContainerEntity.try_get_mut<FContainerInstance>();
+	if (!ContainerInstance)
+	{
+		UE_LOG(LogFlecsContainer, Warning, TEXT("AddItemToContainerDirect: Container %lld has no FContainerInstance"), ContainerEntityId);
+		return 0;
+	}
+
+	const FItemStaticData* StaticData = ItemPrefab.try_get<FItemStaticData>();
+	const FName ItemName = EntityDefinition->ItemDefinition ? EntityDefinition->ItemDefinition->ItemName : NAME_None;
+	int32 Remaining = Count;
+
+	// Auto-stack into existing items of the same type (controlled by bAutoStack parameter)
+	if (bAutoStack && StaticData && StaticData->IsStackable())
+	{
+		FlecsWorld->each([ContainerEntityId, &ItemName, &Remaining, StaticData](
+			flecs::entity E, const FContainedIn& Contained, FItemInstance& Inst)
+		{
+			if (Remaining <= 0) return;
+			if (Contained.ContainerEntityId != ContainerEntityId) return;
+
+			const FItemStaticData* ExistingStatic = E.try_get<FItemStaticData>();
+			if (!ExistingStatic || ExistingStatic->ItemName != ItemName) return;
+			if (Inst.Count >= ExistingStatic->MaxStack) return;
+
+			const int32 Space = ExistingStatic->MaxStack - Inst.Count;
+			const int32 ToTransfer = FMath::Min(Remaining, Space);
+			Inst.Count += ToTransfer;
+			Remaining -= ToTransfer;
+		});
+
+		if (Remaining <= 0)
+		{
+			UE_LOG(LogFlecsContainer, Log, TEXT("AddItemToContainerDirect: Stacked all %d '%s' into existing items in container %lld"),
+				Count, *ItemName.ToString(), ContainerEntityId);
+			NotifyContainerUI(ContainerEntityId);
+			return Count;
+		}
+	}
+
+	auto CreateItemEntity = [&](FIntPoint GridPos, int32 SlotIdx, int32 ItemCount) -> flecs::entity
+	{
+		FItemInstance Instance;
+		Instance.Count = ItemCount;
+
+		FContainedIn Contained;
+		Contained.ContainerEntityId = ContainerEntityId;
+		Contained.GridPosition = GridPos;
+		Contained.SlotIndex = SlotIdx;
+
+		return FlecsWorld->entity()
+			.is_a(ItemPrefab)
+			.set<FItemInstance>(Instance)
+			.set<FContainedIn>(Contained)
+			.add<FTagItem>();
+	};
+
+	if (ContainerStatic->Type == EContainerType::List)
+	{
+		if (ContainerStatic->MaxItems > 0 && ContainerInstance->CurrentCount >= ContainerStatic->MaxItems)
+		{
+			UE_LOG(LogFlecsContainer, Warning, TEXT("AddItemToContainerDirect: List container %lld is full"), ContainerEntityId);
+			const int32 Added = Count - Remaining;
+			if (Added > 0) NotifyContainerUI(ContainerEntityId);
+			return Added;
+		}
+
+		CreateItemEntity(FIntPoint(-1, -1), ContainerInstance->CurrentCount, Remaining);
+		ContainerInstance->CurrentCount++;
+
+		UE_LOG(LogFlecsContainer, Log, TEXT("AddItemToContainerDirect: Added '%s' (Count=%d) to container %lld"),
+			*ItemName.ToString(), Remaining, ContainerEntityId);
+	}
+	else if (ContainerStatic->Type == EContainerType::Grid)
+	{
+		FContainerGridInstance* GridInstance = ContainerEntity.try_get_mut<FContainerGridInstance>();
+		if (!GridInstance)
+		{
+			UE_LOG(LogFlecsContainer, Warning, TEXT("AddItemToContainerDirect: Grid container %lld has no FContainerGridInstance"), ContainerEntityId);
+			const int32 Added = Count - Remaining;
+			if (Added > 0) NotifyContainerUI(ContainerEntityId);
+			return Added;
+		}
+
+		FIntPoint ItemSize = StaticData ? StaticData->GridSize : FIntPoint(1, 1);
+
+		FIntPoint FreePos = GridInstance->FindFreeSpace(ItemSize, ContainerStatic->GridWidth, ContainerStatic->GridHeight);
+		if (FreePos.X < 0)
+		{
+			UE_LOG(LogFlecsContainer, Warning, TEXT("AddItemToContainerDirect: Grid container %lld is full"), ContainerEntityId);
+			const int32 Added = Count - Remaining;
+			if (Added > 0) NotifyContainerUI(ContainerEntityId);
+			return Added;
+		}
+
+		GridInstance->Occupy(FreePos, ItemSize, ContainerStatic->GridWidth);
+		CreateItemEntity(FreePos, -1, Remaining);
+		ContainerInstance->CurrentCount++;
+
+		UE_LOG(LogFlecsContainer, Log, TEXT("AddItemToContainerDirect: Added '%s' (Count=%d) to grid container %lld at (%d,%d)"),
+			*ItemName.ToString(), Remaining, ContainerEntityId, FreePos.X, FreePos.Y);
+	}
+	else
+	{
+		UE_LOG(LogFlecsContainer, Warning, TEXT("AddItemToContainerDirect: Unsupported container type %d"),
+			static_cast<int32>(ContainerStatic->Type));
+		const int32 Added = Count - Remaining;
+		if (Added > 0) NotifyContainerUI(ContainerEntityId);
+		return Added;
+	}
+
+	NotifyContainerUI(ContainerEntityId);
+	return Count;  // All items added: stacked portion + new entity with Remaining
+}
+
 bool UFlecsContainerLibrary::AddItemToContainer(
 	UObject* WorldContextObject,
 	int64 ContainerEntityId,
@@ -94,137 +243,10 @@ bool UFlecsContainerLibrary::AddItemToContainer(
 	}
 
 	UFlecsEntityDefinition* CapturedEntityDef = EntityDefinition;
-	const FName ItemName = ItemDef->ItemName;
 
-	Subsystem->EnqueueCommand([Subsystem, ContainerEntityId, CapturedEntityDef, ItemName, Count, bAutoStack]()
+	Subsystem->EnqueueCommand([Subsystem, ContainerEntityId, CapturedEntityDef, Count, bAutoStack]()
 	{
-		flecs::world* FlecsWorld = Subsystem->GetFlecsWorld();
-		if (!FlecsWorld) return;
-
-		flecs::entity ContainerEntity = ResolveContainerEntity(Subsystem, ContainerEntityId);
-		if (!ContainerEntity.is_valid())
-		{
-			UE_LOG(LogFlecsContainer, Warning, TEXT("AddItemToContainer: Container %lld not found or not a container"), ContainerEntityId);
-			return;
-		}
-
-		flecs::entity ItemPrefab = Subsystem->GetOrCreateItemPrefab(CapturedEntityDef);
-		if (!ItemPrefab.is_valid())
-		{
-			UE_LOG(LogFlecsContainer, Warning, TEXT("AddItemToContainer: Failed to create prefab for '%s'"),
-				*ItemName.ToString());
-			return;
-		}
-
-		const FContainerStatic* ContainerStatic = ContainerEntity.try_get<FContainerStatic>();
-		if (!ContainerStatic)
-		{
-			UE_LOG(LogFlecsContainer, Warning, TEXT("AddItemToContainer: Container %lld has no FContainerStatic"), ContainerEntityId);
-			return;
-		}
-
-		FContainerInstance* ContainerInstance = ContainerEntity.try_get_mut<FContainerInstance>();
-		if (!ContainerInstance)
-		{
-			UE_LOG(LogFlecsContainer, Warning, TEXT("AddItemToContainer: Container %lld has no FContainerInstance"), ContainerEntityId);
-			return;
-		}
-
-		const FItemStaticData* StaticData = ItemPrefab.try_get<FItemStaticData>();
-		int32 Remaining = Count;
-
-		// Auto-stack into existing items of the same type (controlled by bAutoStack parameter)
-		if (bAutoStack && StaticData && StaticData->IsStackable())
-		{
-			FlecsWorld->each([ContainerEntityId, &ItemName, &Remaining, StaticData](
-				flecs::entity E, const FContainedIn& Contained, FItemInstance& Inst)
-			{
-				if (Remaining <= 0) return;
-				if (Contained.ContainerEntityId != ContainerEntityId) return;
-
-				const FItemStaticData* ExistingStatic = E.try_get<FItemStaticData>();
-				if (!ExistingStatic || ExistingStatic->ItemName != ItemName) return;
-				if (Inst.Count >= ExistingStatic->MaxStack) return;
-
-				const int32 Space = ExistingStatic->MaxStack - Inst.Count;
-				const int32 ToTransfer = FMath::Min(Remaining, Space);
-				Inst.Count += ToTransfer;
-				Remaining -= ToTransfer;
-			});
-
-			if (Remaining <= 0)
-			{
-				UE_LOG(LogFlecsContainer, Log, TEXT("AddItemToContainer: Stacked all %d '%s' into existing items in container %lld"),
-					Count, *ItemName.ToString(), ContainerEntityId);
-				NotifyContainerUI(ContainerEntityId);
-				return;
-			}
-		}
-
-		auto CreateItemEntity = [&](FIntPoint GridPos, int32 SlotIdx, int32 ItemCount) -> flecs::entity
-		{
-			FItemInstance Instance;
-			Instance.Count = ItemCount;
-
-			FContainedIn Contained;
-			Contained.ContainerEntityId = ContainerEntityId;
-			Contained.GridPosition = GridPos;
-			Contained.SlotIndex = SlotIdx;
-
-			return FlecsWorld->entity()
-				.is_a(ItemPrefab)
-				.set<FItemInstance>(Instance)
-				.set<FContainedIn>(Contained)
-				.add<FTagItem>();
-		};
-
-		if (ContainerStatic->Type == EContainerType::List)
-		{
-			if (ContainerStatic->MaxItems > 0 && ContainerInstance->CurrentCount >= ContainerStatic->MaxItems)
-			{
-				UE_LOG(LogFlecsContainer, Warning, TEXT("AddItemToContainer: List container %lld is full"), ContainerEntityId);
-				return;
-			}
-
-			CreateItemEntity(FIntPoint(-1, -1), ContainerInstance->CurrentCount, Remaining);
-			ContainerInstance->CurrentCount++;
-
-			UE_LOG(LogFlecsContainer, Log, TEXT("AddItemToContainer: Added '%s' (Count=%d) to container %lld"),
-				*ItemName.ToString(), Remaining, ContainerEntityId);
-		}
-		else if (ContainerStatic->Type == EContainerType::Grid)
-		{
-			FContainerGridInstance* GridInstance = ContainerEntity.try_get_mut<FContainerGridInstance>();
-			if (!GridInstance)
-			{
-				UE_LOG(LogFlecsContainer, Warning, TEXT("AddItemToContainer: Grid container %lld has no FContainerGridInstance"), ContainerEntityId);
-				return;
-			}
-
-			FIntPoint ItemSize = StaticData ? StaticData->GridSize : FIntPoint(1, 1);
-
-			FIntPoint FreePos = GridInstance->FindFreeSpace(ItemSize, ContainerStatic->GridWidth, ContainerStatic->GridHeight);
-			if (FreePos.X < 0)
-			{
-				UE_LOG(LogFlecsContainer, Warning, TEXT("AddItemToContainer: Grid container %lld is full"), ContainerEntityId);
-				return;
-			}
-
-			GridInstance->Occupy(FreePos, ItemSize, ContainerStatic->GridWidth);
-			CreateItemEntity(FreePos, -1, Remaining);
-			ContainerInstance->CurrentCount++;
-
-			UE_LOG(LogFlecsContainer, Log, TEXT("AddItemToContainer: Added '%s' (Count=%d) to grid container %lld at (%d,%d)"),
-				*ItemName.ToString(), Remaining, ContainerEntityId, FreePos.X, FreePos.Y);
-		}
-		else
-		{
-			UE_LOG(LogFlecsContainer, Warning, TEXT("AddItemToContainer: Unsupported container type %d"),
-				static_cast<int32>(ContainerStatic->Type));
-			return;
-		}
-
-		NotifyContainerUI(ContainerEntityId);
+		AddItemToContainerDirect(Subsystem, ContainerEntityId, CapturedEntityDef, Count, bAutoStack);
 	});
 
 	OutActuallyAdded = Count;
@@ -376,6 +398,65 @@ int32 UFlecsContainerLibrary::GetContainerItemCount(
 	return ContainerInstance ? ContainerInstance->CurrentCount : 0;
 }
 
+bool UFlecsContainerLibrary::PickupWorldItem(
+	UFlecsArtillerySubsystem* Subsystem,
+	int64 WorldItemEntityId,
+	int64 ContainerEntityId,
+	int32& OutPickedUp)
+{
+	OutPickedUp = 0;
+
+	check(Subsystem);  // SIM THREAD ONLY — Subsystem must be valid
+	if (WorldItemEntityId == 0 || ContainerEntityId == 0) return false;
+
+	flecs::world* FlecsWorld = Subsystem->GetFlecsWorld();
+	if (!FlecsWorld) return false;
+
+	flecs::entity WorldItem = FlecsWorld->entity(static_cast<flecs::entity_t>(WorldItemEntityId));
+	if (!WorldItem.is_alive() || !WorldItem.has<FTagItem>())
+	{
+		UE_LOG(LogFlecsContainer, Warning, TEXT("PickupWorldItem: Entity %lld not found or not an item"), WorldItemEntityId);
+		return false;
+	}
+
+	const FItemStaticData* ItemStatic = WorldItem.try_get<FItemStaticData>();
+	if (!ItemStatic || !ItemStatic->EntityDefinition)
+	{
+		UE_LOG(LogFlecsContainer, Warning, TEXT("PickupWorldItem: Entity %lld has no FItemStaticData or EntityDefinition"), WorldItemEntityId);
+		return false;
+	}
+
+	const FItemInstance* ItemInst = WorldItem.try_get<FItemInstance>();
+	if (!ItemInst || ItemInst->Count <= 0)
+	{
+		UE_LOG(LogFlecsContainer, Warning, TEXT("PickupWorldItem: Entity %lld has no FItemInstance or Count <= 0"), WorldItemEntityId);
+		return false;
+	}
+
+	const int32 Count = ItemInst->Count;
+	UFlecsEntityDefinition* EntityDef = ItemStatic->EntityDefinition;
+
+	const int32 Added = AddItemToContainerDirect(Subsystem, ContainerEntityId, EntityDef, Count, true);
+	OutPickedUp = Added;
+
+	if (Added <= 0) return false;
+
+	if (Added >= Count)
+	{
+		WorldItem.add<FTagDead>();
+	}
+	else
+	{
+		FItemInstance* MutableInst = WorldItem.try_get_mut<FItemInstance>();
+		if (MutableInst)
+		{
+			MutableInst->Count -= Added;
+		}
+	}
+
+	return true;
+}
+
 bool UFlecsContainerLibrary::PickupItem(
 	UObject* WorldContextObject,
 	FSkeletonKey WorldItemKey,
@@ -383,12 +464,21 @@ bool UFlecsContainerLibrary::PickupItem(
 	int32& OutPickedUp)
 {
 	OutPickedUp = 0;
-
 	if (!WorldItemKey.IsValid() || ContainerEntityId == 0) return false;
 
-	// TODO: Implement via simulation thread
-	UE_LOG(LogFlecsContainer, Warning, TEXT("PickupItem: Not yet implemented"));
-	return false;
+	UFlecsArtillerySubsystem* Subsystem = FlecsLibrary::GetSubsystem(WorldContextObject);
+	if (!Subsystem) return false;
+
+	Subsystem->EnqueueCommand([Subsystem, WorldItemKey, ContainerEntityId]()
+	{
+		flecs::entity ItemEntity = FlecsLibrary::GetEntityForKey(Subsystem, WorldItemKey);
+		if (!ItemEntity.is_valid() || ItemEntity.has<FTagDead>()) return;
+
+		int32 Picked = 0;
+		PickupWorldItem(Subsystem, static_cast<int64>(ItemEntity.id()), ContainerEntityId, Picked);
+	});
+
+	return true;
 }
 
 FSkeletonKey UFlecsContainerLibrary::DropItem(

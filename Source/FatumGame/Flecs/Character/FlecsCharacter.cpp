@@ -395,6 +395,29 @@ void AFlecsCharacter::Tick(float DeltaTime)
 	Super::Tick(DeltaTime);
 	CheckHealthChanges();
 
+	// Process pending weapon equip (set by sim thread via atomics).
+	// Must run in Tick(), not AsyncTask(GameThread) — AsyncTask can fire during
+	// post-tick component update phase, causing assert !bPostTickComponentUpdate.
+	if (PendingWeaponEquip.bPending.load(std::memory_order_acquire))
+	{
+		PendingWeaponEquip.bPending.store(false, std::memory_order_relaxed);
+		int64 WeaponId = PendingWeaponEquip.WeaponId.load(std::memory_order_acquire);
+
+		TestWeaponEntityId = WeaponId;
+		if (HUDWidget)
+		{
+			HUDWidget->SetWeaponEntityId(WeaponId);
+		}
+		AttachWeaponVisual(PendingWeaponEquip.Mesh, PendingWeaponEquip.AttachOffset);
+		UE_LOG(LogTemp, Log, TEXT("FlecsCharacter: Weapon spawned and equipped (EntityId=%lld)"), WeaponId);
+
+		if (bPendingFireAfterSpawn)
+		{
+			bPendingFireAfterSpawn = false;
+			StartFiringWeapon();
+		}
+	}
+
 	UFlecsArtillerySubsystem* FlecsSubsystem = GetWorld()->GetSubsystem<UFlecsArtillerySubsystem>();
 
 	// Sync UE actor position → Barrage physics body
@@ -1140,9 +1163,10 @@ void AFlecsCharacter::TryInteract()
 	// Capture WeakSelf on game thread — TWeakObjectPtr constructor reads GUObjectArray (NOT thread-safe)
 	TWeakObjectPtr<AFlecsCharacter> WeakSelf = this;
 	FText InteractionTitle = CachedInteractionPrompt;
-
 	FSkeletonKey TargetKey = CurrentInteractionTarget;
-	FlecsSubsystem->EnqueueCommand([FlecsSubsystem, TargetKey, WeakSelf, InteractionTitle]()
+	int64 CapturedInventoryId = InventoryEntityId;
+
+	FlecsSubsystem->EnqueueCommand([FlecsSubsystem, TargetKey, WeakSelf, InteractionTitle, CapturedInventoryId]()
 	{
 		flecs::entity Target = FlecsSubsystem->GetEntityForBarrageKey(TargetKey);
 		if (!Target.is_valid() || Target.has<FTagDead>() || !Target.has<FTagInteractable>())
@@ -1155,10 +1179,27 @@ void AFlecsCharacter::TryInteract()
 		// Determine interaction type from entity tags
 		if (Target.has<FTagPickupable>() && Target.has<FTagItem>())
 		{
-			// Pickup item
-			UE_LOG(LogTemp, Log, TEXT("Interact: Pickup entity %llu (Key=%llu)"),
-				Target.id(), static_cast<uint64>(TargetKey));
-			Target.add<FTagDead>();
+			if (CapturedInventoryId == 0)
+			{
+				UE_LOG(LogTemp, Warning, TEXT("Interact: Cannot pick up - no inventory (InventoryEntityId=0)"));
+				return;
+			}
+
+			int32 PickedUp = 0;
+			const bool bSuccess = UFlecsContainerLibrary::PickupWorldItem(
+				FlecsSubsystem, static_cast<int64>(Target.id()), CapturedInventoryId, PickedUp);
+
+			if (bSuccess)
+			{
+				UE_LOG(LogTemp, Log, TEXT("Interact: Picked up %d of entity %llu (Key=%llu) into inventory %lld"),
+					PickedUp, Target.id(), static_cast<uint64>(TargetKey), CapturedInventoryId);
+			}
+			else
+			{
+				UE_LOG(LogTemp, Log, TEXT("Interact: Inventory full, cannot pick up entity %llu (Key=%llu)"),
+					Target.id(), static_cast<uint64>(TargetKey));
+				return;
+			}
 		}
 		else if (Target.has<FTagContainer>())
 		{
@@ -1181,11 +1222,14 @@ void AFlecsCharacter::TryInteract()
 				Target.id(), static_cast<uint64>(TargetKey));
 		}
 
-		// If single-use, remove interactable tag
-		const FInteractionStatic* InterStatic = Target.try_get<FInteractionStatic>();
-		if (InterStatic && InterStatic->bSingleUse)
+		// If single-use, remove interactable tag (skip for pickups — FTagDead handles full consumption)
+		if (!Target.has<FTagPickupable>())
 		{
-			Target.remove<FTagInteractable>();
+			const FInteractionStatic* InterStatic = Target.try_get<FInteractionStatic>();
+			if (InterStatic && InterStatic->bSingleUse)
+			{
+				Target.remove<FTagInteractable>();
+			}
 		}
 	});
 }
@@ -1263,14 +1307,15 @@ void AFlecsCharacter::SpawnAndEquipTestWeapon()
 		return;
 	}
 
-	// Capture visual data on game thread (UObject pointers not safe across threads)
-	USkeletalMesh* EquippedMesh = TestWeaponDefinition->WeaponProfile->EquippedMesh;
-	FTransform WeaponAttachOffset = TestWeaponDefinition->WeaponProfile->AttachOffset;
+	// Capture visual data on game thread (UObject pointers not safe across threads).
+	// Store in PendingWeaponEquip so Tick() can safely attach the visual.
+	PendingWeaponEquip.Mesh = TestWeaponDefinition->WeaponProfile->EquippedMesh;
+	PendingWeaponEquip.AttachOffset = TestWeaponDefinition->WeaponProfile->AttachOffset;
 
 	// Create weapon entity via EnqueueCommand
 	// IMPORTANT: Look up CharEntityId INSIDE the command, on simulation thread,
 	// to ensure BeginPlay's entity binding has already been processed.
-	FlecsSubsystem->EnqueueCommand([this, FlecsSubsystem, CharKey, EquippedMesh, WeaponAttachOffset]()
+	FlecsSubsystem->EnqueueCommand([this, FlecsSubsystem, CharKey]()
 	{
 		flecs::world* World = FlecsSubsystem->GetFlecsWorld();
 		if (!World) return;
@@ -1330,29 +1375,10 @@ void AFlecsCharacter::SpawnAndEquipTestWeapon()
 			UFlecsMessageSubsystem::SelfPtr->EnqueueMessage(TAG_UI_Ammo, AmmoMsg);
 		}
 
-		// Use AsyncTask to update TestWeaponEntityId on game thread
-		AsyncTask(ENamedThreads::GameThread, [this, WeaponId, EquippedMesh, WeaponAttachOffset]()
-		{
-			TestWeaponEntityId = WeaponId;
-			if (HUDWidget)
-			{
-				HUDWidget->SetWeaponEntityId(WeaponId);
-			}
-			AttachWeaponVisual(EquippedMesh, WeaponAttachOffset);
-			UE_LOG(LogTemp, Log, TEXT("FlecsCharacter: Weapon spawned and equipped (EntityId=%lld)"), WeaponId);
-			if (GEngine)
-			{
-				GEngine->AddOnScreenDebugMessage(-1, 3.f, FColor::Green,
-					FString::Printf(TEXT("Weapon equipped! Ammo: %d"), 30));
-			}
-
-			// If fire was requested before weapon was ready, apply now
-			if (bPendingFireAfterSpawn)
-			{
-				bPendingFireAfterSpawn = false;
-				StartFiringWeapon();
-			}
-		});
+		// Signal game thread via atomics (processed in Tick).
+		// AsyncTask(GameThread) can execute during post-tick component update → crash.
+		PendingWeaponEquip.WeaponId.store(WeaponId, std::memory_order_release);
+		PendingWeaponEquip.bPending.store(true, std::memory_order_release);
 	});
 }
 

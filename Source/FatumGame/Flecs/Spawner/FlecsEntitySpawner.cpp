@@ -275,6 +275,13 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 			Params.Material = EffectiveRender->MaterialOverride;
 			Params.MeshScale = EffectiveRender->Scale;
 
+			UE_LOG(LogFlecsEntity, Log, TEXT("SpawnEntity: NON-PROJ Key=%llu Mesh='%s' MatOverride='%s' RenderProfile=%p DefName='%s'"),
+				static_cast<uint64>(EntityKey),
+				Params.Mesh ? *Params.Mesh->GetName() : TEXT("NULL"),
+				Params.Material ? *Params.Material->GetName() : TEXT("NULL"),
+				EffectiveRender,
+				Request.EntityDefinition ? *Request.EntityDefinition->EntityName.ToString() : TEXT("NoDefinition"));
+
 			Params.bAutoCollider = true;
 
 			FBarrageSpawnResult Result = FBarrageSpawnUtils::SpawnEntity(World, Params);
@@ -308,6 +315,13 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 			// Add ISM render instance
 			if (Renderer)
 			{
+				UE_LOG(LogFlecsEntity, Log, TEXT("SpawnEntity: PROJ Key=%llu Mesh='%s' MatOverride='%s' RenderProfile=%p DefName='%s'"),
+					static_cast<uint64>(EntityKey),
+					EffectiveRender->Mesh ? *EffectiveRender->Mesh->GetName() : TEXT("NULL"),
+					EffectiveRender->MaterialOverride ? *EffectiveRender->MaterialOverride->GetName() : TEXT("NULL"),
+					EffectiveRender,
+					Request.EntityDefinition ? *Request.EntityDefinition->EntityName.ToString() : TEXT("NoDefinition"));
+
 				FTransform RenderTransform;
 				RenderTransform.SetLocation(Request.Location);
 				RenderTransform.SetRotation(Request.Rotation.Quaternion() * EffectiveRender->RotationOffset.Quaternion());
@@ -600,6 +614,7 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 		if (Data.bPickupable)
 		{
 			Entity.add<FTagPickupable>();
+			Entity.add<FTagInteractable>();
 		}
 		if (Data.bDestructible)
 		{

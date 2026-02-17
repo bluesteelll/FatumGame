@@ -84,7 +84,8 @@ void UFlecsSpawnLibrary::SpawnWorldItem(
 			.set<FWorldItemInstance>(WorldItem)
 			.set<FISMRender>({ Mesh, FVector::OneVector })
 			.add<FTagItem>()
-			.add<FTagPickupable>();
+			.add<FTagPickupable>()
+			.add<FTagInteractable>();
 
 		Subsystem->BindEntityToBarrage(Entity, EntityKey);
 	});

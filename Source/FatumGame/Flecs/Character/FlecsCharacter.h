@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Character.h"
 #include "SkeletonTypes.h"
+#include <atomic>
 #include "FlecsCharacter.generated.h"
 
 class UFlecsEntityDefinition;
@@ -442,6 +443,20 @@ private:
 
 	/** Fire was requested before weapon finished spawning — apply after spawn completes. */
 	bool bPendingFireAfterSpawn = false;
+
+	/**
+	 * Pending weapon equip data (sim thread → game thread via atomics).
+	 * Processed in Tick() to avoid modifying components during post-tick update phase.
+	 * AsyncTask(GameThread) can fire during render phase → assert !bPostTickComponentUpdate.
+	 */
+	struct FPendingWeaponEquip
+	{
+		std::atomic<int64> WeaponId{0};
+		std::atomic<bool> bPending{false};
+		USkeletalMesh* Mesh = nullptr;       // Set on game thread before EnqueueCommand
+		FTransform AttachOffset;              // Set on game thread before EnqueueCommand
+	};
+	FPendingWeaponEquip PendingWeaponEquip;
 
 	/** Check for health changes from Flecs and fire events */
 	void CheckHealthChanges();

@@ -17,7 +17,8 @@ class UMaterialInterface;
 
 /**
  * Manages ISM components for all Barrage entities.
- * Groups entities by mesh for batched rendering (1 draw call per mesh type).
+ * Groups entities by (mesh, material) pair for batched rendering.
+ * Same mesh with different materials gets separate ISM components.
  *
  * NOT self-ticking — driven by UFlecsArtillerySubsystem to control update ordering.
  */
@@ -59,6 +60,23 @@ private:
 		bool    bJustSpawned = true;
 	};
 
+	/** Key for ISM grouping: (mesh, material) pair. nullptr material = mesh defaults. */
+	struct FMeshMaterialKey
+	{
+		UStaticMesh* Mesh = nullptr;
+		UMaterialInterface* Material = nullptr;
+
+		bool operator==(const FMeshMaterialKey& Other) const
+		{
+			return Mesh == Other.Mesh && Material == Other.Material;
+		}
+
+		friend uint32 GetTypeHash(const FMeshMaterialKey& Key)
+		{
+			return HashCombine(GetTypeHash(Key.Mesh), GetTypeHash(Key.Material));
+		}
+	};
+
 	struct FMeshGroup
 	{
 		TObjectPtr<UInstancedStaticMeshComponent> ISM;
@@ -76,7 +94,7 @@ private:
 	UPROPERTY()
 	TObjectPtr<AActor> ManagerActor;
 
-	TMap<UStaticMesh*, FMeshGroup> MeshGroups;
+	TMap<FMeshMaterialKey, FMeshGroup> MeshGroups;
 
 	/** Thread-safe queue for pending removals (sim thread -> game thread) */
 	TQueue<FSkeletonKey, EQueueMode::Mpsc> PendingRemovals;
