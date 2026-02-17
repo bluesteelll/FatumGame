@@ -86,17 +86,17 @@ public:
 		meta = (EditCondition = "bIsFocus", EditConditionHides))
 	TSubclassOf<UFlecsUIPanel> FocusWidgetClass;
 
-	/** Offset from entity center to the "look at" point (entity local space) */
+	/** Camera position in entity local space (offset from entity center).
+	 *  Rotates with the object. Example: (-80, 0, 30) = 80cm behind, 30cm above entity origin. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Focus",
 		meta = (EditCondition = "bIsFocusCamera", EditConditionHides))
-	FVector FocusPointOffset = FVector::ZeroVector;
+	FVector FocusCameraPosition = FVector(-80.f, 0.f, 30.f);
 
-	/** Camera position offset from focus point (in look-direction local space).
-	 *  X = back from focus point, Y = right, Z = up.
-	 *  Example: (-80, 0, 30) = 80cm behind, 30cm above the focus point. */
+	/** Camera rotation in entity local space.
+	 *  (0,0,0) = camera looks along entity's forward (+X). Rotates with the object. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Focus",
 		meta = (EditCondition = "bIsFocusCamera", EditConditionHides))
-	FVector ViewOffset = FVector(-80.f, 0.f, 30.f);
+	FRotator FocusCameraRotation = FRotator::ZeroRotator;
 
 	/** Target FOV when focused (0 = keep current FOV) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Focus",

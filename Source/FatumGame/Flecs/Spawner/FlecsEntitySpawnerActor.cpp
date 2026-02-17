@@ -70,6 +70,13 @@ FSkeletonKey AFlecsEntitySpawner::SpawnEntity()
 	// Apply overrides
 	Request.InitialVelocity = InitialVelocity;
 
+	if (bOverrideFocusCamera)
+	{
+		Request.bOverrideFocusCamera = true;
+		Request.FocusCameraPositionOverride = FocusCameraPositionOverride;
+		Request.FocusCameraRotationOverride = FocusCameraRotationOverride;
+	}
+
 	// Scale override: modify the render profile scale if needed
 	// Note: This is applied via the spawn request, the actual implementation
 	// would need to handle scale override in SpawnEntity or we create a temp profile

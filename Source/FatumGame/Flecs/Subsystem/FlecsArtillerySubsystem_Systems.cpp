@@ -66,6 +66,7 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 	World.component<FDebrisInstance>();
 	World.component<FFragmentationData>();
 	World.component<FInteractionInstance>();
+	World.component<FFocusCameraOverride>();
 
 	// Damage Event System
 	World.component<FDamageHit>();

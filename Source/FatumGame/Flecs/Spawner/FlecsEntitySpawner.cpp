@@ -401,6 +401,11 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 		bool bHasProjectile;
 		bool bHasItem;
 
+		// Focus camera override (per-instance)
+		bool bOverrideFocusCamera;
+		FVector FocusCameraPositionOverride;
+		FRotator FocusCameraRotationOverride;
+
 		// Death VFX
 		bool bHasDeathEffect;
 		UNiagaraSystem* DeathEffect;
@@ -451,6 +456,11 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 	Data.bInteractable = bInteractable || EffectiveInteraction != nullptr;
 	Data.OwnerKey = Request.OwnerKey;
 	Data.OwnerEntityId = Request.OwnerEntityId;
+
+	// Focus camera override
+	Data.bOverrideFocusCamera = Request.bOverrideFocusCamera;
+	Data.FocusCameraPositionOverride = Request.FocusCameraPositionOverride;
+	Data.FocusCameraRotationOverride = Request.FocusCameraRotationOverride;
 
 	// Death VFX
 	Data.bHasDeathEffect = EffectiveNiagara && EffectiveNiagara->HasDeathEffect();
@@ -631,6 +641,15 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 		if (Data.bInteractable)
 		{
 			Entity.add<FTagInteractable>();
+		}
+
+		// Focus camera override (per-instance, read by character on interaction)
+		if (Data.bOverrideFocusCamera)
+		{
+			FFocusCameraOverride CamOverride;
+			CamOverride.CameraPosition = Data.FocusCameraPositionOverride;
+			CamOverride.CameraRotation = Data.FocusCameraRotationOverride;
+			Entity.set<FFocusCameraOverride>(CamOverride);
 		}
 
 		// Death VFX component (read by DeadEntityCleanupSystem)

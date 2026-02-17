@@ -90,6 +90,21 @@ bool AFlecsCharacter::GetEntityWorldPosition(FSkeletonKey EntityKey, FVector& Ou
 	return false;
 }
 
+bool AFlecsCharacter::GetEntityWorldTransform(FSkeletonKey EntityKey, FVector& OutPosition, FQuat& OutRotation) const
+{
+	UBarrageDispatch* Barrage = GetWorld()->GetSubsystem<UBarrageDispatch>();
+	if (!Barrage) return false;
+
+	FBLet Body = Barrage->GetShapeRef(EntityKey);
+	if (FBarragePrimitive::IsNotNull(Body))
+	{
+		OutPosition = FVector(FBarragePrimitive::GetPosition(Body));
+		OutRotation = FQuat(FBarragePrimitive::OptimisticGetAbsoluteRotation(Body));
+		return true;
+	}
+	return false;
+}
+
 // =================================================================
 // INPUT ROUTING
 // =================================================================
@@ -307,24 +322,17 @@ void AFlecsCharacter::TickInteractionStateMachine(float DeltaTime)
 // FOCUS CAMERA
 // =================================================================
 
-FTransform AFlecsCharacter::ComputeFocusCameraTransform(FVector EntityPos, const UFlecsInteractionProfile* Profile) const
+FTransform AFlecsCharacter::ComputeFocusCameraTransform(
+	FVector EntityPos, FQuat EntityRot,
+	FVector LocalCameraPos, FRotator LocalCameraRot) const
 {
-	check(Profile);
-	FVector FocusPoint = EntityPos + Profile->FocusPointOffset;
+	// Camera position: entity origin + local offset rotated by entity orientation
+	FVector FinalCameraPos = EntityPos + EntityRot.RotateVector(LocalCameraPos);
 
-	// Compute look direction from current camera to focus point
-	FVector CameraPos = FollowCamera ? FollowCamera->GetComponentLocation() : GetActorLocation();
-	FVector LookDir = (FocusPoint - CameraPos).GetSafeNormal();
-	FQuat LookRot = FRotationMatrix::MakeFromX(LookDir).ToQuat();
+	// Camera rotation: local rotation composed with entity orientation
+	FQuat FinalCameraRot = EntityRot * LocalCameraRot.Quaternion();
 
-	// Camera position = focus point + view offset rotated into look direction space
-	FVector FinalCameraPos = FocusPoint + LookRot.RotateVector(Profile->ViewOffset);
-
-	// Camera rotation = look at focus point from final position
-	FVector FinalLookDir = (FocusPoint - FinalCameraPos).GetSafeNormal();
-	FQuat FinalRot = FRotationMatrix::MakeFromX(FinalLookDir).ToQuat();
-
-	return FTransform(FinalRot, FinalCameraPos);
+	return FTransform(FinalCameraRot, FinalCameraPos);
 }
 
 void AFlecsCharacter::ApplyFocusCameraLerp(float Alpha)
@@ -371,9 +379,10 @@ void AFlecsCharacter::BeginFocusTransition()
 		return;
 	}
 
-	// Cache entity position at start (don't track moving entity)
+	// Cache entity transform at start (don't track moving entity)
 	FVector EntityPos;
-	if (!GetEntityWorldPosition(ActiveInteractionTargetKey, EntityPos))
+	FQuat EntityRot;
+	if (!GetEntityWorldTransform(ActiveInteractionTargetKey, EntityPos, EntityRot))
 	{
 		UE_LOG(LogTemp, Warning, TEXT("BeginFocusTransition: Entity has no valid position, aborting"));
 		ActiveInteractionProfile = nullptr;
@@ -381,8 +390,27 @@ void AFlecsCharacter::BeginFocusTransition()
 		return;
 	}
 
+	// Resolve camera position/rotation: per-instance override > InteractionProfile default
+	FVector LocalCamPos = ActiveInteractionProfile->FocusCameraPosition;
+	FRotator LocalCamRot = ActiveInteractionProfile->FocusCameraRotation;
+
+	UFlecsArtillerySubsystem* FlecsSubsystem = GetWorld()->GetSubsystem<UFlecsArtillerySubsystem>();
+	if (ensure(FlecsSubsystem))
+	{
+		flecs::entity E = FlecsSubsystem->GetEntityForBarrageKey(ActiveInteractionTargetKey);
+		if (E.is_valid())
+		{
+			const FFocusCameraOverride* Override = E.try_get<FFocusCameraOverride>();
+			if (Override)
+			{
+				LocalCamPos = Override->CameraPosition;
+				LocalCamRot = Override->CameraRotation;
+			}
+		}
+	}
+
 	// Compute target camera transform
-	FocusCameraTarget = ComputeFocusCameraTransform(EntityPos, ActiveInteractionProfile);
+	FocusCameraTarget = ComputeFocusCameraTransform(EntityPos, EntityRot, LocalCamPos, LocalCamRot);
 	FocusTargetFOV = ActiveInteractionProfile->FocusFOV;
 	CurrentTransitionDuration = ActiveInteractionProfile->TransitionInTime;
 	FocusLerpAlpha = 0.f;

@@ -231,14 +231,6 @@ struct FContainerStatic
 };
 
 // ═══════════════════════════════════════════════════════════════
-// ENTITY DEFINITION REFERENCE
-// ═══════════════════════════════════════════════════════════════
-
-/**
- * Reference to UFlecsEntityDefinition - lives in PREFAB.
- * Allows getting back to the UE asset from any entity.
- */
-// ═══════════════════════════════════════════════════════════════
 // INTERACTION STATIC
 // ═══════════════════════════════════════════════════════════════
 
@@ -275,6 +267,26 @@ struct FEntityDefinitionRef
 	UFlecsEntityDefinition* Definition = nullptr;
 
 	bool IsValid() const { return Definition != nullptr; }
+};
+
+// ═══════════════════════════════════════════════════════════════
+// FOCUS CAMERA OVERRIDE (per-instance)
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Per-instance override for focus camera position/rotation.
+ * Set by AFlecsEntitySpawner when the level designer wants a custom viewpoint.
+ * Values are in entity local space (rotates with the object).
+ *
+ * If present on entity, used INSTEAD of InteractionProfile defaults.
+ */
+struct FFocusCameraOverride
+{
+	/** Camera position in entity local space */
+	FVector CameraPosition = FVector::ZeroVector;
+
+	/** Camera rotation in entity local space */
+	FRotator CameraRotation = FRotator::ZeroRotator;
 };
 
 // ═══════════════════════════════════════════════════════════════

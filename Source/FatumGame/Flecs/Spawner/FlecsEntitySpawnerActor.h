@@ -65,6 +65,20 @@ public:
 		meta = (EditCondition = "bOverrideScale"))
 	FVector ScaleOverride = FVector::OneVector;
 
+	/** Override focus camera position/rotation from InteractionProfile */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flecs Entity|Overrides")
+	bool bOverrideFocusCamera = false;
+
+	/** Camera position in entity local space (override) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flecs Entity|Overrides",
+		meta = (EditCondition = "bOverrideFocusCamera"))
+	FVector FocusCameraPositionOverride = FVector(-80.f, 0.f, 30.f);
+
+	/** Camera rotation in entity local space (override) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flecs Entity|Overrides",
+		meta = (EditCondition = "bOverrideFocusCamera"))
+	FRotator FocusCameraRotationOverride = FRotator::ZeroRotator;
+
 	// ═══════════════════════════════════════════════════════════════
 	// SPAWNER SETTINGS
 	// ═══════════════════════════════════════════════════════════════

@@ -162,6 +162,24 @@ struct FATUMGAME_API FEntitySpawnRequest
 	bool bInteractable = false;
 
 	// ═══════════════════════════════════════════════════════════════
+	// FOCUS CAMERA OVERRIDE (per-instance)
+	// ═══════════════════════════════════════════════════════════════
+
+	/** Override focus camera viewpoint for this specific instance */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Overrides")
+	bool bOverrideFocusCamera = false;
+
+	/** Camera position in entity local space (override) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Overrides",
+		meta = (EditCondition = "bOverrideFocusCamera"))
+	FVector FocusCameraPositionOverride = FVector::ZeroVector;
+
+	/** Camera rotation in entity local space (override) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Overrides",
+		meta = (EditCondition = "bOverrideFocusCamera"))
+	FRotator FocusCameraRotationOverride = FRotator::ZeroRotator;
+
+	// ═══════════════════════════════════════════════════════════════
 	// C++ FLUENT BUILDER
 	// ═══════════════════════════════════════════════════════════════
 
@@ -325,6 +343,15 @@ struct FATUMGAME_API FEntitySpawnRequest
 	FEntitySpawnRequest& Interactable()
 	{
 		bInteractable = true;
+		return *this;
+	}
+
+	/** Override focus camera viewpoint (entity local space) */
+	FEntitySpawnRequest& WithFocusCameraOverride(FVector InPosition, FRotator InRotation)
+	{
+		bOverrideFocusCamera = true;
+		FocusCameraPositionOverride = InPosition;
+		FocusCameraRotationOverride = InRotation;
 		return *this;
 	}
 

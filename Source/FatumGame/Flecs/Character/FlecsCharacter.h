@@ -549,7 +549,8 @@ private:
 	void BeginFocusTransition();
 	void BeginUnfocusTransition(float OverrideDuration = 0.f);
 	void RestoreCameraControl();
-	FTransform ComputeFocusCameraTransform(FVector EntityWorldPosition, const UFlecsInteractionProfile* Profile) const;
+	FTransform ComputeFocusCameraTransform(FVector EntityPos, FQuat EntityRot, FVector LocalCameraPos, FRotator LocalCameraRot) const;
+	bool GetEntityWorldTransform(FSkeletonKey EntityKey, FVector& OutPosition, FQuat& OutRotation) const;
 	void ApplyFocusCameraLerp(float Alpha);
 	void BeginHoldInteraction();
 	void CancelHoldInteraction();
