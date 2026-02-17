@@ -16,6 +16,8 @@ struct FUIDeathMessage;
 struct FUIAmmoMessage;
 struct FUIReloadMessage;
 struct FUIInteractionMessage;
+struct FUIHoldProgressMessage;
+struct FUIInteractionStateMessage;
 
 UCLASS(Abstract, Blueprintable)
 class FATUMGAME_API UFlecsHUDWidget : public UUserWidget
@@ -53,7 +55,15 @@ public:
 	void OnReloadFinished(int32 NewAmmo, int32 MagazineSize);
 
 	UFUNCTION(BlueprintImplementableEvent, Category = "HUD")
-	void OnInteractionChanged(bool bHasTarget, const FText& Prompt);
+	void OnInteractionChanged(bool bHasTarget, const FText& Prompt, uint8 InteractionType, float HoldDuration);
+
+	/** Hold interaction progress (0-1). bFinished true on cancel or complete. */
+	UFUNCTION(BlueprintImplementableEvent, Category = "HUD")
+	void OnHoldProgress(float Progress, float TotalDuration, bool bFinished, bool bCompleted);
+
+	/** Interaction state changed (EInteractionState cast). */
+	UFUNCTION(BlueprintImplementableEvent, Category = "HUD")
+	void OnInteractionStateChanged(uint8 State);
 
 protected:
 	virtual void NativeConstruct() override;
@@ -69,6 +79,8 @@ private:
 	void HandleAmmo(FGameplayTag Channel, const FUIAmmoMessage& Msg);
 	void HandleReload(FGameplayTag Channel, const FUIReloadMessage& Msg);
 	void HandleInteraction(FGameplayTag Channel, const FUIInteractionMessage& Msg);
+	void HandleHoldProgress(FGameplayTag Channel, const FUIHoldProgressMessage& Msg);
+	void HandleInteractionState(FGameplayTag Channel, const FUIInteractionStateMessage& Msg);
 
 	/** Resolve interaction prompt from EntityDefinition on game thread. */
 	FText ResolveInteractionPrompt(FSkeletonKey TargetKey) const;
@@ -87,6 +99,8 @@ private:
 	FMessageListenerHandle AmmoHandle;
 	FMessageListenerHandle ReloadHandle;
 	FMessageListenerHandle InteractionHandle;
+	FMessageListenerHandle HoldProgressHandle;
+	FMessageListenerHandle InteractionStateHandle;
 
 	/** Allow AFlecsCharacter to read CachedPlayerEntityId for one-time init check. */
 	friend class AFlecsCharacter;

@@ -13,6 +13,8 @@ UE_DEFINE_GAMEPLAY_TAG(TAG_UI_Death,       "UI.Death");
 UE_DEFINE_GAMEPLAY_TAG(TAG_UI_Ammo,        "UI.Weapon.Ammo");
 UE_DEFINE_GAMEPLAY_TAG(TAG_UI_Reload,      "UI.Weapon.Reload");
 UE_DEFINE_GAMEPLAY_TAG(TAG_UI_Interaction,        "UI.Interaction");
+UE_DEFINE_GAMEPLAY_TAG(TAG_UI_HoldProgress,       "UI.Interaction.HoldProgress");
+UE_DEFINE_GAMEPLAY_TAG(TAG_UI_InteractionState,   "UI.Interaction.State");
 
 // ═══════════════════════════════════════════════════════════════
 // STATIC ACCESS

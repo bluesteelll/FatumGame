@@ -158,6 +158,8 @@ flecs::entity UFlecsArtillerySubsystem::GetOrCreateEntityPrefab(UFlecsEntityDefi
 		FInteractionStatic InteractionStatic;
 		InteractionStatic.MaxRange = InteractionProf->InteractionRange;
 		InteractionStatic.bSingleUse = InteractionProf->bSingleUse;
+		InteractionStatic.InteractionType = static_cast<uint8>(InteractionProf->InteractionType);
+		InteractionStatic.InstantAction = static_cast<uint8>(InteractionProf->InstantAction);
 		Prefab.set<FInteractionStatic>(InteractionStatic);
 	}
 

@@ -106,6 +106,14 @@ void AFlecsCharacter::BeginPlay()
 				Subsystem->AddMappingContext(GameplayMappingContext, 0);
 			}
 		}
+
+		if (!CancelAction)
+		{
+			UE_LOG(LogTemp, Warning,
+				TEXT("AFlecsCharacter::BeginPlay: CancelAction is not set! "
+					 "Escape key will not work for exiting interactions/menus. "
+					 "Assign IA_Cancel and map it in BOTH GameplayMappingContext AND InventoryMappingContext."));
+		}
 	}
 
 	// ─────────────────────────────────────────────────────────────
@@ -360,6 +368,16 @@ void AFlecsCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	InventoryEntityId = 0;
 	WeaponInventoryEntityId = 0;
 
+	// Cleanup active interaction state
+	if (InteractionState != EInteractionState::Gameplay)
+	{
+		CloseFocusPanel();
+		RestoreCameraControl();
+		InteractionState = EInteractionState::Gameplay;
+		ActiveInteractionProfile = nullptr;
+		ActiveInteractionTargetKey = FSkeletonKey();
+	}
+
 	GetWorld()->GetTimerManager().ClearTimer(InteractionTraceTimerHandle);
 	CurrentInteractionTarget = FSkeletonKey();
 
@@ -394,6 +412,7 @@ void AFlecsCharacter::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
 	CheckHealthChanges();
+	TickInteractionStateMachine(DeltaTime);
 
 	// Process pending weapon equip (set by sim thread via atomics).
 	// Must run in Tick(), not AsyncTask(GameThread) — AsyncTask can fire during
@@ -503,10 +522,11 @@ void AFlecsCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 			EnhancedInputComponent->BindAction(FireAction, ETriggerEvent::Completed, this, &AFlecsCharacter::StopFire);
 		}
 
-		// Spawn Item (E)
+		// Interact (E) — Started for press, Completed for release (Hold detection)
 		if (SpawnItemAction)
 		{
 			EnhancedInputComponent->BindAction(SpawnItemAction, ETriggerEvent::Started, this, &AFlecsCharacter::OnSpawnItem);
+			EnhancedInputComponent->BindAction(SpawnItemAction, ETriggerEvent::Completed, this, &AFlecsCharacter::OnInteractReleased);
 		}
 
 		// Destroy Item (F)
@@ -519,6 +539,12 @@ void AFlecsCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 		if (InventoryAction)
 		{
 			EnhancedInputComponent->BindAction(InventoryAction, ETriggerEvent::Started, this, &AFlecsCharacter::ToggleInventory);
+		}
+
+		// Cancel / Exit (Escape)
+		if (CancelAction)
+		{
+			EnhancedInputComponent->BindAction(CancelAction, ETriggerEvent::Started, this, &AFlecsCharacter::OnInteractCancel);
 		}
 	}
 }
@@ -635,6 +661,12 @@ void AFlecsCharacter::CheckHealthChanges()
 		{
 			// Took damage
 			OnDamageTaken(-Delta, CurrentHealth);
+
+			// Force cancel active interaction on damage
+			if (InteractionState != EInteractionState::Gameplay)
+			{
+				ForceCancelInteraction();
+			}
 		}
 		else
 		{
@@ -847,10 +879,18 @@ void AFlecsCharacter::OnSpawnItem(const FInputActionValue& Value)
 		return;
 	}
 
-	// If we have an interaction target, interact with it
+	// If in an interaction state, route to state machine (E exits Focus, etc.)
+	if (InteractionState != EInteractionState::Gameplay)
+	{
+		HandleInteractionInput();
+		return;
+	}
+
+	// If we have an interaction target, begin interaction
 	if (CurrentInteractionTarget.IsValid())
 	{
-		TryInteract();
+		bInteractKeyHeld = true; // For Hold detection
+		HandleInteractionInput();
 		return;
 	}
 
@@ -884,6 +924,16 @@ void AFlecsCharacter::OnSpawnItem(const FInputActionValue& Value)
 		// Fallback to entity spawning
 		SpawnTestEntity();
 	}
+}
+
+void AFlecsCharacter::OnInteractReleased(const FInputActionValue& Value)
+{
+	HandleInteractionRelease();
+}
+
+void AFlecsCharacter::OnInteractCancel(const FInputActionValue& Value)
+{
+	HandleInteractionCancel();
 }
 
 void AFlecsCharacter::OnDestroyItem(const FInputActionValue& Value)
@@ -1116,10 +1166,14 @@ void AFlecsCharacter::PerformInteractionTrace()
 				if (DefRef && DefRef->Definition && DefRef->Definition->InteractionProfile)
 				{
 					CachedInteractionPrompt = DefRef->Definition->InteractionProfile->InteractionPrompt;
+					CachedInteractionType = DefRef->Definition->InteractionProfile->InteractionType;
+					CachedHoldDuration = DefRef->Definition->InteractionProfile->HoldDuration;
 				}
 				else
 				{
 					CachedInteractionPrompt = NSLOCTEXT("Interaction", "Fallback", "Press E");
+					CachedInteractionType = EInteractionType::Instant;
+					CachedHoldDuration = 0.f;
 				}
 			}
 			UE_LOG(LogTemp, Log, TEXT("Interaction: Target acquired Key=%llu"), static_cast<uint64>(NewTarget));
@@ -1127,6 +1181,8 @@ void AFlecsCharacter::PerformInteractionTrace()
 		else
 		{
 			CachedInteractionPrompt = FText::GetEmpty();
+			CachedInteractionType = EInteractionType::Instant;
+			CachedHoldDuration = 0.f;
 
 			// Auto-close loot panel when target lost (walked away)
 			if (IsLootOpen())
@@ -1143,6 +1199,8 @@ void AFlecsCharacter::PerformInteractionTrace()
 			FUIInteractionMessage InterMsg;
 			InterMsg.bHasTarget = NewTarget.IsValid();
 			InterMsg.TargetKey = NewTarget;
+			InterMsg.InteractionType = static_cast<uint8>(CachedInteractionType);
+			InterMsg.HoldDuration = CachedHoldDuration;
 			if (NewTarget.IsValid())
 			{
 				flecs::entity E = FlecsSubsystem->GetEntityForBarrageKey(NewTarget);
@@ -1153,86 +1211,7 @@ void AFlecsCharacter::PerformInteractionTrace()
 	}
 }
 
-void AFlecsCharacter::TryInteract()
-{
-	if (!CurrentInteractionTarget.IsValid()) return;
-
-	UFlecsArtillerySubsystem* FlecsSubsystem = GetWorld()->GetSubsystem<UFlecsArtillerySubsystem>();
-	if (!FlecsSubsystem) return;
-
-	// Capture WeakSelf on game thread — TWeakObjectPtr constructor reads GUObjectArray (NOT thread-safe)
-	TWeakObjectPtr<AFlecsCharacter> WeakSelf = this;
-	FText InteractionTitle = CachedInteractionPrompt;
-	FSkeletonKey TargetKey = CurrentInteractionTarget;
-	int64 CapturedInventoryId = InventoryEntityId;
-
-	FlecsSubsystem->EnqueueCommand([FlecsSubsystem, TargetKey, WeakSelf, InteractionTitle, CapturedInventoryId]()
-	{
-		flecs::entity Target = FlecsSubsystem->GetEntityForBarrageKey(TargetKey);
-		if (!Target.is_valid() || Target.has<FTagDead>() || !Target.has<FTagInteractable>())
-		{
-			UE_LOG(LogTemp, Warning, TEXT("Interact: Target %llu no longer valid/interactable"),
-				static_cast<uint64>(TargetKey));
-			return;
-		}
-
-		// Determine interaction type from entity tags
-		if (Target.has<FTagPickupable>() && Target.has<FTagItem>())
-		{
-			if (CapturedInventoryId == 0)
-			{
-				UE_LOG(LogTemp, Warning, TEXT("Interact: Cannot pick up - no inventory (InventoryEntityId=0)"));
-				return;
-			}
-
-			int32 PickedUp = 0;
-			const bool bSuccess = UFlecsContainerLibrary::PickupWorldItem(
-				FlecsSubsystem, static_cast<int64>(Target.id()), CapturedInventoryId, PickedUp);
-
-			if (bSuccess)
-			{
-				UE_LOG(LogTemp, Log, TEXT("Interact: Picked up %d of entity %llu (Key=%llu) into inventory %lld"),
-					PickedUp, Target.id(), static_cast<uint64>(TargetKey), CapturedInventoryId);
-			}
-			else
-			{
-				UE_LOG(LogTemp, Log, TEXT("Interact: Inventory full, cannot pick up entity %llu (Key=%llu)"),
-					Target.id(), static_cast<uint64>(TargetKey));
-				return;
-			}
-		}
-		else if (Target.has<FTagContainer>())
-		{
-			// Open container UI — dispatch to game thread
-			const int64 ContainerEntityId = static_cast<int64>(Target.id());
-			UE_LOG(LogTemp, Log, TEXT("Interact: Open container %lld (Key=%llu)"),
-				ContainerEntityId, static_cast<uint64>(TargetKey));
-			AsyncTask(ENamedThreads::GameThread, [WeakSelf, ContainerEntityId, InteractionTitle]()
-			{
-				if (AFlecsCharacter* Self = WeakSelf.Get())
-				{
-					Self->OpenLootPanel(ContainerEntityId, InteractionTitle);
-				}
-			});
-		}
-		else
-		{
-			// Generic use
-			UE_LOG(LogTemp, Log, TEXT("Interact: Use entity %llu (Key=%llu)"),
-				Target.id(), static_cast<uint64>(TargetKey));
-		}
-
-		// If single-use, remove interactable tag (skip for pickups — FTagDead handles full consumption)
-		if (!Target.has<FTagPickupable>())
-		{
-			const FInteractionStatic* InterStatic = Target.try_get<FInteractionStatic>();
-			if (InterStatic && InterStatic->bSingleUse)
-			{
-				Target.remove<FTagInteractable>();
-			}
-		}
-	});
-}
+// TryInteract() removed — replaced by HandleInteractionInput() in FlecsCharacter_Interaction.cpp
 
 FText AFlecsCharacter::GetInteractionPrompt() const
 {

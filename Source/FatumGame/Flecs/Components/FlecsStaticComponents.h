@@ -244,12 +244,11 @@ struct FContainerStatic
 
 /**
  * Static interaction data - lives in PREFAB, shared by all entities of this type.
- * Contains immutable interaction rules. No instance component needed.
+ * Contains immutable interaction rules.
  *
- * The interaction type is determined at runtime from entity tags:
- * - FTagPickupable + FTagItem → pickup
- * - FTagContainer → open container
- * - else → generic use
+ * InteractionType and InstantAction are cached here from InteractionProfile
+ * so the sim thread can dispatch instant actions without reading UDataAsset.
+ * Focus/Hold params are game-thread only — read from FEntityDefinitionRef→InteractionProfile.
  */
 struct FInteractionStatic
 {
@@ -258,6 +257,12 @@ struct FInteractionStatic
 
 	/** If true, entity becomes non-interactable after first use */
 	bool bSingleUse = false;
+
+	/** Interaction type (EInteractionType cast to uint8) */
+	uint8 InteractionType = 0;
+
+	/** Instant action type (EInstantAction cast to uint8, for Instant/Hold completion) */
+	uint8 InstantAction = 0;
 };
 
 // ═══════════════════════════════════════════════════════════════

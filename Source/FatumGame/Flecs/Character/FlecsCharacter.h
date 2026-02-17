@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Character.h"
 #include "SkeletonTypes.h"
+#include "FlecsInteractionTypes.h"
 #include <atomic>
 #include "FlecsCharacter.generated.h"
 
@@ -12,6 +13,8 @@ class UFlecsEntityDefinition;
 class UFlecsHUDWidget;
 class UFlecsInventoryWidget;
 class UFlecsLootPanel;
+class UFlecsInteractionProfile;
+class UFlecsUIPanel;
 class UInputAction;
 class UInputMappingContext;
 class USpringArmComponent;
@@ -95,6 +98,10 @@ public:
 	/** Toggle Inventory Input Action (I) */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input")
 	TObjectPtr<UInputAction> InventoryAction;
+
+	/** Cancel / Exit Input Action (Escape) — closes panels, exits focus, cancels hold */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input")
+	TObjectPtr<UInputAction> CancelAction;
 
 	// ═══════════════════════════════════════════════════════════════
 	// HEALTH
@@ -312,9 +319,21 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Flecs|Interaction")
 	FText GetInteractionPrompt() const;
 
+	/** Is the character currently in an interaction state (not Gameplay)? */
+	UFUNCTION(BlueprintPure, Category = "Flecs|Interaction")
+	bool IsInInteraction() const;
+
 	/** Called when interaction target changes (for UI updates) */
 	UFUNCTION(BlueprintImplementableEvent, Category = "Flecs|Events")
 	void OnInteractionTargetChanged(bool bHasTarget, FSkeletonKey TargetKey);
+
+	/** Called when interaction state changes */
+	UFUNCTION(BlueprintImplementableEvent, Category = "Flecs|Events")
+	void OnInteractionStateChanged(uint8 NewState);
+
+	/** Called when hold progress updates (0.0 to 1.0) */
+	UFUNCTION(BlueprintImplementableEvent, Category = "Flecs|Events")
+	void OnHoldProgressChanged(float Progress);
 
 	// ═══════════════════════════════════════════════════════════════
 	// HUD
@@ -426,6 +445,12 @@ protected:
 	/** Called when SpawnItem (E) is pressed */
 	void OnSpawnItem(const FInputActionValue& Value);
 
+	/** Called when Interact (E) is released — for Hold cancellation */
+	void OnInteractReleased(const FInputActionValue& Value);
+
+	/** Called when Cancel (Escape) is pressed — for Focus exit */
+	void OnInteractCancel(const FInputActionValue& Value);
+
 	/** Called when DestroyItem (F) is pressed */
 	void OnDestroyItem(const FInputActionValue& Value);
 
@@ -462,7 +487,7 @@ private:
 	void CheckHealthChanges();
 
 	// ─────────────────────────────────────────────────────────
-	// INTERACTION (private)
+	// INTERACTION DETECTION (private)
 	// ─────────────────────────────────────────────────────────
 
 	/** Current interaction target (SkeletonKey of a Barrage body) */
@@ -471,12 +496,69 @@ private:
 	/** Cached prompt text for current target (avoids cross-thread reads) */
 	FText CachedInteractionPrompt;
 
+	/** Cached interaction type for current target */
+	EInteractionType CachedInteractionType = EInteractionType::Instant;
+
+	/** Cached hold duration (for UI preview) */
+	float CachedHoldDuration = 0.f;
+
 	/** Timer handle for 10 Hz interaction raycast */
 	FTimerHandle InteractionTraceTimerHandle;
 
 	/** Perform periodic raycast to detect interactable entities */
 	void PerformInteractionTrace();
 
-	/** Execute interaction with CurrentInteractionTarget */
-	void TryInteract();
+	// ─────────────────────────────────────────────────────────
+	// INTERACTION STATE MACHINE (private)
+	// Implementation in FlecsCharacter_Interaction.cpp
+	// ─────────────────────────────────────────────────────────
+
+	/** Current interaction state */
+	EInteractionState InteractionState = EInteractionState::Gameplay;
+
+	/** Cached interaction profile for active interaction (valid while state != Gameplay) */
+	const UFlecsInteractionProfile* ActiveInteractionProfile = nullptr;
+
+	/** Cached SkeletonKey of the entity being interacted with */
+	FSkeletonKey ActiveInteractionTargetKey;
+
+	// Focus camera state
+	FTransform SavedCameraTransform = FTransform::Identity;
+	float SavedCameraFOV = 90.f;
+	FTransform FocusCameraTarget = FTransform::Identity;
+	float FocusTargetFOV = 0.f;
+	float FocusLerpAlpha = 0.f;
+	float CurrentTransitionDuration = 0.4f;
+
+	/** Focus panel widget instance (created per-interaction, destroyed on exit) */
+	UPROPERTY()
+	TObjectPtr<UFlecsUIPanel> ActiveFocusPanel;
+
+	// Hold state
+	float HoldAccumulator = 0.f;
+	float HoldRequiredDuration = 1.f;
+	float HoldTargetLostTime = 0.f; // Grace period for 10Hz trace flicker
+	bool bHoldCanCancel = true;
+	bool bInteractKeyHeld = false;
+
+	// State machine methods (implemented in FlecsCharacter_Interaction.cpp)
+	void HandleInteractionInput();
+	void HandleInteractionRelease();
+	void HandleInteractionCancel();
+	void TickInteractionStateMachine(float DeltaTime);
+	void BeginFocusTransition();
+	void BeginUnfocusTransition(float OverrideDuration = 0.f);
+	void RestoreCameraControl();
+	FTransform ComputeFocusCameraTransform(FVector EntityWorldPosition, const UFlecsInteractionProfile* Profile) const;
+	void ApplyFocusCameraLerp(float Alpha);
+	void BeginHoldInteraction();
+	void CancelHoldInteraction();
+	void CompleteHoldInteraction();
+	void ForceCancelInteraction();
+	// Dispatch functions moved to UFlecsInteractionLibrary (static Blueprint library)
+	void SetInteractionState(EInteractionState NewState);
+	const UFlecsInteractionProfile* ResolveInteractionProfile(FSkeletonKey TargetKey) const;
+	bool GetEntityWorldPosition(FSkeletonKey EntityKey, FVector& OutPosition) const;
+	void OpenFocusPanel();
+	void CloseFocusPanel();
 };

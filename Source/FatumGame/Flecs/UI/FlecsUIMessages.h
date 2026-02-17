@@ -26,6 +26,8 @@ UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_UI_Death);
 UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_UI_Ammo);
 UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_UI_Reload);
 UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_UI_Interaction);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_UI_HoldProgress);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_UI_InteractionState);
 
 // ═══════════════════════════════════════════════════════════════
 // MESSAGE STRUCTS
@@ -113,7 +115,7 @@ struct FUIReloadMessage
 
 /**
  * Interaction target changed. Fired by interaction trace on game thread.
- * Prompt text is NOT in this message — read from EntityDefinition→InteractionProfile.
+ * Prompt text is NOT in this message — read from EntityDefinition->InteractionProfile.
  */
 USTRUCT(BlueprintType)
 struct FUIInteractionMessage
@@ -131,5 +133,51 @@ struct FUIInteractionMessage
 	/** Whether there is a valid interaction target */
 	UPROPERTY(BlueprintReadOnly, Category = "UI")
 	bool bHasTarget = false;
+
+	/** Interaction type of the target (EInteractionType cast) — for "Hold E" vs "Press E" */
+	UPROPERTY(BlueprintReadOnly, Category = "UI")
+	uint8 InteractionType = 0;
+
+	/** Hold duration if type is Hold (for UI preview) */
+	UPROPERTY(BlueprintReadOnly, Category = "UI")
+	float HoldDuration = 0.f;
+};
+
+/** Hold interaction progress. Fired by character during Hold state. */
+USTRUCT(BlueprintType)
+struct FUIHoldProgressMessage
+{
+	GENERATED_BODY()
+
+	/** Progress 0.0 to 1.0 */
+	UPROPERTY(BlueprintReadOnly, Category = "UI")
+	float Progress = 0.f;
+
+	/** Total hold duration (seconds) */
+	UPROPERTY(BlueprintReadOnly, Category = "UI")
+	float TotalDuration = 0.f;
+
+	/** True when the hold is finished (either complete or cancelled) */
+	UPROPERTY(BlueprintReadOnly, Category = "UI")
+	bool bFinished = false;
+
+	/** True only on successful completion (false on cancel) */
+	UPROPERTY(BlueprintReadOnly, Category = "UI")
+	bool bCompleted = false;
+};
+
+/** Interaction state changed. Fired by character state machine. */
+USTRUCT(BlueprintType)
+struct FUIInteractionStateMessage
+{
+	GENERATED_BODY()
+
+	/** Current interaction state (EInteractionState cast) */
+	UPROPERTY(BlueprintReadOnly, Category = "UI")
+	uint8 State = 0;
+
+	/** BarrageKey of the entity being interacted with */
+	UPROPERTY(BlueprintReadOnly, Category = "UI")
+	FSkeletonKey TargetKey;
 };
 

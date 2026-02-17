@@ -376,6 +376,28 @@ struct FDebrisInstance
 // FRAGMENTATION DATA
 // ═══════════════════════════════════════════════════════════════
 
+// ═══════════════════════════════════════════════════════════════
+// INTERACTION INSTANCE
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Mutable per-entity interaction state.
+ * Used for toggleable entities (switches, levers) and use counting.
+ * NOT a USTRUCT — pure C++ for Flecs performance.
+ */
+struct FInteractionInstance
+{
+	/** Current toggle state (for Toggle interactions) */
+	bool bToggleState = false;
+
+	/** How many times this entity has been interacted with */
+	int32 UseCount = 0;
+};
+
+// ═══════════════════════════════════════════════════════════════
+// FRAGMENTATION DATA
+// ═══════════════════════════════════════════════════════════════
+
 /**
  * Fragmentation event data — stored on collision pair entity.
  * Contains impact info needed by FragmentationSystem to apply impulse.

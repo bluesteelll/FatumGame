@@ -39,6 +39,14 @@ void UFlecsHUDWidget::NativeConstruct()
 	InteractionHandle = MsgSub->RegisterListener<FUIInteractionMessage>(
 		TAG_UI_Interaction, this,
 		[this](FGameplayTag Tag, const FUIInteractionMessage& Msg) { HandleInteraction(Tag, Msg); });
+
+	HoldProgressHandle = MsgSub->RegisterListener<FUIHoldProgressMessage>(
+		TAG_UI_HoldProgress, this,
+		[this](FGameplayTag Tag, const FUIHoldProgressMessage& Msg) { HandleHoldProgress(Tag, Msg); });
+
+	InteractionStateHandle = MsgSub->RegisterListener<FUIInteractionStateMessage>(
+		TAG_UI_InteractionState, this,
+		[this](FGameplayTag Tag, const FUIInteractionStateMessage& Msg) { HandleInteractionState(Tag, Msg); });
 }
 
 void UFlecsHUDWidget::NativeDestruct()
@@ -48,6 +56,8 @@ void UFlecsHUDWidget::NativeDestruct()
 	AmmoHandle.Unregister();
 	ReloadHandle.Unregister();
 	InteractionHandle.Unregister();
+	HoldProgressHandle.Unregister();
+	InteractionStateHandle.Unregister();
 
 	Super::NativeDestruct();
 }
@@ -113,7 +123,17 @@ void UFlecsHUDWidget::HandleInteraction(FGameplayTag Channel, const FUIInteracti
 	{
 		Prompt = ResolveInteractionPrompt(Msg.TargetKey);
 	}
-	OnInteractionChanged(Msg.bHasTarget, Prompt);
+	OnInteractionChanged(Msg.bHasTarget, Prompt, Msg.InteractionType, Msg.HoldDuration);
+}
+
+void UFlecsHUDWidget::HandleHoldProgress(FGameplayTag Channel, const FUIHoldProgressMessage& Msg)
+{
+	OnHoldProgress(Msg.Progress, Msg.TotalDuration, Msg.bFinished, Msg.bCompleted);
+}
+
+void UFlecsHUDWidget::HandleInteractionState(FGameplayTag Channel, const FUIInteractionStateMessage& Msg)
+{
+	OnInteractionStateChanged(Msg.State);
 }
 
 // ═══════════════════════════════════════════════════════════════
