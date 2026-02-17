@@ -79,6 +79,20 @@ public:
 		meta = (EditCondition = "bOverrideFocusCamera"))
 	FRotator FocusCameraRotationOverride = FRotator::ZeroRotator;
 
+	/** Override interaction angle restriction from InteractionProfile */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flecs Entity|Overrides")
+	bool bOverrideInteractionAngle = false;
+
+	/** Half-angle of the interaction cone in degrees (override) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flecs Entity|Overrides",
+		meta = (EditCondition = "bOverrideInteractionAngle", ClampMin = "10", ClampMax = "180"))
+	float InteractionAngleOverride = 90.f;
+
+	/** Direction the cone faces in entity local space (override) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flecs Entity|Overrides",
+		meta = (EditCondition = "bOverrideInteractionAngle"))
+	FVector InteractionDirectionOverride = FVector::ForwardVector;
+
 	// ═══════════════════════════════════════════════════════════════
 	// SPAWNER SETTINGS
 	// ═══════════════════════════════════════════════════════════════

@@ -58,6 +58,24 @@ public:
 			EditConditionHides, ClampMin = "0.05", ClampMax = "0.5"))
 	float DamageCancelTransitionTime = 0.15f;
 
+	/** Restrict interaction to a cone in front of the entity.
+	 *  If true, the player must be within InteractionAngle degrees of InteractionDirection. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Interaction")
+	bool bRestrictAngle = false;
+
+	/** Half-angle of the interaction cone (degrees). 90 = hemisphere, 180 = full sphere.
+	 *  Only used when bRestrictAngle is true. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Interaction",
+		meta = (EditCondition = "bRestrictAngle", EditConditionHides, ClampMin = "10", ClampMax = "180"))
+	float InteractionAngle = 90.f;
+
+	/** Direction the interaction cone faces, in entity local space.
+	 *  (1,0,0) = entity forward (+X). Rotates with the object.
+	 *  Only used when bRestrictAngle is true. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Interaction",
+		meta = (EditCondition = "bRestrictAngle", EditConditionHides))
+	FVector InteractionDirection = FVector::ForwardVector;
+
 	// =================================================================
 	// INSTANT
 	// =================================================================

@@ -1145,7 +1145,51 @@ void AFlecsCharacter::PerformInteractionTrace()
 
 				if (HitResult->Distance <= MaxRange)
 				{
-					NewTarget = HitKey;
+					// Check angle restriction
+					bool bAngleOk = true;
+
+					// Resolve angle constraint: per-instance override > prefab default
+					bool bHasAngleRestriction = false;
+					float AngleCosine = 0.f;
+					FVector AngleDir = FVector::ForwardVector;
+
+					const FInteractionAngleOverride* AngleOverride = HitEntity.try_get<FInteractionAngleOverride>();
+					if (AngleOverride)
+					{
+						bHasAngleRestriction = true;
+						AngleCosine = AngleOverride->AngleCosine;
+						AngleDir = AngleOverride->Direction;
+					}
+					else if (InterStatic && InterStatic->bRestrictAngle)
+					{
+						bHasAngleRestriction = true;
+						AngleCosine = InterStatic->AngleCosine;
+						AngleDir = InterStatic->AngleDirection;
+					}
+
+					if (bHasAngleRestriction)
+					{
+						// Get entity rotation to transform local direction to world space
+						FQuat EntityRot = FQuat(FBarragePrimitive::OptimisticGetAbsoluteRotation(Prim));
+						FVector WorldAngleDir = EntityRot.RotateVector(AngleDir);
+
+						// Vector from camera to entity (matches FocusCameraPosition convention:
+						// camera sits behind the "front" face and looks toward it)
+						FVector EntityPos = FVector(FBarragePrimitive::GetPosition(Prim));
+						FVector ToEntity = (EntityPos - CameraLocation).GetSafeNormal();
+
+						float Dot = FVector::DotProduct(WorldAngleDir, ToEntity);
+						bAngleOk = (Dot >= AngleCosine);
+
+						UE_LOG(LogTemp, Warning, TEXT("AngleCheck: EntityPos=%s CamPos=%s ToEntity=%s WorldDir=%s Dot=%.3f Cos=%.3f Ok=%d"),
+							*EntityPos.ToString(), *CameraLocation.ToString(), *ToEntity.ToString(),
+							*WorldAngleDir.ToString(), Dot, AngleCosine, bAngleOk);
+					}
+
+					if (bAngleOk)
+					{
+						NewTarget = HitKey;
+					}
 				}
 			}
 		}

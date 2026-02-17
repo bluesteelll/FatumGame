@@ -160,6 +160,22 @@ flecs::entity UFlecsArtillerySubsystem::GetOrCreateEntityPrefab(UFlecsEntityDefi
 		InteractionStatic.bSingleUse = InteractionProf->bSingleUse;
 		InteractionStatic.InteractionType = static_cast<uint8>(InteractionProf->InteractionType);
 		InteractionStatic.InstantAction = static_cast<uint8>(InteractionProf->InstantAction);
+		InteractionStatic.bRestrictAngle = InteractionProf->bRestrictAngle;
+		if (InteractionProf->bRestrictAngle)
+		{
+			InteractionStatic.AngleCosine = FMath::Cos(FMath::DegreesToRadians(InteractionProf->InteractionAngle));
+			FVector Dir = InteractionProf->InteractionDirection.GetSafeNormal();
+			if (ensureMsgf(!Dir.IsNearlyZero(),
+				TEXT("InteractionDirection is zero for '%s', falling back to ForwardVector"),
+				*EntityDefinition->GetName()))
+			{
+				InteractionStatic.AngleDirection = Dir;
+			}
+			else
+			{
+				InteractionStatic.AngleDirection = FVector::ForwardVector;
+			}
+		}
 		Prefab.set<FInteractionStatic>(InteractionStatic);
 	}
 

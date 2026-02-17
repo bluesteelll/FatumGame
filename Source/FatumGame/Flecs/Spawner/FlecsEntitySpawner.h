@@ -180,6 +180,24 @@ struct FATUMGAME_API FEntitySpawnRequest
 	FRotator FocusCameraRotationOverride = FRotator::ZeroRotator;
 
 	// ═══════════════════════════════════════════════════════════════
+	// INTERACTION ANGLE OVERRIDE (per-instance)
+	// ═══════════════════════════════════════════════════════════════
+
+	/** Override interaction angle restriction for this specific instance */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Overrides")
+	bool bOverrideInteractionAngle = false;
+
+	/** Half-angle of the interaction cone in degrees (override) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Overrides",
+		meta = (EditCondition = "bOverrideInteractionAngle", ClampMin = "10", ClampMax = "180"))
+	float InteractionAngleOverride = 90.f;
+
+	/** Direction the cone faces in entity local space (override) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Overrides",
+		meta = (EditCondition = "bOverrideInteractionAngle"))
+	FVector InteractionDirectionOverride = FVector::ForwardVector;
+
+	// ═══════════════════════════════════════════════════════════════
 	// C++ FLUENT BUILDER
 	// ═══════════════════════════════════════════════════════════════
 
@@ -352,6 +370,15 @@ struct FATUMGAME_API FEntitySpawnRequest
 		bOverrideFocusCamera = true;
 		FocusCameraPositionOverride = InPosition;
 		FocusCameraRotationOverride = InRotation;
+		return *this;
+	}
+
+	/** Override interaction angle restriction (entity local space) */
+	FEntitySpawnRequest& WithInteractionAngleOverride(float InAngle, FVector InDirection)
+	{
+		bOverrideInteractionAngle = true;
+		InteractionAngleOverride = InAngle;
+		InteractionDirectionOverride = InDirection;
 		return *this;
 	}
 

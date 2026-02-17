@@ -406,6 +406,11 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 		FVector FocusCameraPositionOverride;
 		FRotator FocusCameraRotationOverride;
 
+		// Interaction angle override (per-instance)
+		bool bOverrideInteractionAngle;
+		float InteractionAngleCosine;
+		FVector InteractionAngleDirection;
+
 		// Death VFX
 		bool bHasDeathEffect;
 		UNiagaraSystem* DeathEffect;
@@ -461,6 +466,20 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 	Data.bOverrideFocusCamera = Request.bOverrideFocusCamera;
 	Data.FocusCameraPositionOverride = Request.FocusCameraPositionOverride;
 	Data.FocusCameraRotationOverride = Request.FocusCameraRotationOverride;
+
+	// Interaction angle override (pre-compute cosine for fast dot-product check)
+	Data.bOverrideInteractionAngle = Request.bOverrideInteractionAngle;
+	if (Request.bOverrideInteractionAngle)
+	{
+		Data.InteractionAngleCosine = FMath::Cos(FMath::DegreesToRadians(Request.InteractionAngleOverride));
+		FVector Dir = Request.InteractionDirectionOverride.GetSafeNormal();
+		Data.InteractionAngleDirection = Dir.IsNearlyZero() ? FVector::ForwardVector : Dir;
+	}
+	else
+	{
+		Data.InteractionAngleCosine = -1.f;
+		Data.InteractionAngleDirection = FVector::ForwardVector;
+	}
 
 	// Death VFX
 	Data.bHasDeathEffect = EffectiveNiagara && EffectiveNiagara->HasDeathEffect();
@@ -650,6 +669,15 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 			CamOverride.CameraPosition = Data.FocusCameraPositionOverride;
 			CamOverride.CameraRotation = Data.FocusCameraRotationOverride;
 			Entity.set<FFocusCameraOverride>(CamOverride);
+		}
+
+		// Interaction angle override (per-instance, read during interaction trace)
+		if (Data.bOverrideInteractionAngle)
+		{
+			FInteractionAngleOverride AngleOverride;
+			AngleOverride.AngleCosine = Data.InteractionAngleCosine;
+			AngleOverride.Direction = Data.InteractionAngleDirection;
+			Entity.set<FInteractionAngleOverride>(AngleOverride);
 		}
 
 		// Death VFX component (read by DeadEntityCleanupSystem)

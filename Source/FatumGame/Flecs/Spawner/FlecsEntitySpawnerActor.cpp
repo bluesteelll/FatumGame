@@ -77,6 +77,13 @@ FSkeletonKey AFlecsEntitySpawner::SpawnEntity()
 		Request.FocusCameraRotationOverride = FocusCameraRotationOverride;
 	}
 
+	if (bOverrideInteractionAngle)
+	{
+		Request.bOverrideInteractionAngle = true;
+		Request.InteractionAngleOverride = InteractionAngleOverride;
+		Request.InteractionDirectionOverride = InteractionDirectionOverride;
+	}
+
 	// Scale override: modify the render profile scale if needed
 	// Note: This is applied via the spawn request, the actual implementation
 	// would need to handle scale override in SpawnEntity or we create a temp profile

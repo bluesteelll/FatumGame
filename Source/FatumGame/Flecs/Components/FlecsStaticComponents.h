@@ -255,6 +255,16 @@ struct FInteractionStatic
 
 	/** Instant action type (EInstantAction cast to uint8, for Instant/Hold completion) */
 	uint8 InstantAction = 0;
+
+	/** If true, interaction is restricted to a cone defined by AngleCosine/AngleDirection */
+	bool bRestrictAngle = false;
+
+	/** Cosine of half-angle for the interaction cone (pre-computed for fast dot-product check).
+	 *  Default -1 (cos(180°) = full sphere = no restriction) as defense-in-depth. */
+	float AngleCosine = -1.f;
+
+	/** Direction the cone faces in entity local space (normalized) */
+	FVector AngleDirection = FVector::ForwardVector;
 };
 
 // ═══════════════════════════════════════════════════════════════
@@ -287,6 +297,24 @@ struct FFocusCameraOverride
 
 	/** Camera rotation in entity local space */
 	FRotator CameraRotation = FRotator::ZeroRotator;
+};
+
+// ═══════════════════════════════════════════════════════════════
+// INTERACTION ANGLE OVERRIDE (per-instance)
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Per-instance override for interaction angle restriction.
+ * If present on entity, overrides InteractionProfile's angle settings.
+ * Values are in entity local space (rotates with the object).
+ */
+struct FInteractionAngleOverride
+{
+	/** Cosine of half-angle of the interaction cone (pre-computed) */
+	float AngleCosine = -1.f;
+
+	/** Direction the cone faces in entity local space (normalized) */
+	FVector Direction = FVector::ForwardVector;
 };
 
 // ═══════════════════════════════════════════════════════════════
