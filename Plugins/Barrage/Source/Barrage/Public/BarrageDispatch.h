@@ -130,6 +130,18 @@ public:
 	/** Synchronously change body motion type (Static/Dynamic/Kinematic). Use from sim thread. */
 	void SetBodyMotionType(FBarrageKey BarrageKey, JPH::EMotionType MotionType, bool bActivate = true);
 
+	/** Synchronously override a body's mass (kg). Recalculates inertia from shape. Use from sim thread. */
+	void SetBodyMass(FBarrageKey BarrageKey, float MassKg);
+
+	/** Synchronously zero both linear and angular velocity. Use from sim thread for pool body reset. */
+	void ResetBodyVelocities(FBarrageKey BarrageKey);
+
+	/** Synchronously apply impulse (kg·cm/s in UE coordinates) to a body's center of mass.
+	 *  Internally converts to Jolt units and calls body_interface->AddImpulse().
+	 *  Safe to call from Flecs worker threads during progress() (i.e., AFTER StepWorld completes).
+	 *  Do NOT call from inside Jolt job threads while PhysicsSystem::Update() is executing. */
+	void AddBodyImpulse(FBarrageKey BarrageKey, FVector ImpulseUE);
+
 	// Wake up all sleeping bodies in a given area - useful when removing support from stacked objects
 	void ActivateBodiesInArea(const FVector3d& Center, double HalfExtent);
 

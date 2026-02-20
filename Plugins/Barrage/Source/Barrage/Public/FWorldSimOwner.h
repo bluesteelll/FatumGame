@@ -480,6 +480,43 @@ public:
 			bActivate ? JPH::EActivation::Activate : JPH::EActivation::DontActivate);
 	}
 
+	/**
+	 * Synchronously override a body's mass (kg). Recalculates inertia from shape geometry.
+	 * Use from sim thread after acquiring a pooled body.
+	 */
+	void SetBodyMass(FBarrageKey BarrageKey, float MassKg)
+	{
+		if (!body_interface || MassKg <= 0.f) return;
+
+		JPH::BodyID BodyID;
+		if (!BarrageToJoltMapping->find(BarrageKey, BodyID) || BodyID.IsInvalid()) return;
+
+		JPH::BodyLockWrite lock(physics_system->GetBodyLockInterface(), BodyID);
+		if (!lock.Succeeded()) return;
+
+		JPH::Body& JoltBody = lock.GetBody();
+		if (!JoltBody.IsDynamic()) return;
+
+		// Get shape-derived mass properties, then scale to desired mass
+		JPH::MassProperties msp = JoltBody.GetShape()->GetMassProperties();
+		msp.ScaleToMass(MassKg);
+		JoltBody.GetMotionProperties()->SetMassProperties(JPH::EAllowedDOFs::All, msp);
+	}
+
+	/**
+	 * Synchronously zero both linear and angular velocity on a body.
+	 * Use from sim thread to fully reset a pooled body's motion state.
+	 */
+	void ResetBodyVelocities(FBarrageKey BarrageKey)
+	{
+		if (!body_interface) return;
+
+		JPH::BodyID BodyID;
+		if (!BarrageToJoltMapping->find(BarrageKey, BodyID) || BodyID.IsInvalid()) return;
+
+		body_interface->SetLinearAndAngularVelocity(BodyID, JPH::Vec3::sZero(), JPH::Vec3::sZero());
+	}
+
 	// Wake up all sleeping bodies in a given area - useful when removing support from stacked objects
 	void ActivateBodiesInArea(const FVector3d& Center, double HalfExtent)
 	{

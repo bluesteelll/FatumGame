@@ -416,6 +416,38 @@ void UBarrageDispatch::SetBodyMotionType(FBarrageKey BarrageKey, JPH::EMotionTyp
 	}
 }
 
+void UBarrageDispatch::SetBodyMass(FBarrageKey BarrageKey, float MassKg)
+{
+	if (JoltGameSim)
+	{
+		JoltGameSim->SetBodyMass(BarrageKey, MassKg);
+	}
+}
+
+void UBarrageDispatch::ResetBodyVelocities(FBarrageKey BarrageKey)
+{
+	if (JoltGameSim)
+	{
+		JoltGameSim->ResetBodyVelocities(BarrageKey);
+	}
+}
+
+void UBarrageDispatch::AddBodyImpulse(FBarrageKey BarrageKey, FVector ImpulseUE)
+{
+	if (!JoltGameSim || !JoltGameSim->body_interface) return;
+
+	JPH::BodyID BodyId;
+	if (!JoltGameSim->GetBodyIDOrDefault(BarrageKey, BodyId) || BodyId.IsInvalid()) return;
+
+	// UE impulse (kg·cm/s) → Jolt impulse (kg·m/s): divide by 100, swap Y↔Z
+	JPH::Vec3 JoltImpulse(
+		ImpulseUE.X / 100.0,
+		ImpulseUE.Z / 100.0,
+		ImpulseUE.Y / 100.0);
+
+	JoltGameSim->body_interface->AddImpulse(BodyId, JoltImpulse);
+}
+
 void UBarrageDispatch::ActivateBodiesInArea(const FVector3d& Center, double HalfExtent)
 {
 	if (JoltGameSim)

@@ -52,9 +52,16 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics", meta = (ClampMin = "0.0"))
 	float ConstraintBreakTorque = 0.0f;
 
-	/** Scale projectile impulse applied to nearest fragments on hit */
+	/** Effective projectile mass for impulse transfer (kg).
+	 *  Controls how much momentum the projectile transfers to fragments on first hit.
+	 *  ~0.1 = pistol, ~0.3 = rifle, ~1.0 = heavy ordnance.
+	 *  Internally: impulse = projectile_speed * this value, applied via Jolt AddImpulse. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics", meta = (ClampMin = "0.0"))
-	float ImpulseMultiplier = 1.0f;
+	float ImpulseMultiplier = 0.15f;
+
+	/** Mass of each fragment body in kilograms. Higher = heavier debris, less scatter. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics", meta = (ClampMin = "0.01"))
+	float FragmentMassKg = 1.0f;
 
 	/** Anchor bottom fragments to the world via breakable constraints.
 	 *  All bottom-layer fragments (lowest Z) get a Fixed constraint to Body::sFixedToWorld.

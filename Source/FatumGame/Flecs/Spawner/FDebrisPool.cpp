@@ -80,8 +80,11 @@ void FDebrisPool::Release(FSkeletonKey EntityKey)
 
 	Slot.bActive = false;
 
-	// Zero velocity and move to DEBRIS layer (only collides with NON_MOVING, effectively dormant)
-	FBarragePrimitive::SetVelocity(FVector3d::ZeroVector, Slot.Primitive);
+	// Synchronously zero BOTH linear and angular velocity, then move to DEBRIS layer.
+	// Must be synchronous (not queued) so the body is fully reset before re-Acquire.
+	// Old code only zeroed linear velocity via queued SetVelocity — angular velocity
+	// carried over to next Acquire, causing inconsistent impulse behavior.
+	CachedDispatch->ResetBodyVelocities(Slot.Primitive->KeyIntoBarrage);
 	CachedDispatch->SetBodyObjectLayer(Slot.Primitive->KeyIntoBarrage, Layers::DEBRIS);
 
 	FreeList.Add(SlotIndex);

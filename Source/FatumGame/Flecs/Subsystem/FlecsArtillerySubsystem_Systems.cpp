@@ -720,7 +720,11 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 				return;
 			}
 
-			const FDestructibleStatic* DestrStatic = TargetEntity.try_get<FDestructibleStatic>();
+			// Use try_get_mut so we can immediately invalidate the component to prevent
+			// duplicate fragmentation from multiple contact events in the same tick.
+			// (Flecs deferred add<FTagDead> is NOT visible to other iterations of each(),
+			//  but direct writes to committed storage via try_get_mut ARE visible.)
+			FDestructibleStatic* DestrStatic = TargetEntity.try_get_mut<FDestructibleStatic>();
 			if (!DestrStatic || !DestrStatic->IsValid())
 			{
 				PairEntity.add<FTagCollisionProcessed>();
@@ -728,6 +732,9 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 			}
 
 			UFlecsDestructibleProfile* Profile = DestrStatic->Profile;
+
+			// Immediately invalidate to block duplicate fragmentation this tick
+			DestrStatic->Profile = nullptr;
 			UFlecsDestructibleGeometry* Geometry = Profile->Geometry;
 			if (!Geometry || Geometry->Fragments.Num() == 0)
 			{
@@ -823,6 +830,9 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 					Pool->Release(FragKey);
 					continue;
 				}
+
+				// Override fragment body mass from profile
+				CachedBarrageDispatch->SetBodyMass(FragPrim->KeyIntoBarrage, Profile->FragmentMassKg);
 
 				// Create Flecs entity for this fragment
 				flecs::entity FragEntity = World.entity();
@@ -1068,13 +1078,19 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 			}
 
 			// ─────────────────────────────────────────────────────
-			// Apply impulse to nearest fragment
+			// Apply impulse to nearest fragment (mass-weighted via Jolt AddImpulse)
+			// Uses body_interface->AddImpulse: Δv = impulse / mass.
+			// This matches Jolt's own contact resolver, so first-hit and
+			// subsequent-hit impulses are physically consistent.
 			// ─────────────────────────────────────────────────────
 			if (FragData.ImpactImpulse > 0.f)
 			{
 				const FVector ImpulseDir = FragData.ImpactDirection.IsNearlyZero()
 					? FVector::UpVector
 					: FragData.ImpactDirection;
+				// ImpactImpulse is projectile speed in cm/s (UE).
+				// ImpulseMultiplier acts as effective projectile mass proxy (kg).
+				// Result: impulse in kg·cm/s — AddBodyImpulse converts to Jolt kg·m/s.
 				const float BaseImpulse = FragData.ImpactImpulse * Profile->ImpulseMultiplier;
 
 				float BestDistSq = TNumericLimits<float>::Max();
@@ -1097,8 +1113,9 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 					FBLet NearestPrim = CachedBarrageDispatch->GetShapeRef(FragmentKeys[BestIdx]);
 					if (FBarragePrimitive::IsNotNull(NearestPrim))
 					{
-						FBarragePrimitive::SetVelocity(
-							FVector3d(ImpulseDir * BaseImpulse), NearestPrim);
+						CachedBarrageDispatch->AddBodyImpulse(
+							NearestPrim->KeyIntoBarrage,
+							FVector(ImpulseDir * BaseImpulse));
 					}
 				}
 			}

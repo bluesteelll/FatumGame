@@ -17,7 +17,10 @@ DECLARE_CYCLE_STAT(TEXT("UFlecsTickerGameLoop::Progress::RunPipeline"),
 DECLARE_DWORD_ACCUMULATOR_STAT(TEXT("UFlecsTickerGameLoop::Progress::RunPipeline::Ticks"),
 	STAT_FlecsTickerGameLoop_Progress_RunPipeline_Ticks, STATGROUP_FlecsTickerGameLoop);
 
-static NO_DISCARD FORCEINLINE int flecs_entity_compare(
+namespace
+{
+
+NO_DISCARD FORCEINLINE int flecs_entity_compare(
 	const ecs_entity_t e1,
 	MAYBE_UNUSED const void* ptr1,
 	const ecs_entity_t e2,
@@ -28,15 +31,15 @@ static NO_DISCARD FORCEINLINE int flecs_entity_compare(
 
 #ifdef FLECS_ENABLE_SYSTEM_PRIORITY
 
-static NO_DISCARD FORCEINLINE int flecs_priority_compare(
+NO_DISCARD FORCEINLINE int flecs_priority_compare(
 	const flecs::entity_t InEntityA,
 	const flecs::SystemPriority* InPtrA,
 	const flecs::entity_t InEntityB,
-	const flecs::SystemPriority* InPtrB) 
+	const flecs::SystemPriority* InPtrB)
 {
 	solid_cassume(InPtrA);
 	solid_cassume(InPtrB);
-	
+
 	if (InPtrA->value == InPtrB->value)
 	{
 		return flecs_entity_compare(InEntityA, InPtrA, InEntityB, InPtrB);
@@ -48,6 +51,8 @@ static NO_DISCARD FORCEINLINE int flecs_priority_compare(
 }
 
 #endif // FLECS_ENABLE_SYSTEM_PRIORITY
+
+} // anonymous namespace
 
 void UFlecsTickerGameLoop::InitializeGameLoop(const TSolidNotNull<UFlecsWorld*> InWorld, const FFlecsEntityHandle& InGameLoopEntity)
 {
