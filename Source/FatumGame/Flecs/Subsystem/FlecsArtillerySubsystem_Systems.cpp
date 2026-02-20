@@ -243,9 +243,11 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 
 			flecs::world& World = *FlecsWorld;
 
-			// Remove broken constraint references from Flecs entities
-			// Query all entities with FFlecsConstraintData
-			World.each([&BrokenConstraints](flecs::entity Entity, FFlecsConstraintData& Data)
+			// Remove broken constraint references from Flecs entities.
+			// When the last constraint breaks, restore the fragment's free mass
+			// (was set to ConstrainedMassKg at spawn to minimize jitter).
+			auto* CachedDispatch = CachedBarrageDispatch;
+			World.each([&BrokenConstraints, CachedDispatch](flecs::entity Entity, FFlecsConstraintData& Data)
 			{
 				bool bChanged = false;
 				for (const FBarrageConstraintKey& BrokenKey : BrokenConstraints)
@@ -259,6 +261,18 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 				if (bChanged && !Data.HasConstraints())
 				{
 					Entity.remove<FTagConstrained>();
+
+					// Restore free mass so the fragment flies with correct physics
+					const FDebrisInstance* Debris = Entity.try_get<FDebrisInstance>();
+					const FBarrageBody* Body = Entity.try_get<FBarrageBody>();
+					if (Debris && Debris->FreeMassKg > 0.f && Body && Body->BarrageKey.IsValid() && CachedDispatch)
+					{
+						FBLet Prim = CachedDispatch->GetShapeRef(Body->BarrageKey);
+						if (FBarragePrimitive::IsNotNull(Prim))
+						{
+							CachedDispatch->SetBodyMass(Prim->KeyIntoBarrage, Debris->FreeMassKg);
+						}
+					}
 				}
 			});
 		});
@@ -831,8 +845,10 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 					continue;
 				}
 
-				// Override fragment body mass from profile
-				CachedBarrageDispatch->SetBodyMass(FragPrim->KeyIntoBarrage, Profile->FragmentMassKg);
+				// Set constrained mass (high → minimal jitter while structure is intact).
+				// FreeMassKg is stored in FDebrisInstance so ConstraintBreakSystem can
+				// restore it when the last constraint on this fragment breaks.
+				CachedBarrageDispatch->SetBodyMass(FragPrim->KeyIntoBarrage, Profile->ConstrainedMassKg);
 
 				// Create Flecs entity for this fragment
 				flecs::entity FragEntity = World.entity();
@@ -849,6 +865,7 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 				DebrisInst.LifetimeRemaining = Profile->DebrisLifetime;
 				DebrisInst.bAutoDestroy = Profile->bAutoDestroyDebris;
 				DebrisInst.PoolSlotIndex = 0; // Marks as pooled (not INDEX_NONE)
+				DebrisInst.FreeMassKg = Profile->FragmentMassKg;
 				FragEntity.set<FDebrisInstance>(DebrisInst);
 
 				FragEntity.add<FTagDebrisFragment>();

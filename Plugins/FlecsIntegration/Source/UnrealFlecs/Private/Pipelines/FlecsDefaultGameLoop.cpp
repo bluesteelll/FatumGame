@@ -11,7 +11,7 @@
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(FlecsDefaultGameLoop)
 
-namespace
+namespace DefaultGameLoopDetail
 {
 
 NO_DISCARD FORCEINLINE int flecs_entity_compare(
@@ -46,7 +46,8 @@ NO_DISCARD FORCEINLINE int flecs_priority_compare(
 
 #endif // FLECS_ENABLE_SYSTEM_PRIORITY
 
-} // anonymous namespace
+} // namespace DefaultGameLoopDetail
+using namespace DefaultGameLoopDetail;
 
 void UFlecsDefaultGameLoop::InitializeGameLoop(TSolidNotNull<UFlecsWorld*> InWorld, const FFlecsEntityHandle& InGameLoopEntity)
 {

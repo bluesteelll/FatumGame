@@ -17,7 +17,7 @@ DECLARE_CYCLE_STAT(TEXT("UFlecsTickerGameLoop::Progress::RunPipeline"),
 DECLARE_DWORD_ACCUMULATOR_STAT(TEXT("UFlecsTickerGameLoop::Progress::RunPipeline::Ticks"),
 	STAT_FlecsTickerGameLoop_Progress_RunPipeline_Ticks, STATGROUP_FlecsTickerGameLoop);
 
-namespace
+namespace TickerGameLoopDetail
 {
 
 NO_DISCARD FORCEINLINE int flecs_entity_compare(
@@ -52,7 +52,8 @@ NO_DISCARD FORCEINLINE int flecs_priority_compare(
 
 #endif // FLECS_ENABLE_SYSTEM_PRIORITY
 
-} // anonymous namespace
+} // namespace TickerGameLoopDetail
+using namespace TickerGameLoopDetail;
 
 void UFlecsTickerGameLoop::InitializeGameLoop(const TSolidNotNull<UFlecsWorld*> InWorld, const FFlecsEntityHandle& InGameLoopEntity)
 {

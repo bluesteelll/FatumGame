@@ -370,6 +370,9 @@ struct FDebrisInstance
 
 	/** Index into FDebrisPool for body reuse. INDEX_NONE = not pooled. */
 	int32 PoolSlotIndex = INDEX_NONE;
+
+	/** Mass to restore when all constraints break (kg). 0 = no mass change. */
+	float FreeMassKg = 0.f;
 };
 
 // ═══════════════════════════════════════════════════════════════

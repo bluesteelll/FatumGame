@@ -59,7 +59,14 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics", meta = (ClampMin = "0.0"))
 	float ImpulseMultiplier = 0.15f;
 
-	/** Mass of each fragment body in kilograms. Higher = heavier debris, less scatter. */
+	/** Mass while fragments are held by constraints (kg).
+	 *  High value = minimal jitter from projectile impacts while structure is intact.
+	 *  When last constraint breaks, mass is restored to FragmentMassKg. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics", meta = (ClampMin = "0.01"))
+	float ConstrainedMassKg = 50.0f;
+
+	/** Mass after fragment is freed from all constraints (kg).
+	 *  Lower = lighter debris, more scatter on break. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics", meta = (ClampMin = "0.01"))
 	float FragmentMassKg = 1.0f;
 
