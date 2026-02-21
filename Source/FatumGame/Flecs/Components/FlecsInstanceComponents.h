@@ -373,6 +373,14 @@ struct FDebrisInstance
 
 	/** Mass to restore when all constraints break (kg). 0 = no mass change. */
 	float FreeMassKg = 0.f;
+
+	/** Deferred impulse (kg·cm/s, UE coords). Applied when fragment is freed.
+	 *  Stored at fragmentation time to avoid jitter on constrained bodies. */
+	FVector PendingImpulse = FVector::ZeroVector;
+
+	/** True if this fragment belongs to a world-anchored structure.
+	 *  Used by ConstraintBreakSystem to detect disconnected groups. */
+	bool bInAnchoredStructure = false;
 };
 
 // ═══════════════════════════════════════════════════════════════

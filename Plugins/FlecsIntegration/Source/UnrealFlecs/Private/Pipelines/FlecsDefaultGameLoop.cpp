@@ -47,7 +47,6 @@ NO_DISCARD FORCEINLINE int flecs_priority_compare(
 #endif // FLECS_ENABLE_SYSTEM_PRIORITY
 
 } // namespace DefaultGameLoopDetail
-using namespace DefaultGameLoopDetail;
 
 void UFlecsDefaultGameLoop::InitializeGameLoop(TSolidNotNull<UFlecsWorld*> InWorld, const FFlecsEntityHandle& InGameLoopEntity)
 {
@@ -63,9 +62,9 @@ void UFlecsDefaultGameLoop::InitializeGameLoop(TSolidNotNull<UFlecsWorld*> InWor
 		.without<FFlecsOutsideMainLoopTag>().up(flecs::DependsOn)
 		.without<FFlecsOutsideMainLoopTag>().up(flecs::ChildOf)
 		#ifdef FLECS_ENABLE_SYSTEM_PRIORITY
-		.order_by<flecs::SystemPriority>(flecs_priority_compare)
+		.order_by<flecs::SystemPriority>(DefaultGameLoopDetail::flecs_priority_compare)
 		#else // FLECS_ENABLE_SYSTEM_PRIORITY
-		.order_by(flecs_entity_compare)
+		.order_by(DefaultGameLoopDetail::flecs_entity_compare)
 		#endif // FLECS_ENABLE_SYSTEM_PRIORITY
 		//.with(InWorld->GetTagEntity(FlecsTickType_MainLoop))
 		.without(InWorld->GetTagEntity(FlecsTickType_PrePhysics))
@@ -155,9 +154,9 @@ FFlecsEntityHandle UFlecsDefaultGameLoop::CreatePipelineForTickType(const FGamep
 	#ifdef FLECS_ENABLE_SYSTEM_PRIORITY
 	PipelineBuilder
 			.with<flecs::SystemPriority>()
-		   .order_by<flecs::SystemPriority>(flecs_priority_compare);
+		   .order_by<flecs::SystemPriority>(DefaultGameLoopDetail::flecs_priority_compare);
 	#else
-		PipelineBuilder.order_by(flecs_entity_compare);
+		PipelineBuilder.order_by(DefaultGameLoopDetail::flecs_entity_compare);
 	#endif
 
 	const FString PipelineName = FString::Printf(TEXT("%s_Pipeline"), *InTickType.ToString());

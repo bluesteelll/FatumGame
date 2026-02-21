@@ -53,7 +53,6 @@ NO_DISCARD FORCEINLINE int flecs_priority_compare(
 #endif // FLECS_ENABLE_SYSTEM_PRIORITY
 
 } // namespace TickerGameLoopDetail
-using namespace TickerGameLoopDetail;
 
 void UFlecsTickerGameLoop::InitializeGameLoop(const TSolidNotNull<UFlecsWorld*> InWorld, const FFlecsEntityHandle& InGameLoopEntity)
 {
@@ -73,9 +72,9 @@ void UFlecsTickerGameLoop::InitializeGameLoop(const TSolidNotNull<UFlecsWorld*> 
 		.without(flecs::Disabled).up(flecs::ChildOf)
 		#ifdef FLECS_ENABLE_SYSTEM_PRIORITY
 		.with<flecs::SystemPriority>()
-		.order_by<flecs::SystemPriority>(flecs_priority_compare)
+		.order_by<flecs::SystemPriority>(TickerGameLoopDetail::flecs_priority_compare)
 		#else // FLECS_ENABLE_SYSTEM_PRIORITY
-		.order_by(flecs_entity_compare)
+		.order_by(TickerGameLoopDetail::flecs_entity_compare)
 		#endif // FLECS_ENABLE_SYSTEM_PRIORITY
 		.build()
 		.set_name("TickerPipeline");

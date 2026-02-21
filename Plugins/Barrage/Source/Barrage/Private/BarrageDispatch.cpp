@@ -264,9 +264,6 @@ FBLet UBarrageDispatch::ManagePointers(FSkeletonKey OutKey, FBarrageKey temp, FB
 	JoltBodyLifecycleMapping->insert_or_assign(indirect->KeyIntoBarrage, indirect);
 	TranslationMapping->insert_or_assign(indirect->KeyOutOfBarrage, indirect->KeyIntoBarrage);
 
-	// DEBUG: Log key mapping
-	UE_LOG(LogTemp, Warning, TEXT("ManagePointers: KeyIntoBarrage=%llu, KeyOutOfBarrage=%llu, Form=%d"),
-		temp.KeyIntoBarrage, static_cast<uint64>(OutKey), static_cast<int>(form));
 	return indirect;
 }
 
@@ -331,14 +328,6 @@ FBLet UBarrageDispatch::GetShapeRef(FBarrageKey Existing) const
 	FBLet out;
 	//TODO: This line feels SUSPICIOUS!
 	bool found = holdopen && holdopen->find(Existing, out);
-
-	// DEBUG: Log lookup result (only for collision-related lookups, not every frame)
-	static uint64 LastLoggedKey = 0;
-	if (Existing.KeyIntoBarrage != LastLoggedKey)
-	{
-		UE_LOG(LogTemp, Warning, TEXT("GetShapeRef(FBarrageKey=%llu): Found=%d"), Existing.KeyIntoBarrage, found ? 1 : 0);
-		LastLoggedKey = Existing.KeyIntoBarrage;
-	}
 
 	return found ? out : nullptr;
 }

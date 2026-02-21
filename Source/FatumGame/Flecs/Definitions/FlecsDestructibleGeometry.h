@@ -32,6 +32,12 @@ struct FDestructibleFragment
 	 *  nullptr = use DefaultFragmentDefinition from DestructibleProfile. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fragment")
 	TObjectPtr<UFlecsEntityDefinition> OverrideDefinition;
+
+	/** Box collider half-extents (cm). Auto-generated from mesh bounds via
+	 *  GenerateColliderBounds(), manually editable for per-fragment tuning.
+	 *  TODO: Support convex hull and other collider shapes for better fragment fit. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Collider")
+	FVector ColliderHalfExtents = FVector(25.f);
 };
 
 /**
@@ -82,6 +88,11 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Adjacency", meta = (ClampMin = "0.0"))
 	float AdjacencyThreshold = 10.0f;
 
+	/** Scale multiplier for auto-generated collider bounds (0-1 shrinks, >1 expands).
+	 *  Applied during GenerateColliderBounds(), not at runtime. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Collider", meta = (ClampMin = "0.01"))
+	float ColliderScale = 0.9f;
+
 	int32 GetFragmentCount() const { return Fragments.Num(); }
 	bool IsValid() const { return Fragments.Num() > 0; }
 
@@ -90,5 +101,10 @@ public:
 	 *  Uses bounding box extents + AdjacencyThreshold to determine neighbors. */
 	UFUNCTION(CallInEditor, Category = "Utility")
 	void GenerateAdjacencyFromProximity();
+
+	/** Auto-generate ColliderHalfExtents for all fragments from mesh bounding boxes.
+	 *  Applies ColliderScale multiplier. Overwrites existing values. */
+	UFUNCTION(CallInEditor, Category = "Utility")
+	void GenerateColliderBounds();
 #endif
 };

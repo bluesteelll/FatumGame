@@ -242,39 +242,147 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 				BrokenCount, Remaining);
 
 			flecs::world& World = *FlecsWorld;
-
-			// Remove broken constraint references from Flecs entities.
-			// When the last constraint breaks, restore the fragment's free mass
-			// (was set to ConstrainedMassKg at spawn to minimize jitter).
 			auto* CachedDispatch = CachedBarrageDispatch;
-			World.each([&BrokenConstraints, CachedDispatch](flecs::entity Entity, FFlecsConstraintData& Data)
+
+			// ─────────────────────────────────────────────────────
+			// Helper: restore FreeMassKg + apply PendingImpulse on a fragment.
+			// ─────────────────────────────────────────────────────
+			auto RestoreFragment = [CachedDispatch](flecs::entity Entity)
+			{
+				const FDebrisInstance* Debris = Entity.try_get<FDebrisInstance>();
+				const FBarrageBody* Body = Entity.try_get<FBarrageBody>();
+				if (!Debris || Debris->FreeMassKg <= 0.f || !Body || !Body->BarrageKey.IsValid() || !CachedDispatch)
+					return;
+
+				FBLet Prim = CachedDispatch->GetShapeRef(Body->BarrageKey);
+				if (!FBarragePrimitive::IsNotNull(Prim)) return;
+
+				CachedDispatch->SetBodyMass(Prim->KeyIntoBarrage, Debris->FreeMassKg);
+
+				if (!Debris->PendingImpulse.IsNearlyZero())
+				{
+					CachedDispatch->AddBodyImpulse(Prim->KeyIntoBarrage, Debris->PendingImpulse);
+				}
+			};
+
+			// ─────────────────────────────────────────────────────
+			// Pass 1: Remove broken constraint refs, collect affected entities.
+			// ─────────────────────────────────────────────────────
+			TArray<flecs::entity> FullyFreed;      // Lost ALL constraints
+			TArray<flecs::entity> PartiallyFreed;  // Lost some, still has others
+
+			World.each([&](flecs::entity Entity, FFlecsConstraintData& Data)
 			{
 				bool bChanged = false;
 				for (const FBarrageConstraintKey& BrokenKey : BrokenConstraints)
 				{
 					if (Data.RemoveConstraint(BrokenKey.Key))
-					{
 						bChanged = true;
-					}
 				}
 
-				if (bChanged && !Data.HasConstraints())
-				{
-					Entity.remove<FTagConstrained>();
+				if (!bChanged) return;
 
-					// Restore free mass so the fragment flies with correct physics
-					const FDebrisInstance* Debris = Entity.try_get<FDebrisInstance>();
-					const FBarrageBody* Body = Entity.try_get<FBarrageBody>();
-					if (Debris && Debris->FreeMassKg > 0.f && Body && Body->BarrageKey.IsValid() && CachedDispatch)
-					{
-						FBLet Prim = CachedDispatch->GetShapeRef(Body->BarrageKey);
-						if (FBarragePrimitive::IsNotNull(Prim))
-						{
-							CachedDispatch->SetBodyMass(Prim->KeyIntoBarrage, Debris->FreeMassKg);
-						}
-					}
-				}
+				if (!Data.HasConstraints())
+					FullyFreed.Add(Entity);
+				else
+					PartiallyFreed.Add(Entity);
 			});
+
+			UE_LOG(LogTemp, Warning, TEXT("CONSTRAINT_BREAK: FullyFreed=%d PartiallyFreed=%d"),
+				FullyFreed.Num(), PartiallyFreed.Num());
+
+			// Handle fully freed fragments (no constraints left at all)
+			for (flecs::entity Entity : FullyFreed)
+			{
+				Entity.remove<FTagConstrained>();
+				RestoreFragment(Entity);
+			}
+
+			// ─────────────────────────────────────────────────────
+			// Pass 2: BFS from partially-freed anchored fragments to detect
+			// groups disconnected from world anchors.
+			// Only relevant for bInAnchoredStructure fragments.
+			// ─────────────────────────────────────────────────────
+			TSet<uint64> Visited;
+
+			// Pre-mark fully freed entities so BFS doesn't traverse through them
+			for (flecs::entity Entity : FullyFreed)
+				Visited.Add(Entity.id());
+
+			for (flecs::entity StartEntity : PartiallyFreed)
+			{
+				if (Visited.Contains(StartEntity.id())) continue;
+
+				// Only run BFS for anchored structures
+				const FDebrisInstance* StartDebris = StartEntity.try_get<FDebrisInstance>();
+				if (!StartDebris || !StartDebris->bInAnchoredStructure)
+				{
+					UE_LOG(LogTemp, Warning, TEXT("CONSTRAINT_BREAK: BFS skipped — bInAnchoredStructure=%d"),
+						StartDebris ? StartDebris->bInAnchoredStructure : -1);
+					continue;
+				}
+
+				// BFS through constraint graph
+				TArray<flecs::entity> Component;
+				TArray<flecs::entity> Queue;
+				bool bHasAnchor = false;
+				int32 ResolvedNeighbors = 0;
+				int32 FailedResolves = 0;
+
+				Queue.Add(StartEntity);
+				Visited.Add(StartEntity.id());
+
+				while (Queue.Num() > 0)
+				{
+					flecs::entity Current = Queue.Pop();
+					Component.Add(Current);
+
+					const FFlecsConstraintData* Data = Current.try_get<FFlecsConstraintData>();
+					if (!Data) continue;
+
+					for (const FConstraintLink& Link : Data->Constraints)
+					{
+						if (!Link.OtherEntityKey.IsValid())
+						{
+							// World anchor link — this component is still grounded
+							bHasAnchor = true;
+							continue;
+						}
+
+						// Resolve neighbor: SkeletonKey → FBarragePrimitive → Flecs entity
+						FBLet Prim = CachedDispatch->GetShapeRef(Link.OtherEntityKey);
+						if (!FBarragePrimitive::IsNotNull(Prim))
+						{
+							++FailedResolves;
+							continue;
+						}
+
+						uint64 NeighborId = Prim->GetFlecsEntity();
+						if (NeighborId == 0 || Visited.Contains(NeighborId)) continue;
+
+						flecs::entity Neighbor = World.entity(NeighborId);
+						if (!Neighbor.is_valid()) continue;
+
+						++ResolvedNeighbors;
+						Visited.Add(NeighborId);
+						Queue.Add(Neighbor);
+					}
+				}
+
+				UE_LOG(LogTemp, Warning, TEXT("CONSTRAINT_BREAK: BFS component=%d hasAnchor=%d resolved=%d failed=%d"),
+					Component.Num(), bHasAnchor, ResolvedNeighbors, FailedResolves);
+
+				if (!bHasAnchor)
+				{
+					// Entire group disconnected from world — restore mass for all
+					for (flecs::entity Entity : Component)
+					{
+						RestoreFragment(Entity);
+					}
+					UE_LOG(LogTemp, Warning, TEXT("CONSTRAINT_BREAK: === DISCONNECTED GROUP of %d fragments — MASS RESTORED ==="),
+						Component.Num());
+				}
+			}
 		});
 
 	// ═══════════════════════════════════════════════════════════════
@@ -688,9 +796,6 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 		{
 			EnsureBarrageAccess();
 
-			FDebrisPool* Pool = GetDebrisPool();
-			if (!Pool || !Pool->IsInitialized()) return;
-
 			// Determine which entity is the destructible target
 			uint64 TargetId = 0;
 			FSkeletonKey TargetKey;
@@ -818,6 +923,35 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 				}
 			}
 
+			// ─────────────────────────────────────────────────────
+			// Pre-compute deferred impulse for the nearest fragment.
+			// Done BEFORE the entity creation loop so we can set PendingImpulse
+			// on FDebrisInstance during construction (avoids deferred ops issue).
+			// ─────────────────────────────────────────────────────
+			int32 ImpulseFragIdx = INDEX_NONE;
+			FVector DeferredImpulse = FVector::ZeroVector;
+			if (FragData.ImpactImpulse > 0.f)
+			{
+				const FVector ImpulseDir = FragData.ImpactDirection.IsNearlyZero()
+					? FVector::UpVector
+					: FragData.ImpactDirection;
+				DeferredImpulse = ImpulseDir * (FragData.ImpactImpulse * Profile->ImpulseMultiplier);
+
+				float BestDistSq = TNumericLimits<float>::Max();
+				for (int32 i = 0; i < FragCount; ++i)
+				{
+					if (!Geometry->Fragments[i].Mesh) continue;
+					const float DistSq = FVector::DistSquared(
+						(Geometry->Fragments[i].RelativeTransform * ObjectTransform).GetLocation(),
+						FragData.ImpactPoint);
+					if (DistSq < BestDistSq)
+					{
+						BestDistSq = DistSq;
+						ImpulseFragIdx = i;
+					}
+				}
+			}
+
 			for (int32 FragIdx = 0; FragIdx < FragCount; ++FragIdx)
 			{
 				const FDestructibleFragment& Fragment = Geometry->Fragments[FragIdx];
@@ -828,27 +962,40 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 				FVector FragPos = FragWorldTransform.GetLocation();
 				FQuat FragRot = FragWorldTransform.GetRotation();
 
-				// Acquire body from pool
-				FSkeletonKey FragKey = Pool->Acquire(FragPos, FragRot);
-				if (!FragKey.IsValid())
+				// Create per-fragment physics body with collider sized from mesh bounds
+				FSkeletonKey FragKey = FBarrageSpawnUtils::GenerateUniqueKey();
+				const FVector& HE = Fragment.ColliderHalfExtents;
+				FBBoxParams BoxParams = FBarrageBounder::GenerateBoxBounds(
+					FragPos,
+					HE.X * 2.0, HE.Y * 2.0, HE.Z * 2.0,
+					FVector3d::ZeroVector,
+					FMassByCategory::MostEnemies
+				);
+
+				FBLet FragPrim = CachedBarrageDispatch->CreatePrimitive(
+					BoxParams, FragKey, Layers::MOVING,
+					false,  // not sensor
+					true,   // force dynamic
+					true,   // movable
+					0.4f,   // friction
+					0.2f,   // restitution
+					0.1f    // linear damping
+				);
+
+				if (!FBarragePrimitive::IsNotNull(FragPrim))
 				{
-					UE_LOG(LogTemp, Warning, TEXT("FRAGMENTATION: Failed to acquire debris body for fragment %d"), FragIdx);
+					UE_LOG(LogTemp, Warning, TEXT("FRAGMENTATION: Failed to create body for fragment %d"), FragIdx);
 					continue;
 				}
 
-				// Get the FBLet for reverse binding — must succeed for a just-acquired pool body
-				FBLet FragPrim = CachedBarrageDispatch->GetShapeRef(FragKey);
-				if (!FBarragePrimitive::IsNotNull(FragPrim))
-				{
-					UE_LOG(LogTemp, Error, TEXT("FRAGMENTATION: GetShapeRef null for just-acquired key — skipping fragment %d"), FragIdx);
-					Pool->Release(FragKey);
-					continue;
-				}
+				// Set rotation (CreatePrimitive uses position from BoxParams but not rotation)
+				CachedBarrageDispatch->SetBodyRotationDirect(FragPrim->KeyIntoBarrage, FragRot);
 
 				// Set constrained mass (high → minimal jitter while structure is intact).
 				// FreeMassKg is stored in FDebrisInstance so ConstraintBreakSystem can
 				// restore it when the last constraint on this fragment breaks.
 				CachedBarrageDispatch->SetBodyMass(FragPrim->KeyIntoBarrage, Profile->ConstrainedMassKg);
+				FBarragePrimitive::SetGravityFactor(1.0f, FragPrim);
 
 				// Create Flecs entity for this fragment
 				flecs::entity FragEntity = World.entity();
@@ -864,8 +1011,13 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 				FDebrisInstance DebrisInst;
 				DebrisInst.LifetimeRemaining = Profile->DebrisLifetime;
 				DebrisInst.bAutoDestroy = Profile->bAutoDestroyDebris;
-				DebrisInst.PoolSlotIndex = 0; // Marks as pooled (not INDEX_NONE)
+				DebrisInst.PoolSlotIndex = INDEX_NONE; // Not pooled — cleanup uses tombstone
 				DebrisInst.FreeMassKg = Profile->FragmentMassKg;
+				DebrisInst.bInAnchoredStructure = bAnchorToWorld;
+				if (FragIdx == ImpulseFragIdx)
+				{
+					DebrisInst.PendingImpulse = DeferredImpulse;
+				}
 				FragEntity.set<FDebrisInstance>(DebrisInst);
 
 				FragEntity.add<FTagDebrisFragment>();
@@ -948,111 +1100,48 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 				? CachedBarrageDispatch->GetConstraintSystem()
 				: nullptr;
 
-			UE_LOG(LogTemp, Warning, TEXT("FRAGMENTATION: === CONSTRAINT CREATION START ==="));
-			UE_LOG(LogTemp, Warning, TEXT("FRAGMENTATION: Geometry=%s, AdjacencyLinks=%d, ConstraintSys=%s, BreakForce=%.1f, BreakTorque=%.1f"),
-				*Geometry->GetName(), Geometry->AdjacencyLinks.Num(),
-				ConstraintSys ? TEXT("valid") : TEXT("NULL"),
-				Profile->ConstraintBreakForce, Profile->ConstraintBreakTorque);
-
-			// Log all fragment keys
-			for (int32 i = 0; i < FragmentKeys.Num(); ++i)
-			{
-				UE_LOG(LogTemp, Warning, TEXT("FRAGMENTATION:   FragKey[%d] valid=%s, Entity valid=%s"),
-					i,
-					FragmentKeys[i].IsValid() ? TEXT("YES") : TEXT("NO"),
-					FragmentEntities[i].is_valid() ? TEXT("YES") : TEXT("NO"));
-			}
+			// ── Accumulate constraint data locally to avoid Flecs deferred ops bug ──
+			// obtain<T>() in .run() deferred mode overwrites previous staged data
+			// for the same entity. We must build complete FFlecsConstraintData per
+			// fragment BEFORE calling .set<>() once per entity.
+			TMap<int32, FFlecsConstraintData> FragConstraintData; // fragment index → accumulated constraints
 
 			if (ConstraintSys && Geometry->AdjacencyLinks.Num() > 0)
 			{
 				int32 ConstraintsCreated = 0;
-				int32 SkippedIndex = 0, SkippedKey = 0, SkippedPrim = 0, SkippedBarrage = 0, SkippedCreate = 0;
 
 				for (const FFragmentAdjacency& Link : Geometry->AdjacencyLinks)
 				{
-					UE_LOG(LogTemp, Warning, TEXT("FRAGMENTATION:   Link [%d]-[%d]:"), Link.FragmentIndexA, Link.FragmentIndexB);
-
 					if (Link.FragmentIndexA >= FragmentKeys.Num() || Link.FragmentIndexB >= FragmentKeys.Num())
-					{
-						UE_LOG(LogTemp, Error, TEXT("FRAGMENTATION:     SKIP index out of range (max=%d)"), FragmentKeys.Num());
-						++SkippedIndex;
 						continue;
-					}
 
 					FSkeletonKey KeyA = FragmentKeys[Link.FragmentIndexA];
 					FSkeletonKey KeyB = FragmentKeys[Link.FragmentIndexB];
-					if (!KeyA.IsValid() || !KeyB.IsValid())
-					{
-						UE_LOG(LogTemp, Error, TEXT("FRAGMENTATION:     SKIP invalid SkeletonKey A=%s B=%s"),
-							KeyA.IsValid() ? TEXT("ok") : TEXT("INVALID"),
-							KeyB.IsValid() ? TEXT("ok") : TEXT("INVALID"));
-						++SkippedKey;
-						continue;
-					}
+					if (!KeyA.IsValid() || !KeyB.IsValid()) continue;
 
 					FBLet PrimA = CachedBarrageDispatch->GetShapeRef(KeyA);
 					FBLet PrimB = CachedBarrageDispatch->GetShapeRef(KeyB);
-					if (!FBarragePrimitive::IsNotNull(PrimA) || !FBarragePrimitive::IsNotNull(PrimB))
-					{
-						UE_LOG(LogTemp, Error, TEXT("FRAGMENTATION:     SKIP GetShapeRef failed A=%s B=%s"),
-							FBarragePrimitive::IsNotNull(PrimA) ? TEXT("ok") : TEXT("NULL"),
-							FBarragePrimitive::IsNotNull(PrimB) ? TEXT("ok") : TEXT("NULL"));
-						++SkippedPrim;
-						continue;
-					}
+					if (!FBarragePrimitive::IsNotNull(PrimA) || !FBarragePrimitive::IsNotNull(PrimB)) continue;
 
 					FBarrageKey BodyA = PrimA->KeyIntoBarrage;
 					FBarrageKey BodyB = PrimB->KeyIntoBarrage;
-					UE_LOG(LogTemp, Warning, TEXT("FRAGMENTATION:     BarrageKey A=%llu B=%llu"),
-						BodyA.KeyIntoBarrage, BodyB.KeyIntoBarrage);
-
-					if (BodyA.KeyIntoBarrage == 0 || BodyB.KeyIntoBarrage == 0)
-					{
-						UE_LOG(LogTemp, Error, TEXT("FRAGMENTATION:     SKIP BarrageKey is 0"));
-						++SkippedBarrage;
-						continue;
-					}
+					if (BodyA.KeyIntoBarrage == 0 || BodyB.KeyIntoBarrage == 0) continue;
 
 					FBarrageConstraintKey CKey = CachedBarrageDispatch->CreateFixedConstraint(
 						BodyA, BodyB, Profile->ConstraintBreakForce, Profile->ConstraintBreakTorque);
 
-					UE_LOG(LogTemp, Warning, TEXT("FRAGMENTATION:     CreateFixedConstraint -> Key=%llu valid=%s"),
-						CKey.Key, CKey.IsValid() ? TEXT("YES") : TEXT("NO"));
-
 					if (CKey.IsValid())
 					{
 						++ConstraintsCreated;
-
-						auto RegisterConstraint = [&](flecs::entity E, FSkeletonKey OtherKey)
-						{
-							FFlecsConstraintData& Data = E.obtain<FFlecsConstraintData>();
-							Data.AddConstraint(CKey.Key, OtherKey, Profile->ConstraintBreakForce, Profile->ConstraintBreakTorque);
-							E.add<FTagConstrained>();
-						};
-
-						flecs::entity EA = FragmentEntities[Link.FragmentIndexA];
-						flecs::entity EB = FragmentEntities[Link.FragmentIndexB];
-						if (EA.is_valid()) RegisterConstraint(EA, KeyB);
-						if (EB.is_valid()) RegisterConstraint(EB, KeyA);
-					}
-					else
-					{
-						++SkippedCreate;
+						FragConstraintData.FindOrAdd(Link.FragmentIndexA)
+							.AddConstraint(CKey.Key, KeyB, Profile->ConstraintBreakForce, Profile->ConstraintBreakTorque);
+						FragConstraintData.FindOrAdd(Link.FragmentIndexB)
+							.AddConstraint(CKey.Key, KeyA, Profile->ConstraintBreakForce, Profile->ConstraintBreakTorque);
 					}
 				}
 
-				UE_LOG(LogTemp, Warning, TEXT("FRAGMENTATION: === RESULT: %d/%d constraints created ==="),
+				UE_LOG(LogTemp, Warning, TEXT("FRAGMENTATION: %d/%d fragment constraints created"),
 					ConstraintsCreated, Geometry->AdjacencyLinks.Num());
-				if (SkippedIndex + SkippedKey + SkippedPrim + SkippedBarrage + SkippedCreate > 0)
-				{
-					UE_LOG(LogTemp, Warning, TEXT("FRAGMENTATION:   Skips: Index=%d Key=%d Prim=%d Barrage=%d Create=%d"),
-						SkippedIndex, SkippedKey, SkippedPrim, SkippedBarrage, SkippedCreate);
-				}
-			}
-			else
-			{
-				UE_LOG(LogTemp, Error, TEXT("FRAGMENTATION: NO CONSTRAINTS — ConstraintSys=%s, AdjacencyLinks=%d"),
-					ConstraintSys ? TEXT("valid") : TEXT("NULL"), Geometry->AdjacencyLinks.Num());
 			}
 
 			// ─────────────────────────────────────────────────────
@@ -1078,15 +1167,8 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 					if (CKey.IsValid())
 					{
 						++WorldConstraintsCreated;
-
-						// Register on the fragment entity so ConstraintBreakSystem can track it
-						flecs::entity FragEntity = FragmentEntities[AnchorFragIdx];
-						if (FragEntity.is_valid())
-						{
-							FFlecsConstraintData& Data = FragEntity.obtain<FFlecsConstraintData>();
-							Data.AddConstraint(CKey.Key, FSkeletonKey(), Profile->AnchorBreakForce, Profile->AnchorBreakTorque);
-							FragEntity.add<FTagConstrained>();
-						}
+						FragConstraintData.FindOrAdd(AnchorFragIdx)
+							.AddConstraint(CKey.Key, FSkeletonKey(), Profile->AnchorBreakForce, Profile->AnchorBreakTorque);
 					}
 				}
 
@@ -1094,48 +1176,17 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 					WorldConstraintsCreated, AnchorIndices.Num(), Profile->AnchorBreakForce);
 			}
 
-			// ─────────────────────────────────────────────────────
-			// Apply impulse to nearest fragment (mass-weighted via Jolt AddImpulse)
-			// Uses body_interface->AddImpulse: Δv = impulse / mass.
-			// This matches Jolt's own contact resolver, so first-hit and
-			// subsequent-hit impulses are physically consistent.
-			// ─────────────────────────────────────────────────────
-			if (FragData.ImpactImpulse > 0.f)
+			// ── Single .set<>() per entity with complete constraint data ──
+			for (auto& [FragIdx, Data] : FragConstraintData)
 			{
-				const FVector ImpulseDir = FragData.ImpactDirection.IsNearlyZero()
-					? FVector::UpVector
-					: FragData.ImpactDirection;
-				// ImpactImpulse is projectile speed in cm/s (UE).
-				// ImpulseMultiplier acts as effective projectile mass proxy (kg).
-				// Result: impulse in kg·cm/s — AddBodyImpulse converts to Jolt kg·m/s.
-				const float BaseImpulse = FragData.ImpactImpulse * Profile->ImpulseMultiplier;
-
-				float BestDistSq = TNumericLimits<float>::Max();
-				int32 BestIdx = INDEX_NONE;
-				for (int32 i = 0; i < FragCount; ++i)
+				if (FragIdx < FragmentEntities.Num() && FragmentEntities[FragIdx].is_valid())
 				{
-					if (!FragmentKeys[i].IsValid()) continue;
-
-					const float DistSq = FVector::DistSquared(
-						(Geometry->Fragments[i].RelativeTransform * ObjectTransform).GetLocation(),
-						FragData.ImpactPoint);
-					if (DistSq < BestDistSq)
-					{
-						BestDistSq = DistSq;
-						BestIdx = i;
-					}
-				}
-				if (BestIdx != INDEX_NONE)
-				{
-					FBLet NearestPrim = CachedBarrageDispatch->GetShapeRef(FragmentKeys[BestIdx]);
-					if (FBarragePrimitive::IsNotNull(NearestPrim))
-					{
-						CachedBarrageDispatch->AddBodyImpulse(
-							NearestPrim->KeyIntoBarrage,
-							FVector(ImpulseDir * BaseImpulse));
-					}
+					FragmentEntities[FragIdx].set<FFlecsConstraintData>(Data);
+					FragmentEntities[FragIdx].add<FTagConstrained>();
 				}
 			}
+
+			UE_LOG(LogTemp, Warning, TEXT("FRAGMENTATION: Constraint data set on %d fragments"), FragConstraintData.Num());
 
 			PairEntity.add<FTagCollisionProcessed>();
 		});

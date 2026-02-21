@@ -39,4 +39,25 @@ void UFlecsDestructibleGeometry::GenerateAdjacencyFromProximity()
 	UE_LOG(LogTemp, Log, TEXT("UFlecsDestructibleGeometry: Generated %d adjacency links for %d fragments"),
 		AdjacencyLinks.Num(), Fragments.Num());
 }
+
+void UFlecsDestructibleGeometry::GenerateColliderBounds()
+{
+	int32 Updated = 0;
+	for (FDestructibleFragment& Frag : Fragments)
+	{
+		if (!Frag.Mesh) continue;
+
+		const FVector MeshExtent = Frag.Mesh->GetBoundingBox().GetExtent();
+		FVector Scaled = MeshExtent * Frag.RelativeTransform.GetScale3D() * ColliderScale;
+		Scaled.X = FMath::Max(Scaled.X, 1.0f);
+		Scaled.Y = FMath::Max(Scaled.Y, 1.0f);
+		Scaled.Z = FMath::Max(Scaled.Z, 1.0f);
+		Frag.ColliderHalfExtents = Scaled;
+		++Updated;
+	}
+
+	Modify();
+	UE_LOG(LogTemp, Log, TEXT("UFlecsDestructibleGeometry: Generated collider bounds for %d/%d fragments (Scale=%.2f)"),
+		Updated, Fragments.Num(), ColliderScale);
+}
 #endif
