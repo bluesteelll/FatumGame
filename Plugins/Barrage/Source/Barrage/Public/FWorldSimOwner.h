@@ -563,6 +563,25 @@ public:
 		JoltBody.GetMotionProperties()->SetAngularDamping(FMath::Max(Damping, 0.f));
 	}
 
+	/**
+	 * Change a body's shape to a capsule at runtime. Used for posture changes (stand/crouch/prone).
+	 * Thread-safe (uses locking body_interface). Call from sim thread via EnqueueCommand.
+	 */
+	void SetBodyCapsuleShape(FBarrageKey BarrageKey, double JoltHalfHeight, double JoltRadius)
+	{
+		if (!body_interface) return;
+
+		JPH::BodyID BodyID;
+		if (!BarrageToJoltMapping->find(BarrageKey, BodyID) || BodyID.IsInvalid()) return;
+
+		check(JoltHalfHeight > 0.0 && JoltRadius > 0.0);
+		JPH::Ref<JPH::Shape> NewCapsule = new JPH::CapsuleShape(
+			static_cast<float>(JoltHalfHeight),
+			static_cast<float>(JoltRadius)
+		);
+		body_interface->SetShape(BodyID, NewCapsule, true, JPH::EActivation::Activate);
+	}
+
 	// Wake up all sleeping bodies in a given area - useful when removing support from stacked objects
 	void ActivateBodiesInArea(const FVector3d& Center, double HalfExtent)
 	{

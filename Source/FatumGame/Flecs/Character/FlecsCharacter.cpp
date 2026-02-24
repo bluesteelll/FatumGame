@@ -1,5 +1,7 @@
 
 #include "FlecsCharacter.h"
+#include "FatumMovementComponent.h"
+#include "FlecsMovementComponents.h"
 #include "FlecsDamageLibrary.h"
 #include "FlecsWeaponLibrary.h"
 #include "FlecsContainerLibrary.h"
@@ -28,7 +30,8 @@
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/SpringArmComponent.h"
 #include "Camera/CameraComponent.h"
-#include "EnhancedInputComponent.h"
+#include "FatumInputComponent.h"
+#include "FatumInputTags.h"
 #include "EnhancedInputSubsystems.h"
 #include "InputActionValue.h"
 #include "Components/SkeletalMeshComponent.h"
@@ -40,8 +43,11 @@
 #include "FlecsLootPanel.h"
 
 AFlecsCharacter::AFlecsCharacter(const FObjectInitializer& ObjectInitializer)
-	: Super(ObjectInitializer)
+	: Super(ObjectInitializer.SetDefaultSubobjectClass<UFatumMovementComponent>(
+		ACharacter::CharacterMovementComponentName))
 {
+	FatumMovement = Cast<UFatumMovementComponent>(GetCharacterMovement());
+
 	// Create camera boom (used in third-person mode)
 	CameraBoom = CreateDefaultSubobject<USpringArmComponent>(TEXT("CameraBoom"));
 	CameraBoom->SetupAttachment(RootComponent);
@@ -107,13 +113,7 @@ void AFlecsCharacter::BeginPlay()
 			}
 		}
 
-		if (!CancelAction)
-		{
-			UE_LOG(LogTemp, Warning,
-				TEXT("AFlecsCharacter::BeginPlay: CancelAction is not set! "
-					 "Escape key will not work for exiting interactions/menus. "
-					 "Assign IA_Cancel and map it in BOTH GameplayMappingContext AND InventoryMappingContext."));
-		}
+		// Cancel tag presence is validated by ensureMsgf in SetupPlayerInputComponent
 	}
 
 	// ─────────────────────────────────────────────────────────────
@@ -155,15 +155,14 @@ void AFlecsCharacter::BeginPlay()
 				UBarrageDispatch* Physics = UBarrageDispatch::SelfPtr;
 				if (Physics)
 				{
-					FBBoxParams BoxParams = FBarrageBounder::GenerateBoxBounds(
-						SpawnLocation,
-						CapsuleRadius * 2.0, CapsuleRadius * 2.0, CapsuleHalfHeight * 2.0,
-						FVector3d::ZeroVector, FMassByCategory::MostEnemies);
+					FBCapParams CapsuleParams = FBarrageBounder::GenerateCapsuleBounds(
+						SpawnLocation, CapsuleRadius, CapsuleHalfHeight * 2.0f,
+						FMassByCategory::MostEnemies, FVector3f::ZeroVector);
 
 					FBLet Body = Physics->CreatePrimitive(
-						BoxParams, Key,
+						CapsuleParams, Key,
 						static_cast<uint16>(EPhysicsLayer::MOVING),
-						true,  // sensor - collision detection only
+						true,  // sensor - still sensor so projectiles get contact events
 						false, // not force dynamic
 						true); // movable
 
@@ -192,6 +191,9 @@ void AFlecsCharacter::BeginPlay()
 
 				// Bidirectional binding: sets FBarrageBody + atomic in FBarragePrimitive
 				FlecsSubsystem->BindEntityToBarrage(Entity, Key);
+
+				FMovementState InitState;
+				Entity.set<FMovementState>(InitState);
 
 				// Send initial health to HUD (sim thread → EnqueueMessage)
 				if (UFlecsMessageSubsystem::SelfPtr)
@@ -414,6 +416,19 @@ void AFlecsCharacter::Tick(float DeltaTime)
 	CheckHealthChanges();
 	TickInteractionStateMachine(DeltaTime);
 
+	// Apply camera effects from movement system
+	if (FatumMovement && FollowCamera)
+	{
+		float BaseFOV = 90.f;
+		FollowCamera->SetFieldOfView(BaseFOV + FatumMovement->GetCurrentFOVOffset());
+
+		FVector BaseEyePos(0.f, 0.f, 60.f);
+		BaseEyePos.Z += FatumMovement->GetLandingCameraOffset();
+		FollowCamera->SetRelativeLocation(BaseEyePos);
+	}
+
+	SyncMovementStateToECS();
+
 	// Process pending weapon equip (set by sim thread via atomics).
 	// Must run in Tick(), not AsyncTask(GameThread) — AsyncTask can fire during
 	// post-tick component update phase, causing assert !bPostTickComponentUpdate.
@@ -493,60 +508,27 @@ void AFlecsCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 {
 	Super::SetupPlayerInputComponent(PlayerInputComponent);
 
-	// Cast to Enhanced Input Component
-	if (UEnhancedInputComponent* EnhancedInputComponent = Cast<UEnhancedInputComponent>(PlayerInputComponent))
-	{
-		// Movement (WASD)
-		if (MoveAction)
-		{
-			EnhancedInputComponent->BindAction(MoveAction, ETriggerEvent::Triggered, this, &AFlecsCharacter::Move);
-		}
+	UFatumInputComponent* FatumInput = CastChecked<UFatumInputComponent>(PlayerInputComponent);
+	checkf(InputConfig, TEXT("AFlecsCharacter: InputConfig is not set! Assign a UFatumInputConfig Data Asset."));
 
-		// Looking (Mouse)
-		if (LookAction)
-		{
-			EnhancedInputComponent->BindAction(LookAction, ETriggerEvent::Triggered, this, &AFlecsCharacter::Look);
-		}
+	FatumInput->BindNativeAction(InputConfig, TAG_Input_Move,      ETriggerEvent::Triggered, this, &AFlecsCharacter::Move);
+	FatumInput->BindNativeAction(InputConfig, TAG_Input_Look,      ETriggerEvent::Triggered, this, &AFlecsCharacter::Look);
+	FatumInput->BindNativeAction(InputConfig, TAG_Input_Jump,      ETriggerEvent::Started,   this, &AFlecsCharacter::OnJumpStarted);
+	FatumInput->BindNativeAction(InputConfig, TAG_Input_Jump,      ETriggerEvent::Completed, this, &AFlecsCharacter::OnJumpCompleted);
+	FatumInput->BindNativeAction(InputConfig, TAG_Input_Fire,      ETriggerEvent::Started,   this, &AFlecsCharacter::StartFire);
+	FatumInput->BindNativeAction(InputConfig, TAG_Input_Fire,      ETriggerEvent::Completed, this, &AFlecsCharacter::StopFire);
+	FatumInput->BindNativeAction(InputConfig, TAG_Input_Interact,  ETriggerEvent::Started,   this, &AFlecsCharacter::OnSpawnItem);
+	FatumInput->BindNativeAction(InputConfig, TAG_Input_Interact,  ETriggerEvent::Completed, this, &AFlecsCharacter::OnInteractReleased);
+	FatumInput->BindNativeAction(InputConfig, TAG_Input_Destroy,   ETriggerEvent::Started,   this, &AFlecsCharacter::OnDestroyItem);
+	FatumInput->BindNativeAction(InputConfig, TAG_Input_Inventory, ETriggerEvent::Started,   this, &AFlecsCharacter::ToggleInventory);
+	FatumInput->BindNativeAction(InputConfig, TAG_Input_Cancel,    ETriggerEvent::Started,   this, &AFlecsCharacter::OnInteractCancel);
+	FatumInput->BindNativeAction(InputConfig, TAG_Input_Sprint,    ETriggerEvent::Started,   this, &AFlecsCharacter::OnSprintStarted);
+	FatumInput->BindNativeAction(InputConfig, TAG_Input_Sprint,    ETriggerEvent::Completed, this, &AFlecsCharacter::OnSprintCompleted);
+}
 
-		// Jumping (Space)
-		if (JumpAction)
-		{
-			EnhancedInputComponent->BindAction(JumpAction, ETriggerEvent::Started, this, &ACharacter::Jump);
-			EnhancedInputComponent->BindAction(JumpAction, ETriggerEvent::Completed, this, &ACharacter::StopJumping);
-		}
-
-		// Firing (LMB)
-		if (FireAction)
-		{
-			EnhancedInputComponent->BindAction(FireAction, ETriggerEvent::Started, this, &AFlecsCharacter::StartFire);
-			EnhancedInputComponent->BindAction(FireAction, ETriggerEvent::Completed, this, &AFlecsCharacter::StopFire);
-		}
-
-		// Interact (E) — Started for press, Completed for release (Hold detection)
-		if (SpawnItemAction)
-		{
-			EnhancedInputComponent->BindAction(SpawnItemAction, ETriggerEvent::Started, this, &AFlecsCharacter::OnSpawnItem);
-			EnhancedInputComponent->BindAction(SpawnItemAction, ETriggerEvent::Completed, this, &AFlecsCharacter::OnInteractReleased);
-		}
-
-		// Destroy Item (F)
-		if (DestroyItemAction)
-		{
-			EnhancedInputComponent->BindAction(DestroyItemAction, ETriggerEvent::Started, this, &AFlecsCharacter::OnDestroyItem);
-		}
-
-		// Toggle Inventory (I)
-		if (InventoryAction)
-		{
-			EnhancedInputComponent->BindAction(InventoryAction, ETriggerEvent::Started, this, &AFlecsCharacter::ToggleInventory);
-		}
-
-		// Cancel / Exit (Escape)
-		if (CancelAction)
-		{
-			EnhancedInputComponent->BindAction(CancelAction, ETriggerEvent::Started, this, &AFlecsCharacter::OnInteractCancel);
-		}
-	}
+UInputComponent* AFlecsCharacter::CreatePlayerInputComponent()
+{
+	return NewObject<UFatumInputComponent>(this, UFatumInputComponent::StaticClass(), TEXT("FatumInputComponent"));
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -585,6 +567,61 @@ void AFlecsCharacter::Look(const FInputActionValue& Value)
 		AddControllerYawInput(LookAxisVector.X);
 		AddControllerPitchInput(LookAxisVector.Y);
 	}
+}
+
+void AFlecsCharacter::OnSprintStarted(const FInputActionValue& Value)
+{
+	if (FatumMovement) FatumMovement->RequestSprint(true);
+}
+
+void AFlecsCharacter::OnSprintCompleted(const FInputActionValue& Value)
+{
+	if (FatumMovement) FatumMovement->RequestSprint(false);
+}
+
+void AFlecsCharacter::OnJumpStarted(const FInputActionValue& Value)
+{
+	if (FatumMovement) FatumMovement->RequestJump();
+}
+
+void AFlecsCharacter::OnJumpCompleted(const FInputActionValue& Value)
+{
+	if (FatumMovement) FatumMovement->ReleaseJump();
+}
+
+void AFlecsCharacter::SyncMovementStateToECS()
+{
+	if (!FatumMovement) return;
+
+	uint8 CurPosture = static_cast<uint8>(FatumMovement->GetCurrentPosture());
+	uint8 CurMode = static_cast<uint8>(FatumMovement->GetCurrentMoveMode());
+
+	// Only write to Flecs when state actually changes
+	if (CurPosture == LastSyncedPosture && CurMode == LastSyncedMoveMode) return;
+
+	LastSyncedPosture = CurPosture;
+	LastSyncedMoveMode = CurMode;
+
+	float Speed = GetVelocity().Size2D();
+	float VSpeed = GetVelocity().Z;
+	FSkeletonKey Key = CharacterKey;
+
+	UFlecsArtillerySubsystem* FlecsSubsystem = GetWorld()->GetSubsystem<UFlecsArtillerySubsystem>();
+	if (!FlecsSubsystem || !Key.IsValid()) return;
+
+	FlecsSubsystem->EnqueueCommand(
+		[FlecsSubsystem, Key, CurPosture, CurMode, Speed, VSpeed]()
+	{
+		flecs::entity Entity = FlecsSubsystem->GetEntityForBarrageKey(Key);
+		if (!Entity.is_valid()) return;
+
+		FMovementState State;
+		State.Posture = CurPosture;
+		State.MoveMode = CurMode;
+		State.Speed = Speed;
+		State.VerticalSpeed = VSpeed;
+		Entity.set<FMovementState>(State);
+	});
 }
 
 void AFlecsCharacter::StartFire(const FInputActionValue& Value)

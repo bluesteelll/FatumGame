@@ -29,6 +29,7 @@
 #include "FBConstraintParams.h"
 #include "PhysicsFilters/FastObjectLayerFilters.h"
 #include "FlecsDoorComponents.h"
+#include "FlecsMovementComponents.h"
 
 void UFlecsArtillerySubsystem::SetupFlecsSystems()
 {
@@ -106,6 +107,11 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 	World.component<FWeaponInstance>();
 	World.component<FEquippedBy>();
 	World.component<FTagWeapon>();
+
+	// ─────────────────────────────────────────────────────────
+	// MOVEMENT COMPONENTS
+	// ─────────────────────────────────────────────────────────
+	World.component<FMovementState>();
 
 	// ─────────────────────────────────────────────────────────
 	// COLLISION PAIR SYSTEM COMPONENTS

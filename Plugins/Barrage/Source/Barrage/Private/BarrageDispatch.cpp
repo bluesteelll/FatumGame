@@ -621,6 +621,14 @@ void UBarrageDispatch::SetBodyAngularDamping(FBarrageKey Key, float Damping)
 	}
 }
 
+void UBarrageDispatch::SetBodyCapsuleShape(FBarrageKey BarrageKey, double JoltHalfHeight, double JoltRadius)
+{
+	if (JoltGameSim)
+	{
+		JoltGameSim->SetBodyCapsuleShape(BarrageKey, JoltHalfHeight, JoltRadius);
+	}
+}
+
 bool UBarrageDispatch::RemoveConstraint(FBarrageConstraintKey Key)
 {
 	FBarrageConstraintSystem* System = GetConstraintSystem();

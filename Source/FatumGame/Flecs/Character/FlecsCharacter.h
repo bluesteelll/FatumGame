@@ -15,7 +15,8 @@ class UFlecsInventoryWidget;
 class UFlecsLootPanel;
 class UFlecsInteractionProfile;
 class UFlecsUIPanel;
-class UInputAction;
+class UFatumMovementComponent;
+class UFatumInputConfig;
 class UInputMappingContext;
 class USpringArmComponent;
 class UCameraComponent;
@@ -71,37 +72,9 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input")
 	TObjectPtr<UInputMappingContext> InventoryMappingContext;
 
-	/** Move Input Action */
+	/** Input config — maps InputAction assets to GameplayTags */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input")
-	TObjectPtr<UInputAction> MoveAction;
-
-	/** Look Input Action */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input")
-	TObjectPtr<UInputAction> LookAction;
-
-	/** Jump Input Action */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input")
-	TObjectPtr<UInputAction> JumpAction;
-
-	/** Fire Input Action */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input")
-	TObjectPtr<UInputAction> FireAction;
-
-	/** Spawn Item Input Action (E) */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input")
-	TObjectPtr<UInputAction> SpawnItemAction;
-
-	/** Destroy Item Input Action (F) */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input")
-	TObjectPtr<UInputAction> DestroyItemAction;
-
-	/** Toggle Inventory Input Action (I) */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input")
-	TObjectPtr<UInputAction> InventoryAction;
-
-	/** Cancel / Exit Input Action (Escape) — closes panels, exits focus, cancels hold */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input")
-	TObjectPtr<UInputAction> CancelAction;
+	TObjectPtr<UFatumInputConfig> InputConfig;
 
 	// ═══════════════════════════════════════════════════════════════
 	// HEALTH
@@ -169,6 +142,14 @@ public:
 	/** Fire spread (shotgun) */
 	UFUNCTION(BlueprintCallable, Category = "Flecs|Projectile")
 	TArray<FSkeletonKey> FireProjectileSpread(int32 Count = 8, float SpreadAngle = 15.f);
+
+	// ═══════════════════════════════════════════════════════════════
+	// MOVEMENT
+	// ═══════════════════════════════════════════════════════════════
+
+	/** Cached typed pointer to our custom CMC (set MovementProfile on this component) */
+	UPROPERTY(BlueprintReadOnly, Category = "Flecs|Movement")
+	TObjectPtr<UFatumMovementComponent> FatumMovement;
 
 	// ═══════════════════════════════════════════════════════════════
 	// ENTITY SPAWNING (TEST)
@@ -414,6 +395,7 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void Tick(float DeltaTime) override;
 	virtual void SetupPlayerInputComponent(UInputComponent* PlayerInputComponent) override;
+	virtual UInputComponent* CreatePlayerInputComponent() override;
 
 	/** Get muzzle world location */
 	UFUNCTION(BlueprintCallable, Category = "Flecs|Projectile")
@@ -454,6 +436,18 @@ protected:
 	/** Called when DestroyItem (F) is pressed */
 	void OnDestroyItem(const FInputActionValue& Value);
 
+	/** Sprint started (Shift press) */
+	void OnSprintStarted(const FInputActionValue& Value);
+
+	/** Sprint ended (Shift release) */
+	void OnSprintCompleted(const FInputActionValue& Value);
+
+	/** Jump started (Space press) — routes through FatumMovement for coyote/buffer */
+	void OnJumpStarted(const FInputActionValue& Value);
+
+	/** Jump ended (Space release) */
+	void OnJumpCompleted(const FInputActionValue& Value);
+
 	/** Toggle inventory open/close */
 	void ToggleInventory(const FInputActionValue& Value);
 
@@ -468,6 +462,11 @@ private:
 
 	/** Fire was requested before weapon finished spawning — apply after spawn completes. */
 	bool bPendingFireAfterSpawn = false;
+
+	// Movement ECS sync — only write to Flecs when state actually changes
+	uint8 LastSyncedPosture = 0;
+	uint8 LastSyncedMoveMode = 0;
+	void SyncMovementStateToECS();
 
 	/**
 	 * Pending weapon equip data (sim thread → game thread via atomics).

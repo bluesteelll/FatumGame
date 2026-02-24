@@ -1,0 +1,15 @@
+// Native GameplayTag declarations for input actions.
+
+#pragma once
+
+#include "NativeGameplayTags.h"
+
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Input_Move);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Input_Look);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Input_Jump);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Input_Fire);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Input_Interact);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Input_Destroy);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Input_Inventory);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Input_Cancel);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(TAG_Input_Sprint);

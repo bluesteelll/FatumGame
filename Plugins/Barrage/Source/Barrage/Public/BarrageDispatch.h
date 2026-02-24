@@ -243,6 +243,11 @@ public:
 	/** Set angular damping on a body. Requires body lock. */
 	void SetBodyAngularDamping(FBarrageKey Key, float Damping);
 
+	/** Change a body's shape to a capsule at runtime. Use for posture changes (stand/crouch/prone).
+	 *  JoltHalfHeight and JoltRadius are in Jolt meters (use CoordinateUtils to convert).
+	 *  Call from sim thread via EnqueueCommand. */
+	void SetBodyCapsuleShape(FBarrageKey BarrageKey, double JoltHalfHeight, double JoltRadius);
+
 	/**
 	 * Remove a constraint.
 	 * @param Key The constraint to remove

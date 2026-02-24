@@ -18,6 +18,7 @@ class UFlecsInteractionProfile;
 class UFlecsNiagaraProfile;
 class UFlecsDestructibleProfile;
 class UFlecsDoorProfile;
+class UFlecsMovementProfile;
 
 /**
  * Unified entity definition - a preset combining multiple profiles.
@@ -114,6 +115,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Instanced, Category = "Profiles")
 	TObjectPtr<UFlecsDoorProfile> DoorProfile;
 
+	/** Movement - character movement tuning (speeds, capsule sizes, camera effects) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Instanced, Category = "Profiles")
+	TObjectPtr<UFlecsMovementProfile> MovementProfile;
+
 	// ═══════════════════════════════════════════════════════════════
 	// DEFAULT TAGS
 	// ═══════════════════════════════════════════════════════════════
@@ -164,7 +169,8 @@ public:
 			|| InteractionProfile != nullptr
 			|| NiagaraProfile != nullptr
 			|| DestructibleProfile != nullptr
-			|| DoorProfile != nullptr;
+			|| DoorProfile != nullptr
+			|| MovementProfile != nullptr;
 	}
 
 	/** Check if this will create a world entity (physics or render) */
