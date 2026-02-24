@@ -285,6 +285,39 @@ FBarrageConstraintKey FBarrageConstraintSystem::CreateHinge(const FBHingeConstra
 			motor.mMaxTorqueLimit = Params.MotorMaxTorque;
 			motor.mMinTorqueLimit = -Params.MotorMaxTorque;
 		}
+
+		// Friction torque (applies even without motor)
+		if (Params.MaxFrictionTorque > 0.f)
+		{
+			auto* hinge = static_cast<HingeConstraint*>(constraint.GetPtr());
+			hinge->SetMaxFrictionTorque(Params.MaxFrictionTorque);
+		}
+
+		// Motor spring settings and torque limits (for Position mode -- may be activated later at runtime)
+		if (Params.MotorSpringFrequency > 0.f)
+		{
+			auto* hinge = static_cast<HingeConstraint*>(constraint.GetPtr());
+			MotorSettings& motor = hinge->GetMotorSettings();
+			motor.mSpringSettings.mMode = ESpringMode::FrequencyAndDamping;
+			motor.mSpringSettings.mFrequency = Params.MotorSpringFrequency;
+			motor.mSpringSettings.mDamping = Params.MotorSpringDamping;
+			// Set torque limits even if motor is Off at creation (will be activated at runtime)
+			if (Params.MotorMaxTorque > 0.f)
+			{
+				motor.mMaxTorqueLimit = Params.MotorMaxTorque;
+				motor.mMinTorqueLimit = -Params.MotorMaxTorque;
+			}
+		}
+
+		// Limit spring settings
+		if (Params.LimitSpringFrequency > 0.f && Params.bHasLimits)
+		{
+			auto* hinge = static_cast<HingeConstraint*>(constraint.GetPtr());
+			SpringSettings& limitSpring = hinge->GetLimitsSpringSettings();
+			limitSpring.mMode = ESpringMode::FrequencyAndDamping;
+			limitSpring.mFrequency = Params.LimitSpringFrequency;
+			limitSpring.mDamping = Params.LimitSpringDamping;
+		}
 	}
 
 	Owner->physics_system->AddConstraint(constraint.GetPtr());
@@ -367,6 +400,39 @@ FBarrageConstraintKey FBarrageConstraintSystem::CreateSlider(const FBSliderConst
 			MotorSettings& motor = slider->GetMotorSettings();
 			motor.mMaxForceLimit = Params.MotorMaxForce;
 			motor.mMinForceLimit = -Params.MotorMaxForce;
+		}
+
+		// Friction force (applies even without motor)
+		if (Params.MaxFrictionForce > 0.f)
+		{
+			auto* slider = static_cast<SliderConstraint*>(constraint.GetPtr());
+			slider->SetMaxFrictionForce(Params.MaxFrictionForce);
+		}
+
+		// Motor spring settings and force limits (for Position mode -- may be activated later at runtime)
+		if (Params.MotorSpringFrequency > 0.f)
+		{
+			auto* slider = static_cast<SliderConstraint*>(constraint.GetPtr());
+			MotorSettings& motor = slider->GetMotorSettings();
+			motor.mSpringSettings.mMode = ESpringMode::FrequencyAndDamping;
+			motor.mSpringSettings.mFrequency = Params.MotorSpringFrequency;
+			motor.mSpringSettings.mDamping = Params.MotorSpringDamping;
+			// Set force limits even if motor is Off at creation
+			if (Params.MotorMaxForce > 0.f)
+			{
+				motor.mMaxForceLimit = Params.MotorMaxForce;
+				motor.mMinForceLimit = -Params.MotorMaxForce;
+			}
+		}
+
+		// Limit spring settings
+		if (Params.LimitSpringFrequency > 0.f && Params.bHasLimits)
+		{
+			auto* slider = static_cast<SliderConstraint*>(constraint.GetPtr());
+			SpringSettings& limitSpring = slider->GetLimitsSpringSettings();
+			limitSpring.mMode = ESpringMode::FrequencyAndDamping;
+			limitSpring.mFrequency = Params.LimitSpringFrequency;
+			limitSpring.mDamping = Params.LimitSpringDamping;
 		}
 	}
 
@@ -842,6 +908,162 @@ int32 FBarrageConstraintSystem::ProcessBreakableConstraints(TArray<FBarrageConst
 	}
 
 	return ToBreak.Num();
+}
+
+// ============================================================
+// Motor Control
+// ============================================================
+
+void FBarrageConstraintSystem::WakeConstraintBodies(const FConstraintData& Data)
+{
+	if (!Owner || !Owner->body_interface || !Data.JoltConstraint) return;
+
+	if (Data.JoltConstraint->GetType() == EConstraintType::TwoBodyConstraint)
+	{
+		Owner->body_interface->ActivateConstraint(static_cast<const TwoBodyConstraint*>(Data.JoltConstraint.GetPtr()));
+	}
+}
+
+bool FBarrageConstraintSystem::SetMotorState(FBarrageConstraintKey Key, uint8 MotorState)
+{
+	FConstraintData* Data = Constraints.Find(Key);
+	if (!Data || !Data->JoltConstraint) return false;
+
+	EMotorState State = static_cast<EMotorState>(MotorState);
+
+	switch (Data->JoltConstraint->GetSubType())
+	{
+	case EConstraintSubType::Hinge:
+		static_cast<HingeConstraint*>(Data->JoltConstraint.GetPtr())->SetMotorState(State);
+		break;
+	case EConstraintSubType::Slider:
+		static_cast<SliderConstraint*>(Data->JoltConstraint.GetPtr())->SetMotorState(State);
+		break;
+	default:
+		return false;
+	}
+
+	if (State != EMotorState::Off)
+	{
+		WakeConstraintBodies(*Data);
+	}
+	return true;
+}
+
+bool FBarrageConstraintSystem::SetTargetAngle(FBarrageConstraintKey Key, float AngleRadians)
+{
+	FConstraintData* Data = Constraints.Find(Key);
+	if (!Data || !Data->JoltConstraint) return false;
+
+	if (Data->JoltConstraint->GetSubType() != EConstraintSubType::Hinge) return false;
+
+	static_cast<HingeConstraint*>(Data->JoltConstraint.GetPtr())->SetTargetAngle(AngleRadians);
+	WakeConstraintBodies(*Data);
+	return true;
+}
+
+bool FBarrageConstraintSystem::SetTargetPosition(FBarrageConstraintKey Key, float PositionMeters)
+{
+	FConstraintData* Data = Constraints.Find(Key);
+	if (!Data || !Data->JoltConstraint) return false;
+
+	if (Data->JoltConstraint->GetSubType() != EConstraintSubType::Slider) return false;
+
+	static_cast<SliderConstraint*>(Data->JoltConstraint.GetPtr())->SetTargetPosition(PositionMeters);
+	WakeConstraintBodies(*Data);
+	return true;
+}
+
+bool FBarrageConstraintSystem::SetMotorSpring(FBarrageConstraintKey Key, float Frequency, float Damping)
+{
+	FConstraintData* Data = Constraints.Find(Key);
+	if (!Data || !Data->JoltConstraint) return false;
+
+	MotorSettings* Motor = nullptr;
+
+	switch (Data->JoltConstraint->GetSubType())
+	{
+	case EConstraintSubType::Hinge:
+		Motor = &static_cast<HingeConstraint*>(Data->JoltConstraint.GetPtr())->GetMotorSettings();
+		break;
+	case EConstraintSubType::Slider:
+		Motor = &static_cast<SliderConstraint*>(Data->JoltConstraint.GetPtr())->GetMotorSettings();
+		break;
+	default:
+		return false;
+	}
+
+	Motor->mSpringSettings.mMode = ESpringMode::FrequencyAndDamping;
+	Motor->mSpringSettings.mFrequency = Frequency;
+	Motor->mSpringSettings.mDamping = Damping;
+	WakeConstraintBodies(*Data);
+	return true;
+}
+
+bool FBarrageConstraintSystem::SetMotorTorqueLimits(FBarrageConstraintKey Key, float MaxTorque)
+{
+	FConstraintData* Data = Constraints.Find(Key);
+	if (!Data || !Data->JoltConstraint) return false;
+
+	MotorSettings* Motor = nullptr;
+
+	switch (Data->JoltConstraint->GetSubType())
+	{
+	case EConstraintSubType::Hinge:
+		Motor = &static_cast<HingeConstraint*>(Data->JoltConstraint.GetPtr())->GetMotorSettings();
+		break;
+	case EConstraintSubType::Slider:
+		Motor = &static_cast<SliderConstraint*>(Data->JoltConstraint.GetPtr())->GetMotorSettings();
+		break;
+	default:
+		return false;
+	}
+
+	Motor->mMaxTorqueLimit = MaxTorque;
+	Motor->mMinTorqueLimit = -MaxTorque;
+	WakeConstraintBodies(*Data);
+	return true;
+}
+
+bool FBarrageConstraintSystem::SetFriction(FBarrageConstraintKey Key, float Value)
+{
+	FConstraintData* Data = Constraints.Find(Key);
+	if (!Data || !Data->JoltConstraint) return false;
+
+	switch (Data->JoltConstraint->GetSubType())
+	{
+	case EConstraintSubType::Hinge:
+		static_cast<HingeConstraint*>(Data->JoltConstraint.GetPtr())->SetMaxFrictionTorque(Value);
+		break;
+	case EConstraintSubType::Slider:
+		static_cast<SliderConstraint*>(Data->JoltConstraint.GetPtr())->SetMaxFrictionForce(Value);
+		break;
+	default:
+		return false;
+	}
+
+	WakeConstraintBodies(*Data);
+	return true;
+}
+
+float FBarrageConstraintSystem::GetCurrentAngle(FBarrageConstraintKey Key) const
+{
+	const FConstraintData* Data = Constraints.Find(Key);
+	if (!Data || !Data->JoltConstraint) return 0.f;
+
+	if (Data->JoltConstraint->GetSubType() != EConstraintSubType::Hinge) return 0.f;
+
+	return static_cast<const HingeConstraint*>(Data->JoltConstraint.GetPtr())->GetCurrentAngle();
+}
+
+float FBarrageConstraintSystem::GetCurrentPosition(FBarrageConstraintKey Key) const
+{
+	const FConstraintData* Data = Constraints.Find(Key);
+	if (!Data || !Data->JoltConstraint) return 0.f;
+
+	if (Data->JoltConstraint->GetSubType() != EConstraintSubType::Slider) return 0.f;
+
+	return static_cast<const SliderConstraint*>(Data->JoltConstraint.GetPtr())->GetCurrentPosition();
 }
 
 // ============================================================

@@ -56,6 +56,10 @@ public:
 	double JoltZ;
 	FVector3f Offset;
 	FMassByCategory::BMassCategories MassClass;
+
+	/** Allowed degrees of freedom. 0xFF = use layer-based default.
+	 *  Matches JPH::EAllowedDOFs bits. 0x3F = All. */
+	uint8 AllowedDOFs = 0xFF;
 };
 
 class FBSphereParams

@@ -70,6 +70,9 @@ FBarrageSpawnResult FBarrageSpawnUtils::SpawnEntity(UWorld* World, const FBarrag
 		FMassByCategory::MostEnemies
 	);
 
+	// Pass through AllowedDOFs override (0xFF = use layer default)
+	BoxParams.AllowedDOFs = Params.AllowedDOFs;
+
 	FBLet Body = Physics->CreatePrimitive(
 		BoxParams,
 		Params.EntityKey,

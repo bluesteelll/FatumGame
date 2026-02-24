@@ -40,6 +40,10 @@ struct FBarrageSpawnParams
 	float Restitution = 0.3f;
 	float LinearDamping = 0.05f;
 
+	/** Allowed degrees of freedom. 0xFF = use layer default, 0x3F = All DOFs.
+	 *  Maps to JPH::EAllowedDOFs bits. Use 0x3F for doors to bypass MOVING layer RotationY restriction. */
+	uint8 AllowedDOFs = 0xFF;
+
 	// Behavior flags (used by caller for Flecs tag assignment, not applied here)
 	bool bDestructible = false;
 	bool bDamagesPlayer = false;

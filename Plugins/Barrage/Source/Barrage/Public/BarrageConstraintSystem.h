@@ -179,6 +179,37 @@ public:
 	int32 ProcessBreakableConstraints(TArray<FBarrageConstraintKey>* OutBrokenConstraints = nullptr);
 
 	// ============================================================
+	// Motor Control (call from sim thread only, NOT during StepWorld)
+	// ============================================================
+
+	/** Set motor state. 0=Off, 1=Velocity, 2=Position. Wakes body. */
+	bool SetMotorState(FBarrageConstraintKey Key, uint8 MotorState);
+
+	/** Set target angle for hinge Position motor (radians). */
+	bool SetTargetAngle(FBarrageConstraintKey Key, float AngleRadians);
+
+	/** Set target position for slider Position motor (Jolt meters). */
+	bool SetTargetPosition(FBarrageConstraintKey Key, float PositionMeters);
+
+	/** Configure motor spring at runtime. */
+	bool SetMotorSpring(FBarrageConstraintKey Key, float Frequency, float Damping);
+
+	/** Set motor torque limits at runtime (symmetric: -MaxTorque to +MaxTorque).
+	 *  For hinge: Nm. For slider: N. */
+	bool SetMotorTorqueLimits(FBarrageConstraintKey Key, float MaxTorque);
+
+	/** Set constraint friction at runtime. Friction passively resists movement (no active push-back).
+	 *  For hinge: friction torque in Nm. For slider: friction force in N.
+	 *  Wakes attached bodies. */
+	bool SetFriction(FBarrageConstraintKey Key, float Value);
+
+	/** Get current angle of hinge constraint (radians). Returns 0 if not found. */
+	float GetCurrentAngle(FBarrageConstraintKey Key) const;
+
+	/** Get current position of slider constraint (Jolt meters). Returns 0 if not found. */
+	float GetCurrentPosition(FBarrageConstraintKey Key) const;
+
+	// ============================================================
 	// Bulk Operations
 	// ============================================================
 
@@ -240,4 +271,7 @@ private:
 	/** Internal helper to get Jolt body references */
 	bool GetJoltBodies(FBarrageKey Key1, FBarrageKey Key2,
 					   JPH::Body*& OutBody1, JPH::Body*& OutBody2) const;
+
+	/** Wake bodies attached to a constraint via body_interface->ActivateConstraint */
+	void WakeConstraintBodies(const FConstraintData& Data);
 };

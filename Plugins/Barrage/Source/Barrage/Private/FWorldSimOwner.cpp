@@ -302,7 +302,11 @@ FBarrageKey FWorldSimOwner::CreatePrimitive(FBBoxParams& ToCreate, uint16 Layer,
 	box_body_settings.mRestitution = FMath::Clamp(Restitution, 0.0f, 1.0f);
 	box_body_settings.mLinearDamping = FMath::Max(LinearDamping, 0.0f);
 
-	if (MovementType == EMotionType::Dynamic && (Layer == Layers::MOVING || Layer == Layers::ENEMY))
+	if (ToCreate.AllowedDOFs != 0xFF)
+	{
+		box_body_settings.mAllowedDOFs = static_cast<JPH::EAllowedDOFs>(ToCreate.AllowedDOFs);
+	}
+	else if (MovementType == EMotionType::Dynamic && (Layer == Layers::MOVING || Layer == Layers::ENEMY))
 	{
 		box_body_settings.mAllowedDOFs = EAllowedDOFs::TranslationX | EAllowedDOFs::TranslationY | EAllowedDOFs::TranslationZ | EAllowedDOFs::RotationY;
 	}

@@ -162,6 +162,21 @@ struct FBHingeConstraintParams : public FBConstraintParamsBase
 
 	/** Maximum torque the motor can apply */
 	float MotorMaxTorque = 0.0f;
+
+	/** Motor spring frequency in Hz (for Position mode). 0 = use Jolt default. */
+	float MotorSpringFrequency = 0.0f;
+
+	/** Motor spring damping ratio (for Position mode). 1.0 = critical damping. */
+	float MotorSpringDamping = 0.0f;
+
+	/** Maximum friction torque applied when motor is Off. Anti-jitter. */
+	float MaxFrictionTorque = 0.0f;
+
+	/** Limit spring frequency in Hz. 0 = hard limits. */
+	float LimitSpringFrequency = 0.0f;
+
+	/** Limit spring damping ratio. */
+	float LimitSpringDamping = 0.0f;
 };
 
 /**
@@ -206,6 +221,21 @@ struct FBSliderConstraintParams : public FBConstraintParamsBase
 	 * Only used when SpringFrequency > 0.
 	 */
 	float SpringDamping = 0.0f;
+
+	/** Motor spring frequency in Hz (for Position mode). */
+	float MotorSpringFrequency = 0.0f;
+
+	/** Motor spring damping ratio (for Position mode). */
+	float MotorSpringDamping = 0.0f;
+
+	/** Maximum friction force applied when motor is Off. */
+	float MaxFrictionForce = 0.0f;
+
+	/** Limit spring frequency in Hz. 0 = hard limits. */
+	float LimitSpringFrequency = 0.0f;
+
+	/** Limit spring damping ratio. */
+	float LimitSpringDamping = 0.0f;
 };
 
 /**

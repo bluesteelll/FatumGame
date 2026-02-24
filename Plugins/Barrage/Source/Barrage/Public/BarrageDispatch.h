@@ -136,6 +136,12 @@ public:
 	/** Synchronously zero both linear and angular velocity. Use from sim thread for pool body reset. */
 	void ResetBodyVelocities(FBarrageKey BarrageKey);
 
+	/** Get angular velocity (Jolt rad/s, Jolt axes). Use from sim thread. */
+	FVector3d GetBodyAngularVelocity(FBarrageKey BarrageKey);
+
+	/** Set angular velocity (Jolt rad/s, Jolt axes). Use from sim thread. */
+	void SetBodyAngularVelocity(FBarrageKey BarrageKey, const FVector3d& AngVel);
+
 	/** Synchronously apply impulse (kg·cm/s in UE coordinates) to a body's center of mass.
 	 *  Internally converts to Jolt units and calls body_interface->AddImpulse().
 	 *  Safe to call from Flecs worker threads during progress() (i.e., AFTER StepWorld completes).
@@ -205,6 +211,37 @@ public:
 													float MinDistance = 0.0f, float MaxDistance = 0.0f,
 													float BreakForce = 0.0f, float SpringFrequency = 0.0f,
 													float SpringDamping = 0.5f, bool bLockRotation = false);
+
+	// ── Runtime Motor Control ──
+
+	/** Set motor state. 0=Off, 1=Velocity, 2=Position. */
+	bool SetConstraintMotorState(FBarrageConstraintKey Key, uint8 MotorState);
+
+	/** Set target angle for hinge Position motor (radians). */
+	bool SetConstraintTargetAngle(FBarrageConstraintKey Key, float AngleRadians);
+
+	/** Set target position for slider Position motor (Jolt meters). */
+	bool SetConstraintTargetPosition(FBarrageConstraintKey Key, float PositionMeters);
+
+	/** Configure motor spring at runtime. */
+	bool SetConstraintMotorSpring(FBarrageConstraintKey Key, float Frequency, float Damping);
+
+	/** Set motor torque limits at runtime (symmetric: -MaxTorque to +MaxTorque). */
+	bool SetConstraintMotorTorqueLimits(FBarrageConstraintKey Key, float MaxTorque);
+
+	/** Set constraint friction at runtime. Hinge: Nm, Slider: N. Wakes bodies. */
+	bool SetConstraintFriction(FBarrageConstraintKey Key, float Value);
+
+	/** Get current angle of hinge constraint (radians). */
+	float GetConstraintCurrentAngle(FBarrageConstraintKey Key) const;
+
+	/** Get current position of slider constraint (Jolt meters). */
+	float GetConstraintCurrentPosition(FBarrageConstraintKey Key) const;
+
+	// ── Angular Damping ──
+
+	/** Set angular damping on a body. Requires body lock. */
+	void SetBodyAngularDamping(FBarrageKey Key, float Damping);
 
 	/**
 	 * Remove a constraint.

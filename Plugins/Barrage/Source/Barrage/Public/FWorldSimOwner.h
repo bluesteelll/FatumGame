@@ -517,6 +517,52 @@ public:
 		body_interface->SetLinearAndAngularVelocity(BodyID, JPH::Vec3::sZero(), JPH::Vec3::sZero());
 	}
 
+	/** Get angular velocity of a body (Jolt rad/s, Jolt axes: X,Y,Z). Returns zero if body not found. */
+	FVector3d GetBodyAngularVelocity(FBarrageKey BarrageKey)
+	{
+		if (!body_interface) return FVector3d::ZeroVector;
+
+		JPH::BodyID BodyID;
+		if (!BarrageToJoltMapping->find(BarrageKey, BodyID) || BodyID.IsInvalid()) return FVector3d::ZeroVector;
+
+		JPH::Vec3 AngVel = body_interface->GetAngularVelocity(BodyID);
+		return FVector3d(AngVel.GetX(), AngVel.GetY(), AngVel.GetZ());
+	}
+
+	/** Set angular velocity of a body (Jolt rad/s, Jolt axes: X,Y,Z). */
+	void SetBodyAngularVelocity(FBarrageKey BarrageKey, const FVector3d& AngVel)
+	{
+		if (!body_interface) return;
+
+		JPH::BodyID BodyID;
+		if (!BarrageToJoltMapping->find(BarrageKey, BodyID) || BodyID.IsInvalid()) return;
+
+		body_interface->SetAngularVelocity(BodyID, JPH::Vec3(
+			static_cast<float>(AngVel.X),
+			static_cast<float>(AngVel.Y),
+			static_cast<float>(AngVel.Z)));
+	}
+
+	/**
+	 * Set angular damping on a body. Requires body lock since MotionProperties
+	 * is not exposed through body_interface.
+	 */
+	void SetBodyAngularDamping(FBarrageKey BarrageKey, float Damping)
+	{
+		if (!body_interface || !physics_system) return;
+
+		JPH::BodyID BodyID;
+		if (!BarrageToJoltMapping->find(BarrageKey, BodyID) || BodyID.IsInvalid()) return;
+
+		JPH::BodyLockWrite lock(physics_system->GetBodyLockInterface(), BodyID);
+		if (!lock.Succeeded()) return;
+
+		JPH::Body& JoltBody = lock.GetBody();
+		if (!JoltBody.IsDynamic()) return;
+
+		JoltBody.GetMotionProperties()->SetAngularDamping(FMath::Max(Damping, 0.f));
+	}
+
 	// Wake up all sleeping bodies in a given area - useful when removing support from stacked objects
 	void ActivateBodiesInArea(const FVector3d& Center, double HalfExtent)
 	{

@@ -10,12 +10,16 @@
 #include "FlecsProjectileProfile.h"
 #include "FlecsContainerProfile.h"
 #include "FlecsInteractionProfile.h"
+#include "FlecsDoorProfile.h"
+#include "FlecsDoorComponents.h"
 #include "FlecsGameTags.h"
 #include "FlecsStaticComponents.h"
 #include "FlecsInstanceComponents.h"
 #include "BarrageDispatch.h"
+#include "BarrageConstraintSystem.h"
 #include "FBarragePrimitive.h"
 #include "FBShapeParams.h"
+#include "FBConstraintParams.h"
 #include "BarrageSpawnUtils.h"
 #include "FlecsRenderManager.h"
 #include "FlecsNiagaraManager.h"
@@ -134,6 +138,7 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 	UFlecsContainerProfile* EffectiveContainer = Request.ContainerProfile;
 	UFlecsInteractionProfile* EffectiveInteraction = Request.InteractionProfile;
 	UFlecsNiagaraProfile* EffectiveNiagara = Request.NiagaraProfile;
+	UFlecsDoorProfile* EffectiveDoor = nullptr;
 
 	// Default tags from request
 	bool bPickupable = Request.bPickupable;
@@ -158,6 +163,7 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 		if (!EffectiveContainer) EffectiveContainer = Def->ContainerProfile;
 		if (!EffectiveInteraction) EffectiveInteraction = Def->InteractionProfile;
 		if (!EffectiveNiagara) EffectiveNiagara = Def->NiagaraProfile;
+		if (!EffectiveDoor) EffectiveDoor = Def->DoorProfile;
 
 		// Apply tags from definition (OR with request tags)
 		bPickupable = bPickupable || Def->bPickupable;
@@ -250,6 +256,8 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 			// ═══════════════════════════════════════════════════════
 			// NON-PROJECTILE: Use box collision (auto from mesh bounds)
 			// ═══════════════════════════════════════════════════════
+			const bool bIsDoor = EffectiveDoor != nullptr;
+
 			FBarrageSpawnParams Params;
 			Params.EntityKey = EntityKey;
 			Params.WorldTransform = FTransform(Request.Rotation, Request.Location);
@@ -269,6 +277,18 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 			{
 				Params.PhysicsLayer = EPhysicsLayer::MOVING;
 				Params.bIsSensor = true;
+			}
+
+			// Doors must be Dynamic from creation (Jolt Static bodies lack MotionProperties,
+			// so SetBodyMass/SetBodyAngularDamping would crash on null).
+			// AllowedDOFs = 0x3F (All) bypasses MOVING layer's RotationY-only restriction.
+			// Constraint creation is in the same EnqueueCommand before any StepWorld, so no gravity fall.
+			if (bIsDoor)
+			{
+				Params.bIsMovable = true;
+				Params.PhysicsLayer = EPhysicsLayer::MOVING;
+				Params.AllowedDOFs = 0x3F; // All DOFs
+				Params.InitialVelocity = FVector::ZeroVector;
 			}
 
 			Params.Mesh = EffectiveRender->Mesh;
@@ -415,6 +435,10 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 		bool bHasDeathEffect;
 		UNiagaraSystem* DeathEffect;
 		float DeathEffectScale;
+
+		// Door data (captured from DoorProfile for sim thread constraint creation)
+		bool bHasDoor;
+		FDoorStatic DoorStaticData;
 	};
 
 	FSpawnData Data;
@@ -485,6 +509,35 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 	Data.bHasDeathEffect = EffectiveNiagara && EffectiveNiagara->HasDeathEffect();
 	Data.DeathEffect = Data.bHasDeathEffect ? EffectiveNiagara->DeathEffect.Get() : nullptr;
 	Data.DeathEffectScale = Data.bHasDeathEffect ? EffectiveNiagara->DeathEffectScale : 1.0f;
+
+	// Door
+	Data.bHasDoor = EffectiveDoor != nullptr;
+	if (Data.bHasDoor)
+	{
+		FDoorStatic& DS = Data.DoorStaticData;
+		DS.DoorType = EffectiveDoor->IsHinged() ? EDoorType::Hinged : EDoorType::Sliding;
+		DS.MaxOpenAngle = EffectiveDoor->GetMaxOpenAngleRadians();
+		DS.HingeAxis = EffectiveDoor->HingeAxis.GetSafeNormal();
+		DS.HingeOffset = EffectiveDoor->HingeOffset;
+		DS.bBidirectional = EffectiveDoor->bBidirectional;
+		DS.SlideDirection = EffectiveDoor->SlideDirection.GetSafeNormal();
+		DS.SlideDistance = EffectiveDoor->SlideDistanceCm;
+		DS.bMotorDriven = EffectiveDoor->bMotorDriven;
+		DS.MotorFrequency = EffectiveDoor->MotorFrequency;
+		DS.MotorDamping = EffectiveDoor->MotorDamping;
+		DS.MotorMaxTorque = EffectiveDoor->MotorMaxForce;
+		DS.FrictionTorque = EffectiveDoor->FrictionForce;
+		DS.bAutoClose = EffectiveDoor->bAutoClose;
+		DS.AutoCloseDelay = EffectiveDoor->AutoCloseDelay;
+		DS.bStartsLocked = EffectiveDoor->bStartsLocked;
+		DS.bUnlockOnInteraction = EffectiveDoor->bUnlockOnInteraction;
+		DS.bLockAtEndPosition = EffectiveDoor->bLockAtEndPosition;
+		DS.LockMass = EffectiveDoor->LockMass;
+		DS.ConstraintBreakForce = EffectiveDoor->ConstraintBreakForce;
+		DS.ConstraintBreakTorque = EffectiveDoor->ConstraintBreakTorque;
+		DS.Mass = EffectiveDoor->Mass;
+		DS.AngularDamping = EffectiveDoor->AngularDamping;
+	}
 
 	// Enqueue Flecs entity creation
 	FlecsSubsystem->EnqueueCommand([FlecsSubsystem, Data]()
@@ -689,9 +742,185 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 			Entity.set<FNiagaraDeathEffect>(DeathVFX);
 		}
 
-		UE_LOG(LogFlecsEntity, Verbose, TEXT("Spawned entity: Key=%llu FlecsId=%llu Item=%d Health=%d Projectile=%d Container=%d Prefab=%d"),
+		// ─────────────────────────────────────────────────────────
+		// DOOR: set components, create constraint, switch Static -> Dynamic
+		// ─────────────────────────────────────────────────────────
+		if (Data.bHasDoor && Data.bHasPhysics)
+		{
+			const FDoorStatic& DS = Data.DoorStaticData;
+			Entity.add<FTagDoor>();
+
+			FDoorInstance DoorInst;
+			DoorInst.State = DS.bStartsLocked ? EDoorState::Locked : EDoorState::Closed;
+			DoorInst.bUnlocked = !DS.bStartsLocked;
+
+			FlecsSubsystem->EnsureBarrageAccess();
+
+			// Use cached dispatch (safe against Deinitialize race, consistent with systems)
+			UBarrageDispatch* Barrage = FlecsSubsystem->GetBarrageDispatch();
+			checkf(Barrage, TEXT("SpawnEntity DOOR: BarrageDispatch is null!"));
+
+			FBLet Prim = Barrage->GetShapeRef(Data.Key);
+			checkf(FBarragePrimitive::IsNotNull(Prim), TEXT("SpawnEntity DOOR: Physics body not found for Key=%llu"), static_cast<uint64>(Data.Key));
+
+			FBarrageKey DoorBarrageKey = Prim->KeyIntoBarrage;
+			FBarrageKey WorldBody; // Invalid key -> Body::sFixedToWorld
+
+			FBarrageConstraintSystem* ConstraintSystem = Barrage->GetConstraintSystem();
+			checkf(ConstraintSystem, TEXT("SpawnEntity DOOR: ConstraintSystem is null!"));
+
+			// Read body position for anchor computation (UE coordinates)
+			FVector3f BodyPosF = FBarragePrimitive::GetPosition(Prim);
+			FVector BodyPos(BodyPosF.X, BodyPosF.Y, BodyPosF.Z);
+			FQuat BodyRot(FBarragePrimitive::OptimisticGetAbsoluteRotation(Prim));
+
+			FBarrageConstraintKey CKey;
+
+			if (DS.DoorType == EDoorType::Hinged)
+			{
+				FBHingeConstraintParams Params;
+				Params.Body1 = DoorBarrageKey;
+				Params.Body2 = WorldBody;
+				Params.Space = EBConstraintSpace::WorldSpace;
+				Params.bAutoDetectAnchor = false;
+
+				// Compute hinge anchor in world space
+				FVector WorldHingePos = BodyPos + BodyRot.RotateVector(DS.HingeOffset);
+				Params.AnchorPoint1 = WorldHingePos;
+				Params.AnchorPoint2 = WorldHingePos;
+
+				// Hinge and normal axes (UE coordinates -- CreateHinge converts internally)
+				Params.HingeAxis = DS.HingeAxis;
+				FVector Up(0, 0, 1);
+				if (FMath::Abs(FVector::DotProduct(Params.HingeAxis, Up)) > 0.99)
+				{
+					Up = FVector(1, 0, 0);
+				}
+				Params.NormalAxis = FVector::CrossProduct(Params.HingeAxis, Up).GetSafeNormal();
+
+				// Angle limits
+				Params.bHasLimits = true;
+				if (DS.bBidirectional)
+				{
+					Params.MinAngle = -DS.MaxOpenAngle;
+					Params.MaxAngle = DS.MaxOpenAngle;
+				}
+				else
+				{
+					Params.MinAngle = 0.f;
+					Params.MaxAngle = DS.MaxOpenAngle;
+				}
+
+				// Motor settings -- bEnableMotor = false so CreateHinge doesn't activate
+				// Velocity mode. Spring/friction/torque settings are still applied.
+				// DoorTickSystem controls the motor state at runtime.
+				Params.bEnableMotor = false;
+				Params.MotorMaxTorque = DS.MotorMaxTorque;
+				Params.MotorSpringFrequency = DS.MotorFrequency;
+				Params.MotorSpringDamping = DS.MotorDamping;
+				Params.MaxFrictionTorque = DS.FrictionTorque;
+
+				// Hard limits (frequency=0 enables Baumgarte position correction, prevents bounce)
+				Params.LimitSpringFrequency = 0.f;
+				Params.LimitSpringDamping = 0.f;
+
+				// Break thresholds (0 = unbreakable)
+				Params.BreakForce = DS.ConstraintBreakForce;
+				Params.BreakTorque = DS.ConstraintBreakTorque;
+
+				CKey = ConstraintSystem->CreateHinge(Params);
+			}
+			else // Sliding
+			{
+				FBSliderConstraintParams Params;
+				Params.Body1 = DoorBarrageKey;
+				Params.Body2 = WorldBody;
+				Params.Space = EBConstraintSpace::WorldSpace;
+				Params.bAutoDetectAnchor = false;
+
+				Params.AnchorPoint1 = BodyPos;
+				Params.AnchorPoint2 = BodyPos;
+
+				// Slider axis and perpendicular normal (UE coordinates)
+				FVector SlideAxis = BodyRot.RotateVector(DS.SlideDirection).GetSafeNormal();
+				Params.SliderAxis = SlideAxis;
+				FVector Up(0, 0, 1);
+				if (FMath::Abs(FVector::DotProduct(SlideAxis, Up)) > 0.99)
+				{
+					Up = FVector(1, 0, 0);
+				}
+				Params.NormalAxis = FVector::CrossProduct(SlideAxis, Up).GetSafeNormal();
+
+				// Position limits (cm -- CreateSlider converts to Jolt meters internally)
+				Params.bHasLimits = true;
+				Params.MinLimit = 0.f;
+				Params.MaxLimit = DS.SlideDistance;
+
+				// Motor settings -- bEnableMotor = false, DoorTickSystem controls state
+				Params.bEnableMotor = false;
+				Params.MotorMaxForce = DS.MotorMaxTorque;
+				Params.MotorSpringFrequency = DS.MotorFrequency;
+				Params.MotorSpringDamping = DS.MotorDamping;
+				Params.MaxFrictionForce = DS.FrictionTorque;
+
+				// Hard limits (frequency=0 enables Baumgarte position correction, prevents bounce)
+				Params.LimitSpringFrequency = 0.f;
+				Params.LimitSpringDamping = 0.f;
+
+				// Break thresholds (0 = unbreakable)
+				Params.BreakForce = DS.ConstraintBreakForce;
+				Params.BreakTorque = DS.ConstraintBreakTorque;
+
+				CKey = ConstraintSystem->CreateSlider(Params);
+			}
+
+			checkf(CKey.IsValid(), TEXT("SpawnEntity DOOR: Failed to create %s constraint for Key=%llu!"),
+				DS.DoorType == EDoorType::Hinged ? TEXT("Hinge") : TEXT("Slider"),
+				static_cast<uint64>(Data.Key));
+
+			DoorInst.ConstraintKey = CKey.Key;
+			Entity.set<FDoorInstance>(DoorInst);
+			Entity.add<FTagConstrained>();
+
+			// Motor starts Off (bEnableMotor=false). If locked, hold at 0 with immovable motor.
+			// Locked = total immunity to movement. Only way to move is break the constraint.
+			if (DS.bStartsLocked)
+			{
+				ConstraintSystem->SetMotorTorqueLimits(CKey, 1e6f); // Immovable
+				if (DS.DoorType == EDoorType::Hinged)
+				{
+					ConstraintSystem->SetMotorState(CKey, 2); // Position mode
+					ConstraintSystem->SetTargetAngle(CKey, 0.f);
+				}
+				else
+				{
+					ConstraintSystem->SetMotorState(CKey, 2); // Position mode
+					ConstraintSystem->SetTargetPosition(CKey, 0.f);
+				}
+			}
+
+			UE_LOG(LogFlecsEntity, Log, TEXT("SpawnEntity DOOR: Created %s constraint Key=%lld for entity %llu"),
+				DS.DoorType == EDoorType::Hinged ? TEXT("Hinge") : TEXT("Slider"),
+				CKey.Key, Entity.id());
+
+			// Body is already Dynamic/MOVING (created that way to avoid null MotionProperties crash).
+			// Set mass and angular damping for proper door physics feel.
+			Barrage->SetBodyMass(DoorBarrageKey, DS.Mass);
+			Barrage->SetBodyAngularDamping(DoorBarrageKey, DS.AngularDamping);
+
+			// Heavy mass at spawn: locked doors (reduces jitter from motor spring)
+			// and latched doors (end position = closed at spawn).
+			if (DS.bLockAtEndPosition || DS.bStartsLocked)
+			{
+				Barrage->SetBodyMass(DoorBarrageKey, DS.LockMass);
+				UE_LOG(LogFlecsEntity, Log, TEXT("SpawnEntity DOOR: Applied LockMass=%.1f kg (locked=%d, latch=%d)"),
+					DS.LockMass, DS.bStartsLocked, DS.bLockAtEndPosition);
+			}
+		}
+
+		UE_LOG(LogFlecsEntity, Verbose, TEXT("Spawned entity: Key=%llu FlecsId=%llu Item=%d Health=%d Projectile=%d Container=%d Door=%d Prefab=%d"),
 			static_cast<uint64>(Data.Key), Entity.id(),
-			Data.bHasItem, Data.bHasHealth, Data.bHasProjectile, Data.bHasContainer,
+			Data.bHasItem, Data.bHasHealth, Data.bHasProjectile, Data.bHasContainer, Data.bHasDoor,
 			Data.EntityDefinition != nullptr);
 	});
 

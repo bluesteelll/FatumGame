@@ -13,6 +13,8 @@
 #include "FlecsWeaponProfile.h"
 #include "FlecsInteractionProfile.h"
 #include "FlecsDestructibleProfile.h"
+#include "FlecsDoorProfile.h"
+#include "FlecsDoorComponents.h"
 
 // ═══════════════════════════════════════════════════════════════
 // ENTITY PREFAB REGISTRY IMPLEMENTATION
@@ -186,12 +188,40 @@ flecs::entity UFlecsArtillerySubsystem::GetOrCreateEntityPrefab(UFlecsEntityDefi
 		Prefab.set<FDestructibleStatic>(DestrStatic);
 	}
 
+	if (UFlecsDoorProfile* DoorProf = EntityDefinition->DoorProfile)
+	{
+		FDoorStatic DoorStatic;
+		DoorStatic.DoorType = DoorProf->IsHinged() ? EDoorType::Hinged : EDoorType::Sliding;
+		DoorStatic.MaxOpenAngle = DoorProf->GetMaxOpenAngleRadians();
+		DoorStatic.HingeAxis = DoorProf->HingeAxis.GetSafeNormal();
+		DoorStatic.HingeOffset = DoorProf->HingeOffset;
+		DoorStatic.bBidirectional = DoorProf->bBidirectional;
+		DoorStatic.SlideDirection = DoorProf->SlideDirection.GetSafeNormal();
+		DoorStatic.SlideDistance = DoorProf->SlideDistanceCm;
+		DoorStatic.bMotorDriven = DoorProf->bMotorDriven;
+		DoorStatic.MotorFrequency = DoorProf->MotorFrequency;
+		DoorStatic.MotorDamping = DoorProf->MotorDamping;
+		DoorStatic.MotorMaxTorque = DoorProf->MotorMaxForce;
+		DoorStatic.FrictionTorque = DoorProf->FrictionForce;
+		DoorStatic.bAutoClose = DoorProf->bAutoClose;
+		DoorStatic.AutoCloseDelay = DoorProf->AutoCloseDelay;
+		DoorStatic.bStartsLocked = DoorProf->bStartsLocked;
+		DoorStatic.bUnlockOnInteraction = DoorProf->bUnlockOnInteraction;
+		DoorStatic.bLockAtEndPosition = DoorProf->bLockAtEndPosition;
+		DoorStatic.LockMass = DoorProf->LockMass;
+		DoorStatic.ConstraintBreakForce = DoorProf->ConstraintBreakForce;
+		DoorStatic.ConstraintBreakTorque = DoorProf->ConstraintBreakTorque;
+		DoorStatic.Mass = DoorProf->Mass;
+		DoorStatic.AngularDamping = DoorProf->AngularDamping;
+		Prefab.set<FDoorStatic>(DoorStatic);
+	}
+
 	// TODO: Add FLootStatic if needed
 
 	// Store in registry
 	EntityPrefabs.Add(EntityDefinition, Prefab);
 
-	UE_LOG(LogTemp, Log, TEXT("Created entity prefab: '%s' (Health=%d, Damage=%d, Projectile=%d, Container=%d, Item=%d, Weapon=%d, Interaction=%d, Destructible=%d)"),
+	UE_LOG(LogTemp, Log, TEXT("Created entity prefab: '%s' (Health=%d, Damage=%d, Projectile=%d, Container=%d, Item=%d, Weapon=%d, Interaction=%d, Destructible=%d, Door=%d)"),
 		*EntityDefinition->GetName(),
 		EntityDefinition->HealthProfile != nullptr,
 		EntityDefinition->DamageProfile != nullptr,
@@ -200,7 +230,8 @@ flecs::entity UFlecsArtillerySubsystem::GetOrCreateEntityPrefab(UFlecsEntityDefi
 		EntityDefinition->ItemDefinition != nullptr,
 		EntityDefinition->WeaponProfile != nullptr,
 		EntityDefinition->InteractionProfile != nullptr,
-		EntityDefinition->DestructibleProfile != nullptr);
+		EntityDefinition->DestructibleProfile != nullptr,
+		EntityDefinition->DoorProfile != nullptr);
 
 	return Prefab;
 }

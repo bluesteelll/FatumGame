@@ -75,3 +75,9 @@ struct FTagDebrisFragment {};
 
 /** Collision pair: projectile hit a fragmentable object */
 struct FTagCollisionFragmentation {};
+
+/** Entity is a door (hinged or sliding) */
+struct FTagDoor {};
+
+/** Entity is a trigger that can unlock/toggle a door */
+struct FTagDoorTrigger {};

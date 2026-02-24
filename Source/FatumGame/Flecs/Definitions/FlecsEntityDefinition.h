@@ -17,6 +17,7 @@ class UFlecsWeaponProfile;
 class UFlecsInteractionProfile;
 class UFlecsNiagaraProfile;
 class UFlecsDestructibleProfile;
+class UFlecsDoorProfile;
 
 /**
  * Unified entity definition - a preset combining multiple profiles.
@@ -109,6 +110,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Instanced, Category = "Profiles")
 	TObjectPtr<UFlecsDestructibleProfile> DestructibleProfile;
 
+	/** Door - makes entity a physics-driven hinged or sliding door */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Instanced, Category = "Profiles")
+	TObjectPtr<UFlecsDoorProfile> DoorProfile;
+
 	// ═══════════════════════════════════════════════════════════════
 	// DEFAULT TAGS
 	// ═══════════════════════════════════════════════════════════════
@@ -158,7 +163,8 @@ public:
 			|| WeaponProfile != nullptr
 			|| InteractionProfile != nullptr
 			|| NiagaraProfile != nullptr
-			|| DestructibleProfile != nullptr;
+			|| DestructibleProfile != nullptr
+			|| DoorProfile != nullptr;
 	}
 
 	/** Check if this will create a world entity (physics or render) */
@@ -184,6 +190,9 @@ public:
 
 	/** Check if this is a fragmentable destructible */
 	bool IsDestructible() const { return DestructibleProfile != nullptr; }
+
+	/** Check if this is a door */
+	bool IsDoor() const { return DoorProfile != nullptr; }
 
 	virtual FPrimaryAssetId GetPrimaryAssetId() const override
 	{

@@ -421,6 +421,19 @@ void UBarrageDispatch::ResetBodyVelocities(FBarrageKey BarrageKey)
 	}
 }
 
+FVector3d UBarrageDispatch::GetBodyAngularVelocity(FBarrageKey BarrageKey)
+{
+	if (JoltGameSim)
+		return JoltGameSim->GetBodyAngularVelocity(BarrageKey);
+	return FVector3d::ZeroVector;
+}
+
+void UBarrageDispatch::SetBodyAngularVelocity(FBarrageKey BarrageKey, const FVector3d& AngVel)
+{
+	if (JoltGameSim)
+		JoltGameSim->SetBodyAngularVelocity(BarrageKey, AngVel);
+}
+
 void UBarrageDispatch::AddBodyImpulse(FBarrageKey BarrageKey, FVector ImpulseUE)
 {
 	if (!JoltGameSim || !JoltGameSim->body_interface) return;
@@ -542,6 +555,70 @@ FBarrageConstraintKey UBarrageDispatch::CreateDistanceConstraint(FBarrageKey Bod
 	Params.bLockRotation = bLockRotation;
 
 	return System->CreateDistance(Params);
+}
+
+bool UBarrageDispatch::SetConstraintMotorState(FBarrageConstraintKey Key, uint8 MotorState)
+{
+	if (FBarrageConstraintSystem* CS = GetConstraintSystem())
+		return CS->SetMotorState(Key, MotorState);
+	return false;
+}
+
+bool UBarrageDispatch::SetConstraintTargetAngle(FBarrageConstraintKey Key, float AngleRadians)
+{
+	if (FBarrageConstraintSystem* CS = GetConstraintSystem())
+		return CS->SetTargetAngle(Key, AngleRadians);
+	return false;
+}
+
+bool UBarrageDispatch::SetConstraintTargetPosition(FBarrageConstraintKey Key, float PositionMeters)
+{
+	if (FBarrageConstraintSystem* CS = GetConstraintSystem())
+		return CS->SetTargetPosition(Key, PositionMeters);
+	return false;
+}
+
+bool UBarrageDispatch::SetConstraintMotorSpring(FBarrageConstraintKey Key, float Frequency, float Damping)
+{
+	if (FBarrageConstraintSystem* CS = GetConstraintSystem())
+		return CS->SetMotorSpring(Key, Frequency, Damping);
+	return false;
+}
+
+bool UBarrageDispatch::SetConstraintMotorTorqueLimits(FBarrageConstraintKey Key, float MaxTorque)
+{
+	if (FBarrageConstraintSystem* CS = GetConstraintSystem())
+		return CS->SetMotorTorqueLimits(Key, MaxTorque);
+	return false;
+}
+
+bool UBarrageDispatch::SetConstraintFriction(FBarrageConstraintKey Key, float Value)
+{
+	if (FBarrageConstraintSystem* CS = GetConstraintSystem())
+		return CS->SetFriction(Key, Value);
+	return false;
+}
+
+float UBarrageDispatch::GetConstraintCurrentAngle(FBarrageConstraintKey Key) const
+{
+	if (const FBarrageConstraintSystem* CS = GetConstraintSystem())
+		return CS->GetCurrentAngle(Key);
+	return 0.f;
+}
+
+float UBarrageDispatch::GetConstraintCurrentPosition(FBarrageConstraintKey Key) const
+{
+	if (const FBarrageConstraintSystem* CS = GetConstraintSystem())
+		return CS->GetCurrentPosition(Key);
+	return 0.f;
+}
+
+void UBarrageDispatch::SetBodyAngularDamping(FBarrageKey Key, float Damping)
+{
+	if (JoltGameSim)
+	{
+		JoltGameSim->SetBodyAngularDamping(Key, Damping);
+	}
 }
 
 bool UBarrageDispatch::RemoveConstraint(FBarrageConstraintKey Key)
