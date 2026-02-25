@@ -424,8 +424,14 @@ void AFlecsCharacter::Tick(float DeltaTime)
 	CheckHealthChanges();
 	TickInteractionStateMachine(DeltaTime);
 
-	// Apply camera effects from movement system
-	if (FatumMovement && FollowCamera)
+	// Apply camera effects from movement system.
+	// Skip when Focus interaction manually drives camera position/rotation.
+	bool bFocusDrivingCamera = (InteractionState == EInteractionState::Focusing
+		|| InteractionState == EInteractionState::Unfocusing
+		|| (InteractionState == EInteractionState::Focused
+			&& ActiveInteractionProfile && ActiveInteractionProfile->bMoveCamera));
+
+	if (FatumMovement && FollowCamera && !bFocusDrivingCamera)
 	{
 		float BaseFOV = 90.f;
 		FollowCamera->SetFieldOfView(BaseFOV + FatumMovement->GetCurrentFOVOffset());
