@@ -29,6 +29,9 @@ void UFatumMovementComponent::ApplyProfile()
 	AirControl = MovementProfile->AirControlMultiplier;
 	BrakingDecelerationWalking = MovementProfile->GroundDeceleration;
 	MaxAcceleration = MovementProfile->GroundAcceleration;
+
+	PostureSM.CurrentEyeHeight = MovementProfile->StandingEyeHeight;
+	PostureSM.TargetEyeHeight = MovementProfile->StandingEyeHeight;
 }
 
 void UFatumMovementComponent::TickComponent(float DeltaTime, ELevelTick TickType,
@@ -41,8 +44,86 @@ void UFatumMovementComponent::TickComponent(float DeltaTime, ELevelTick TickType
 
 void UFatumMovementComponent::TickHSM(float DeltaTime)
 {
+	UpdatePosture(DeltaTime);
 	UpdateMovementLayer(DeltaTime);
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// POSTURE
+// ═══════════════════════════════════════════════════════════════════════════
+
+void UFatumMovementComponent::UpdatePosture(float DeltaTime)
+{
+	if (!MovementProfile) return;
+
+	bool bCanStandUp = CheckCanExpandTo(MovementProfile->StandingHalfHeight);
+	bool bCanCrouch = CheckCanExpandTo(MovementProfile->CrouchHalfHeight);
+
+	bool bChanged = PostureSM.Tick(DeltaTime, MovementProfile, bCanStandUp, bCanCrouch);
+
+	if (bChanged)
+	{
+		float OldHH = CharacterOwner->GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
+
+		float R, HH;
+		MovementProfile->GetCapsuleForPosture(PostureSM.CurrentPosture, R, HH);
+		CharacterOwner->GetCapsuleComponent()->SetCapsuleSize(R, HH, true);
+
+		// Adjust actor position so feet stay on the ground.
+		// Capsule grows/shrinks from center — without this, expanding clips into floor
+		// and CMC resolves it next tick → jitter.
+		float HeightDelta = HH - OldHH;
+		if (!FMath::IsNearlyZero(HeightDelta))
+		{
+			FVector Loc = CharacterOwner->GetActorLocation();
+			Loc.Z += HeightDelta;
+			CharacterOwner->SetActorLocation(Loc);
+
+			// Compensate eye height so camera stays at the same world-space position.
+			// Actor shifted by HeightDelta → offset CurrentEyeHeight by -HeightDelta.
+			// The smooth interpolation then transitions to TargetEyeHeight naturally.
+			PostureSM.CurrentEyeHeight -= HeightDelta;
+		}
+
+		OnPostureChanged.Broadcast(PostureSM.CurrentPosture);
+	}
+}
+
+bool UFatumMovementComponent::CheckCanExpandTo(float TargetHalfHeight) const
+{
+	if (!CharacterOwner) return false;
+
+	float CurrentHH = CharacterOwner->GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
+	if (TargetHalfHeight <= CurrentHH) return true; // shrinking is always ok
+
+	float HeightDiff = TargetHalfHeight - CurrentHH;
+	float Radius = CharacterOwner->GetCapsuleComponent()->GetScaledCapsuleRadius();
+
+	// Test at the position where capsule center would be after expansion (feet stay on ground).
+	// Feet = ActorZ - CurrentHH, new center = Feet + TargetHH = ActorZ + HeightDiff.
+	// Without this offset, the taller capsule clips through the floor → always blocked.
+	FVector TestCenter = CharacterOwner->GetActorLocation() + FVector(0.f, 0.f, HeightDiff);
+
+	FCollisionShape Shape = FCollisionShape::MakeCapsule(Radius, TargetHalfHeight);
+	FCollisionQueryParams Params;
+	Params.AddIgnoredActor(CharacterOwner);
+
+	return !GetWorld()->OverlapBlockingTestByChannel(TestCenter, FQuat::Identity, ECC_Pawn, Shape, Params);
+}
+
+void UFatumMovementComponent::RequestCrouch(bool bPressed)
+{
+	PostureSM.RequestCrouch(bPressed, MovementProfile);
+}
+
+void UFatumMovementComponent::RequestProne(bool bPressed)
+{
+	PostureSM.RequestProne(bPressed, MovementProfile);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MOVEMENT LAYER
+// ═══════════════════════════════════════════════════════════════════════════
 
 void UFatumMovementComponent::UpdateMovementLayer(float DeltaTime)
 {
@@ -94,7 +175,7 @@ void UFatumMovementComponent::UpdateMovementLayer(float DeltaTime)
 	if (bGrounded)
 	{
 		const float HorizSpeed = Velocity.Size2D();
-		if (bWantsToSprint && HorizSpeed > 10.f && CurrentPosture == ECharacterPosture::Standing)
+		if (bWantsToSprint && HorizSpeed > 10.f && PostureSM.CurrentPosture == ECharacterPosture::Standing)
 		{
 			TransitionMoveMode(ECharacterMoveMode::Sprint);
 		}
@@ -121,6 +202,10 @@ void UFatumMovementComponent::UpdateMovementLayer(float DeltaTime)
 
 	bWasGroundedLastFrame = bGrounded;
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CAMERA EFFECTS
+// ═══════════════════════════════════════════════════════════════════════════
 
 void UFatumMovementComponent::UpdateCameraEffects(float DeltaTime)
 {
@@ -154,6 +239,10 @@ void UFatumMovementComponent::TransitionMoveMode(ECharacterMoveMode NewMode)
 	CurrentMoveMode = NewMode;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// SPEED OVERRIDES
+// ═══════════════════════════════════════════════════════════════════════════
+
 float UFatumMovementComponent::GetMaxSpeed() const
 {
 	if (!MovementProfile) return Super::GetMaxSpeed();
@@ -166,7 +255,7 @@ float UFatumMovementComponent::GetMaxSpeed() const
 		break;
 	}
 
-	switch (CurrentPosture)
+	switch (PostureSM.CurrentPosture)
 	{
 	case ECharacterPosture::Crouching:
 		return MovementProfile->CrouchSpeed;
@@ -198,6 +287,10 @@ float UFatumMovementComponent::GetMaxBrakingDeceleration() const
 	return MovementProfile->GroundDeceleration;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// SPRINT / JUMP
+// ═══════════════════════════════════════════════════════════════════════════
+
 void UFatumMovementComponent::RequestSprint(bool bSprint)
 {
 	bWantsToSprint = bSprint;
@@ -206,6 +299,20 @@ void UFatumMovementComponent::RequestSprint(bool bSprint)
 void UFatumMovementComponent::RequestJump()
 {
 	check(CharacterOwner);
+
+	// No jump from prone
+	if (PostureSM.CurrentPosture == ECharacterPosture::Prone) return;
+
+	// Crouch jump: stand up + jump with reduced velocity
+	if (PostureSM.CurrentPosture == ECharacterPosture::Crouching && MovementProfile)
+	{
+		PostureSM.ForceClearCrouch();
+		JumpZVelocity = MovementProfile->CrouchJumpVelocity;
+	}
+	else if (MovementProfile)
+	{
+		JumpZVelocity = MovementProfile->JumpVelocity;
+	}
 
 	// Grounded or coyote time -> jump immediately
 	if (IsMovingOnGround() || CoyoteTimer > 0.f)
@@ -227,8 +334,6 @@ void UFatumMovementComponent::RequestJump()
 
 void UFatumMovementComponent::ReleaseJump()
 {
-	if (CharacterOwner)
-	{
-		CharacterOwner->StopJumping();
-	}
+	check(CharacterOwner);
+	CharacterOwner->StopJumping();
 }

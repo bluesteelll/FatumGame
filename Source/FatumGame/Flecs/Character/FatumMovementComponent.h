@@ -1,15 +1,17 @@
 // Custom CharacterMovementComponent with hierarchical state machine.
-// Handles sprint, crouch, jump buffering, coyote time.
-// Phase 1: Walk/Run/Sprint/Jump with coyote+buffer.
+// Handles sprint, crouch, prone, jump buffering, coyote time.
 
 #pragma once
 
 #include "CoreMinimal.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "FlecsMovementComponents.h"
+#include "FPostureStateMachine.h"
 #include "FatumMovementComponent.generated.h"
 
 class UFlecsMovementProfile;
+
+DECLARE_MULTICAST_DELEGATE_OneParam(FOnPostureChanged, ECharacterPosture /*NewPosture*/);
 
 UCLASS()
 class FATUMGAME_API UFatumMovementComponent : public UCharacterMovementComponent
@@ -34,7 +36,7 @@ public:
 	// ═══════════════════════════════════════════════════════════════
 
 	UFUNCTION(BlueprintPure, Category = "Fatum|Movement")
-	ECharacterPosture GetCurrentPosture() const { return CurrentPosture; }
+	ECharacterPosture GetCurrentPosture() const { return PostureSM.CurrentPosture; }
 
 	UFUNCTION(BlueprintPure, Category = "Fatum|Movement")
 	ECharacterMoveMode GetCurrentMoveMode() const { return CurrentMoveMode; }
@@ -48,6 +50,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Fatum|Movement")
 	float GetLandingCameraOffset() const { return LandingCompressOffset; }
 
+	UFUNCTION(BlueprintPure, Category = "Fatum|Movement")
+	float GetCurrentEyeHeight() const { return PostureSM.GetCurrentEyeHeight(); }
+
 	// ═══════════════════════════════════════════════════════════════
 	// COMMANDS (called by AFlecsCharacter input handlers)
 	// ═══════════════════════════════════════════════════════════════
@@ -55,6 +60,15 @@ public:
 	void RequestSprint(bool bSprint);
 	void RequestJump();
 	void ReleaseJump();
+	void RequestCrouch(bool bPressed);
+	void RequestProne(bool bPressed);
+
+	// ═══════════════════════════════════════════════════════════════
+	// DELEGATE
+	// ═══════════════════════════════════════════════════════════════
+
+	/** Fires when posture actually changes (after ceiling check). */
+	FOnPostureChanged OnPostureChanged;
 
 protected:
 	// ═══════════════════════════════════════════════════════════════
@@ -72,7 +86,7 @@ private:
 	// HSM STATE
 	// ═══════════════════════════════════════════════════════════════
 
-	ECharacterPosture CurrentPosture = ECharacterPosture::Standing;
+	FPostureStateMachine PostureSM;
 	ECharacterMoveMode CurrentMoveMode = ECharacterMoveMode::Idle;
 	bool bWantsToSprint = false;
 
@@ -95,9 +109,11 @@ private:
 	// ═══════════════════════════════════════════════════════════════
 
 	void TickHSM(float DeltaTime);
+	void UpdatePosture(float DeltaTime);
 	void UpdateMovementLayer(float DeltaTime);
 	void UpdateCameraEffects(float DeltaTime);
 	void TransitionMoveMode(ECharacterMoveMode NewMode);
+	bool CheckCanExpandTo(float TargetHalfHeight) const;
 
 	static constexpr float SimFrameTime = 1.f / 60.f;
 };

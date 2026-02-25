@@ -11,3 +11,5 @@ UE_DEFINE_GAMEPLAY_TAG(TAG_Input_Destroy,   "InputTag.Destroy");
 UE_DEFINE_GAMEPLAY_TAG(TAG_Input_Inventory, "InputTag.Inventory");
 UE_DEFINE_GAMEPLAY_TAG(TAG_Input_Cancel,    "InputTag.Cancel");
 UE_DEFINE_GAMEPLAY_TAG(TAG_Input_Sprint,    "InputTag.Sprint");
+UE_DEFINE_GAMEPLAY_TAG(TAG_Input_Crouch,    "InputTag.Crouch");
+UE_DEFINE_GAMEPLAY_TAG(TAG_Input_Prone,     "InputTag.Prone");

@@ -32,6 +32,7 @@
 #include "Camera/CameraComponent.h"
 #include "FatumInputComponent.h"
 #include "FatumInputTags.h"
+#include "FlecsMovementProfile.h"
 #include "EnhancedInputSubsystems.h"
 #include "InputActionValue.h"
 #include "Components/SkeletalMeshComponent.h"
@@ -83,7 +84,8 @@ void AFlecsCharacter::BeginPlay()
 		CameraBoom->SetActive(false);
 		CameraBoom->SetVisibility(false);
 		FollowCamera->AttachToComponent(RootComponent, FAttachmentTransformRules::KeepRelativeTransform);
-		FollowCamera->SetRelativeLocation(FVector(0.f, 0.f, 60.f)); // Eye height
+		float EyeH = FatumMovement ? FatumMovement->GetCurrentEyeHeight() : 60.f;
+		FollowCamera->SetRelativeLocation(FVector(0.f, 0.f, EyeH));
 		FollowCamera->bUsePawnControlRotation = true;
 		bUseControllerRotationYaw = true;
 		bUseControllerRotationPitch = false;
@@ -114,6 +116,12 @@ void AFlecsCharacter::BeginPlay()
 		}
 
 		// Cancel tag presence is validated by ensureMsgf in SetupPlayerInputComponent
+	}
+
+	// Subscribe to posture changes for Barrage shape sync
+	if (FatumMovement)
+	{
+		FatumMovement->OnPostureChanged.AddUObject(this, &AFlecsCharacter::HandlePostureChanged);
 	}
 
 	// ─────────────────────────────────────────────────────────────
@@ -422,9 +430,12 @@ void AFlecsCharacter::Tick(float DeltaTime)
 		float BaseFOV = 90.f;
 		FollowCamera->SetFieldOfView(BaseFOV + FatumMovement->GetCurrentFOVOffset());
 
-		FVector BaseEyePos(0.f, 0.f, 60.f);
-		BaseEyePos.Z += FatumMovement->GetLandingCameraOffset();
-		FollowCamera->SetRelativeLocation(BaseEyePos);
+		if (bFirstPersonCamera)
+		{
+			FVector BaseEyePos(0.f, 0.f, FatumMovement->GetCurrentEyeHeight());
+			BaseEyePos.Z += FatumMovement->GetLandingCameraOffset();
+			FollowCamera->SetRelativeLocation(BaseEyePos);
+		}
 	}
 
 	SyncMovementStateToECS();
@@ -524,6 +535,10 @@ void AFlecsCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 	FatumInput->BindNativeAction(InputConfig, TAG_Input_Cancel,    ETriggerEvent::Started,   this, &AFlecsCharacter::OnInteractCancel);
 	FatumInput->BindNativeAction(InputConfig, TAG_Input_Sprint,    ETriggerEvent::Started,   this, &AFlecsCharacter::OnSprintStarted);
 	FatumInput->BindNativeAction(InputConfig, TAG_Input_Sprint,    ETriggerEvent::Completed, this, &AFlecsCharacter::OnSprintCompleted);
+	FatumInput->BindNativeAction(InputConfig, TAG_Input_Crouch,    ETriggerEvent::Started,   this, &AFlecsCharacter::OnCrouchStarted);
+	FatumInput->BindNativeAction(InputConfig, TAG_Input_Crouch,    ETriggerEvent::Completed, this, &AFlecsCharacter::OnCrouchCompleted);
+	FatumInput->BindNativeAction(InputConfig, TAG_Input_Prone,     ETriggerEvent::Started,   this, &AFlecsCharacter::OnProneStarted);
+	FatumInput->BindNativeAction(InputConfig, TAG_Input_Prone,     ETriggerEvent::Completed, this, &AFlecsCharacter::OnProneCompleted);
 }
 
 UInputComponent* AFlecsCharacter::CreatePlayerInputComponent()
@@ -587,6 +602,56 @@ void AFlecsCharacter::OnJumpStarted(const FInputActionValue& Value)
 void AFlecsCharacter::OnJumpCompleted(const FInputActionValue& Value)
 {
 	if (FatumMovement) FatumMovement->ReleaseJump();
+}
+
+void AFlecsCharacter::OnCrouchStarted(const FInputActionValue& Value)
+{
+	if (FatumMovement) FatumMovement->RequestCrouch(true);
+}
+
+void AFlecsCharacter::OnCrouchCompleted(const FInputActionValue& Value)
+{
+	if (FatumMovement) FatumMovement->RequestCrouch(false);
+}
+
+void AFlecsCharacter::OnProneStarted(const FInputActionValue& Value)
+{
+	if (FatumMovement) FatumMovement->RequestProne(true);
+}
+
+void AFlecsCharacter::OnProneCompleted(const FInputActionValue& Value)
+{
+	if (FatumMovement) FatumMovement->RequestProne(false);
+}
+
+void AFlecsCharacter::HandlePostureChanged(ECharacterPosture NewPosture)
+{
+	check(FatumMovement && FatumMovement->MovementProfile);
+
+	float R, HH;
+	FatumMovement->MovementProfile->GetCapsuleForPosture(NewPosture, R, HH);
+
+	// Convert UE cm to Jolt meters (match GenerateCapsuleBounds convention)
+	double JoltHH = HH / 100.0;
+	double JoltR = R / 100.0;
+
+	FSkeletonKey Key = CharacterKey;
+	UFlecsArtillerySubsystem* Sub = GetWorld()->GetSubsystem<UFlecsArtillerySubsystem>();
+	if (Sub && Key.IsValid())
+	{
+		Sub->EnqueueCommand([Key, JoltHH, JoltR]()
+		{
+			UBarrageDispatch* P = UBarrageDispatch::SelfPtr;
+			if (!P) return;
+
+			// SkeletonKey → FBarragePrimitive → BarrageKey (body tracking path)
+			FBLet Body = P->GetShapeRef(Key);
+			if (FBarragePrimitive::IsNotNull(Body))
+			{
+				P->SetBodyCapsuleShape(Body->KeyIntoBarrage, JoltHH, JoltR);
+			}
+		});
+	}
 }
 
 void AFlecsCharacter::SyncMovementStateToECS()

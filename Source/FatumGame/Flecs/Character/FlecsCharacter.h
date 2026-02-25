@@ -17,6 +17,7 @@ class UFlecsInteractionProfile;
 class UFlecsUIPanel;
 class UFatumMovementComponent;
 class UFatumInputConfig;
+enum class ECharacterPosture : uint8;
 class UInputMappingContext;
 class USpringArmComponent;
 class UCameraComponent;
@@ -450,6 +451,21 @@ protected:
 
 	/** Toggle inventory open/close */
 	void ToggleInventory(const FInputActionValue& Value);
+
+	/** Crouch started (C press) */
+	void OnCrouchStarted(const FInputActionValue& Value);
+
+	/** Crouch ended (C release) */
+	void OnCrouchCompleted(const FInputActionValue& Value);
+
+	/** Prone toggle (Z press) */
+	void OnProneStarted(const FInputActionValue& Value);
+
+	/** Prone release (Z release, for Hold mode) */
+	void OnProneCompleted(const FInputActionValue& Value);
+
+	/** Called by UFatumMovementComponent::OnPostureChanged delegate */
+	void HandlePostureChanged(ECharacterPosture NewPosture);
 
 private:
 	/** SkeletonKey generated from actor pointer hash (replaces UPlayerKeyCarry) */

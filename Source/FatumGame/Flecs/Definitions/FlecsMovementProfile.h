@@ -110,8 +110,64 @@ public:
 	float LandingMinFallSpeed = 300.f;
 
 	// ═══════════════════════════════════════════════════════════════
+	// POSTURE
+	// ═══════════════════════════════════════════════════════════════
+
+	/** false = Hold (default), true = Toggle */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Posture")
+	bool bCrouchIsToggle = false;
+
+	/** true = Toggle (default), false = Hold */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Posture")
+	bool bProneIsToggle = true;
+
+	/** Camera transition speed: Crouch/Prone → Standing (FInterpTo speed) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Posture", meta = (ClampMin = "1", ClampMax = "30"))
+	float StandUpSpeed = 12.f;
+
+	/** Camera transition speed: Standing/Prone → Crouching */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Posture", meta = (ClampMin = "1", ClampMax = "30"))
+	float CrouchTransitionSpeed = 14.f;
+
+	/** Camera transition speed: Any → Prone */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Posture", meta = (ClampMin = "1", ClampMax = "30"))
+	float ProneTransitionSpeed = 8.f;
+
+	/** Eye height when standing (cm, relative to actor root) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Posture", meta = (ClampMin = "5", ClampMax = "100"))
+	float StandingEyeHeight = 60.f;
+
+	/** Eye height when crouching (cm) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Posture", meta = (ClampMin = "5", ClampMax = "80"))
+	float CrouchEyeHeight = 35.f;
+
+	/** Eye height when prone (cm) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Posture", meta = (ClampMin = "5", ClampMax = "50"))
+	float ProneEyeHeight = 15.f;
+
+	// ═══════════════════════════════════════════════════════════════
 	// HELPERS
 	// ═══════════════════════════════════════════════════════════════
+
+	float GetEyeHeightForPosture(ECharacterPosture Posture) const
+	{
+		switch (Posture)
+		{
+		case ECharacterPosture::Crouching: return CrouchEyeHeight;
+		case ECharacterPosture::Prone:     return ProneEyeHeight;
+		default:                           return StandingEyeHeight;
+		}
+	}
+
+	float GetTransitionSpeed(ECharacterPosture TargetPosture) const
+	{
+		switch (TargetPosture)
+		{
+		case ECharacterPosture::Crouching: return CrouchTransitionSpeed;
+		case ECharacterPosture::Prone:     return ProneTransitionSpeed;
+		default:                           return StandUpSpeed;
+		}
+	}
 
 	void GetCapsuleForPosture(ECharacterPosture Posture, float& OutRadius, float& OutHalfHeight) const
 	{
