@@ -45,6 +45,9 @@ public:
 	bool IsSprinting() const { return CurrentMoveMode == ECharacterMoveMode::Sprint; }
 
 	UFUNCTION(BlueprintPure, Category = "Fatum|Movement")
+	bool IsSliding() const { return bIsSliding; }
+
+	UFUNCTION(BlueprintPure, Category = "Fatum|Movement")
 	float GetCurrentFOVOffset() const { return CurrentFOVOffset; }
 
 	UFUNCTION(BlueprintPure, Category = "Fatum|Movement")
@@ -90,6 +93,12 @@ private:
 	ECharacterMoveMode CurrentMoveMode = ECharacterMoveMode::Idle;
 	bool bWantsToSprint = false;
 
+	// Slide state
+	bool bIsSliding = false;
+	float SlideTimer = 0.f;
+	float SlideCurrentSpeed = 0.f;
+	bool bSlideCrouchHeld = false;
+
 	// Jump buffering
 	float CoyoteTimer = 0.f;
 	float JumpBufferTimer = 0.f;
@@ -110,6 +119,9 @@ private:
 
 	void TickHSM(float DeltaTime);
 	void UpdatePosture(float DeltaTime);
+	void UpdateSlide(float DeltaTime);
+	void BeginSlide();
+	void EndSlide();
 	void UpdateMovementLayer(float DeltaTime);
 	void UpdateCameraEffects(float DeltaTime);
 	void TransitionMoveMode(ECharacterMoveMode NewMode);

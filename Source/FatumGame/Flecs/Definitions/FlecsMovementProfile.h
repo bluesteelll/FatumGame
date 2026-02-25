@@ -146,6 +146,46 @@ public:
 	float ProneEyeHeight = 15.f;
 
 	// ═══════════════════════════════════════════════════════════════
+	// SLIDE
+	// ═══════════════════════════════════════════════════════════════
+
+	/** Minimum horizontal speed to initiate a slide (cm/s) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slide", meta = (ClampMin = "100", ClampMax = "2000"))
+	float SlideMinEntrySpeed = 500.f;
+
+	/** Speed boost added on slide initiation (cm/s) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slide", meta = (ClampMin = "0", ClampMax = "500"))
+	float SlideInitialSpeedBoost = 50.f;
+
+	/** Deceleration on flat ground during slide (cm/s^2) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slide", meta = (ClampMin = "50", ClampMax = "2000"))
+	float SlideDeceleration = 400.f;
+
+	/** Speed below which slide auto-ends (cm/s) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slide", meta = (ClampMin = "0", ClampMax = "500"))
+	float SlideMinExitSpeed = 100.f;
+
+	/** Maximum slide duration — safety cap (seconds) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slide", meta = (ClampMin = "0.1", ClampMax = "5.0"))
+	float SlideMaxDuration = 1.5f;
+
+	/** Jump Z velocity when cancelling slide with jump (cm/s) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slide", meta = (ClampMin = "0", ClampMax = "2000"))
+	float SlideJumpVelocity = 500.f;
+
+	/** Camera eye height during slide (cm, relative to actor root) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slide", meta = (ClampMin = "5", ClampMax = "50"))
+	float SlideEyeHeight = 25.f;
+
+	/** Eye height transition speed into/out of slide (FInterpTo) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slide", meta = (ClampMin = "1", ClampMax = "30"))
+	float SlideTransitionSpeed = 16.f;
+
+	/** Ground friction override during slide (low = slippery). Multiplied by 100 for BrakingDeceleration. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slide", meta = (ClampMin = "0", ClampMax = "1"))
+	float SlideGroundFriction = 0.1f;
+
+	// ═══════════════════════════════════════════════════════════════
 	// HELPERS
 	// ═══════════════════════════════════════════════════════════════
 
