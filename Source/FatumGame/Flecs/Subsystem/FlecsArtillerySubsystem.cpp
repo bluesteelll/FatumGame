@@ -158,6 +158,18 @@ void UFlecsArtillerySubsystem::PrepareCharacterStep(float DeltaTime)
 		bool bSliding = false;
 		if (Slide)
 		{
+			// Capture slide direction on first tick (from current Jolt velocity)
+			if (Slide->SlideDirX == 0.f && Slide->SlideDirZ == 0.f)
+			{
+				JPH::Vec3 CurVel = FBChar->mCharacter->GetLinearVelocity();
+				float HorizLen = FMath::Sqrt(CurVel.GetX() * CurVel.GetX() + CurVel.GetZ() * CurVel.GetZ());
+				if (HorizLen > 0.01f)
+				{
+					Slide->SlideDirX = CurVel.GetX() / HorizLen;
+					Slide->SlideDirZ = CurVel.GetZ() / HorizLen;
+				}
+			}
+
 			Slide->CurrentSpeed -= MS->SlideDeceleration * DeltaTime;
 			Slide->CurrentSpeed = FMath::Max(Slide->CurrentSpeed, 0.f);
 			Slide->Timer -= DeltaTime;
@@ -174,15 +186,36 @@ void UFlecsArtillerySubsystem::PrepareCharacterStep(float DeltaTime)
 		}
 		Bridge.SlideActive->store(bSliding, std::memory_order_relaxed);
 
-		// 4. Compute target speed from posture/sprint/slide
-		float TargetSpeedCm;
-		float AccelCm;
+		// 4. Slide: direct velocity control (bypasses MoveTowards — slide owns deceleration)
 		if (bSliding)
 		{
-			TargetSpeedCm = Slide->CurrentSpeed;
-			AccelCm = MS->SlideMinAcceleration;  // minimal steering
+			float SpeedJolt = Slide->CurrentSpeed / 100.f;
+			JPH::Vec3 SlideVel(Slide->SlideDirX * SpeedJolt, 0, Slide->SlideDirZ * SpeedJolt);
+
+			// Minor steering from input
+			float SlideDirInputLen = FMath::Sqrt(DirX * DirX + DirZ * DirZ);
+			if (SlideDirInputLen > 0.01f)
+			{
+				float SteerRate = MS->SlideMinAcceleration / 100.f;
+				float InvDirLen = 1.f / SlideDirInputLen;
+				JPH::Vec3 SteerTarget(DirX * InvDirLen * SpeedJolt, 0, DirZ * InvDirLen * SpeedJolt);
+				JPH::Vec3 SteerDiff = SteerTarget - SlideVel;
+				float SteerLen = SteerDiff.Length();
+				float SteerStep = SteerRate * DeltaTime;
+				if (SteerLen > SteerStep && SteerLen > 1.0e-6f)
+				{
+					SlideVel = SlideVel + (SteerDiff / SteerLen) * SteerStep;
+				}
+			}
+
+			FBChar->mLocomotionUpdate = SlideVel;
+			continue;
 		}
-		else if (State && State->bSprinting && State->Posture == 0)
+
+		// 5. Compute target speed from posture/sprint/slide
+		float TargetSpeedCm;
+		float AccelCm;
+		if (State && State->bSprinting && State->Posture == 0)
 		{
 			TargetSpeedCm = MS->SprintSpeed;
 			AccelCm = MS->SprintAcceleration;
@@ -201,15 +234,15 @@ void UFlecsArtillerySubsystem::PrepareCharacterStep(float DeltaTime)
 			}
 		}
 
-		// 5. Ground state from Jolt CharacterVirtual
+		// 6. Ground state from Jolt CharacterVirtual
 		bool bOnGround = (FBChar->mCharacter->GetGroundState()
 			== JPH::CharacterVirtual::EGroundState::OnGround);
 
-		// 6. Deceleration + air accel (cm/s^2)
+		// 7. Deceleration + air accel (cm/s^2)
 		float DecelCm = MS->GroundDeceleration;
 		float AirAccelCm = MS->AirAcceleration;
 
-		// 7. Build target horizontal velocity (UE cm/s → Jolt m/s)
+		// 8. Build target horizontal velocity (UE cm/s → Jolt m/s)
 		float DirLen = FMath::Sqrt(DirX * DirX + DirZ * DirZ);
 		JPH::Vec3 TargetH = JPH::Vec3::sZero();
 		if (DirLen > 0.01f)
@@ -219,18 +252,18 @@ void UFlecsArtillerySubsystem::PrepareCharacterStep(float DeltaTime)
 			TargetH = JPH::Vec3(DirX * InvDirLen * SpeedJolt, 0, DirZ * InvDirLen * SpeedJolt);
 		}
 
-		// 8. Read current horizontal from CharacterVirtual
+		// 9. Read current horizontal from CharacterVirtual
 		JPH::Vec3 CurVelo = FBChar->mCharacter->GetLinearVelocity();
 		JPH::Vec3 CurH(CurVelo.GetX(), 0, CurVelo.GetZ());
 
-		// 9. Pick accel rate (m/s^2)
+		// 10. Pick accel rate (m/s^2)
 		float AccelRate;
 		if (bOnGround)
 			AccelRate = TargetH.IsNearZero() ? (DecelCm / 100.f) : (AccelCm / 100.f);
 		else
 			AccelRate = AirAccelCm / 100.f;
 
-		// 10. MoveTowards: smooth current → target
+		// 11. MoveTowards: smooth current → target
 		JPH::Vec3 Diff = TargetH - CurH;
 		float DiffLen = Diff.Length();
 		float Step = AccelRate * DeltaTime;
@@ -240,7 +273,7 @@ void UFlecsArtillerySubsystem::PrepareCharacterStep(float DeltaTime)
 		else
 			SmoothedH = CurH + (Diff / DiffLen) * Step;
 
-		// 11. Write pre-smoothed velocity to FBCharacter (consumed by StepCharacter)
+		// 12. Write pre-smoothed velocity to FBCharacter (consumed by StepCharacter)
 		FBChar->mLocomotionUpdate = SmoothedH;
 	}
 }

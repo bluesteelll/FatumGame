@@ -181,6 +181,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slide", meta = (ClampMin = "1", ClampMax = "30"))
 	float SlideTransitionSpeed = 16.f;
 
+	/** Steering acceleration during slide (cm/s^2) — controls how fast input redirects slide direction */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slide", meta = (ClampMin = "0", ClampMax = "1000"))
+	float SlideMinAcceleration = 100.f;
+
 	/** Ground friction override during slide (low = slippery). Multiplied by 100 for BrakingDeceleration. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slide", meta = (ClampMin = "0", ClampMax = "1"))
 	float SlideGroundFriction = 0.1f;

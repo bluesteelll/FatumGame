@@ -243,7 +243,7 @@ flecs::entity UFlecsArtillerySubsystem::GetOrCreateEntityPrefab(UFlecsEntityDefi
 		MS.SlideMinExitSpeed = MoveProf->SlideMinExitSpeed;
 		MS.SlideMaxDuration = MoveProf->SlideMaxDuration;
 		MS.SlideInitialSpeedBoost = MoveProf->SlideInitialSpeedBoost;
-		MS.SlideMinAcceleration = 100.f;
+		MS.SlideMinAcceleration = MoveProf->SlideMinAcceleration;
 		Prefab.set<FMovementStatic>(MS);
 	}
 

@@ -50,4 +50,6 @@ struct FSlideInstance
 {
 	float CurrentSpeed = 0.f;  // decelerating speed (cm/s)
 	float Timer = 0.f;         // remaining duration (seconds)
+	float SlideDirX = 0.f;    // Jolt horizontal X (normalized, captured on first tick)
+	float SlideDirZ = 0.f;    // Jolt horizontal Z (normalized, captured on first tick)
 };

@@ -185,7 +185,7 @@ void AFlecsCharacter::BeginPlay()
 				CapturedMS.SlideMinExitSpeed = MoveProf->SlideMinExitSpeed;
 				CapturedMS.SlideMaxDuration = MoveProf->SlideMaxDuration;
 				CapturedMS.SlideInitialSpeedBoost = MoveProf->SlideInitialSpeedBoost;
-				CapturedMS.SlideMinAcceleration = 100.f;
+				CapturedMS.SlideMinAcceleration = MoveProf->SlideMinAcceleration;
 			}
 
 			TWeakObjectPtr<AFlecsCharacter> WeakSelf(this);
