@@ -215,7 +215,7 @@ void AFlecsCharacter::BeginPlay()
 					// Clamp to minimum 0.01m for near-sphere capsules (e.g. prone HH < R).
 					CharParams.JoltHalfHeightOfCylinder = FMath::Max((CapsuleHalfHeight - CapsuleRadius) / 100.0, 0.01);
 					CharParams.JoltRadius = CapsuleRadius / 100.0;
-					CharParams.speed = 50.0; // 50 m/s (5000 cm/s) — generous clamp for free-fall + sprint
+					CharParams.speed = 5000.0; // cm/s — CreatePrimitive divides by 100 → 50 m/s in Jolt
 
 					FBLet Body = Physics->CreatePrimitive(
 						CharParams, Key,
@@ -229,9 +229,9 @@ void AFlecsCharacter::BeginPlay()
 						FBarragePrimitive::Apply_Unsafe(
 							FQuat4d(1, 1, 1, 1), Body, PhysicsInputType::Throttle);
 
-						// Jolt gravity: -980 cm/s² → -9.8 m/s² (Y is up in Jolt coords)
+						// Jolt gravity: send cm/s² — IngestUpdate divides by 100 to get m/s²
 						FBarragePrimitive::Apply_Unsafe(
-							FQuat4d(0, -980.0 * CapturedGravityScale / 100.0, 0, 0),
+							FQuat4d(0, -980.0 * CapturedGravityScale, 0, 0),
 							Body, PhysicsInputType::SetCharacterGravity);
 
 						// Cache body pointer for zero-lookup sim thread access
@@ -573,7 +573,10 @@ void AFlecsCharacter::Tick(float DeltaTime)
 	// ──────────────────────────────────────────────────────────────────
 	if (CharacterKey.IsValid() && FlecsSubsystem && PosAtomics.IsValid())
 	{
-		if (PosAtomics->bValid.load(std::memory_order_acquire))
+		// SeqNo acquire: synchronizes with release in SyncCharacterPositions.
+		// Ensures all position/velocity/ground-state fields are from the same sim tick.
+		(void)PosAtomics->SeqNo.load(std::memory_order_acquire);
+		if (PosAtomics->bValid.load(std::memory_order_relaxed))
 		{
 			FVector BarrageFeetPos(
 				PosAtomics->PosX.load(std::memory_order_relaxed),
@@ -601,9 +604,7 @@ void AFlecsCharacter::Tick(float DeltaTime)
 			else
 			{
 				// On ground: FeetToActorOffset converges to current capsule HH.
-				// In air: offset is FROZEN — posture change doesn't shift actor Z.
-				// FInterpTo prevents Z-pop on landing after air posture change (e.g., air-crouch
-				// freezes offset at StandingHH, landing would snap to CrouchHH = 33-unit drop).
+				// In air: offset is FROZEN so posture change pulls legs up, not head down.
 				const bool bGrounded = FatumMovement && FatumMovement->IsMovingOnGround();
 				if (bGrounded)
 				{
@@ -611,52 +612,43 @@ void AFlecsCharacter::Tick(float DeltaTime)
 					FeetToActorOffset = FMath::FInterpTo(FeetToActorOffset, TargetOffset, DeltaTime, 20.f);
 				}
 
-				FVector BarrageCapsuleCenter = BarrageFeetPos + FVector(0, 0, FeetToActorOffset);
-
-				// Read sim timing for interpolation.
-				const uint64 SimTick = FlecsSubsystem->GetCurrentSimTick();
-				const float Alpha = FlecsSubsystem->GetCurrentAlpha();
+				// Exponential smoothing: visual position chases physics position.
+				// Unlike Prev/Curr + Alpha lerp, this has zero discontinuities when
+				// sim ticks arrive — eliminates stutter from torn atomic reads and
+				// Alpha timing mismatches. ~1 frame latency at InterpSpeed=30.
+				FVector TargetPos = BarrageFeetPos + FVector(0, 0, FeetToActorOffset);
 
 				if (!bBarrageReady)
 				{
-					// First readback: initialize all state, snap.
 					bBarrageReady = true;
-					PrevBarrageCenter = BarrageCapsuleCenter;
-					CurrBarrageCenter = BarrageCapsuleCenter;
-					LastSetPosition = BarrageCapsuleCenter;
-					LastCharacterSimTick = SimTick;
-					SetActorLocation(BarrageCapsuleCenter);
+					LastSetPosition = TargetPos;
 				}
 				else
 				{
-					// Detect new sim tick: shift Curr → Prev, update Curr.
-					if (SimTick > LastCharacterSimTick)
-					{
-						PrevBarrageCenter = CurrBarrageCenter;
-						CurrBarrageCenter = BarrageCapsuleCenter;
-						LastCharacterSimTick = SimTick;
-					}
-
-					// Smooth interpolation between sim ticks (same as ISM render manager).
-					FVector InterpolatedPos = FMath::Lerp(PrevBarrageCenter, CurrBarrageCenter, Alpha);
-					SetActorLocation(InterpolatedPos);
-					LastSetPosition = InterpolatedPos;
+					LastSetPosition = FMath::VInterpTo(LastSetPosition, TargetPos, DeltaTime, 30.f);
 				}
+
+				// TeleportPhysics: skip UE capsule overlap tests — Barrage is physics authority.
+				// Without this, SetActorLocation triggers OverlapBlockingTestByChannel every frame.
+				SetActorLocation(LastSetPosition, false, nullptr, ETeleportType::TeleportPhysics);
 			}
 
-			// Sim-thread slide exit detection: if sim removed FSlideInstance, deactivate game-thread ability.
-			// Grace period: skip check for 3 sim ticks after activation (EnqueueCommand in transit).
+			// Sim-thread slide exit detection
 			if (FatumMovement)
 			{
+				float FreshAlpha;
+				uint64 FreshTick;
+				FlecsSubsystem->ComputeFreshAlphaAndTick(FreshAlpha, FreshTick);
+
 				if (FatumMovement->IsSliding())
 				{
 					if (SlideActivationSimTick == 0)
 					{
-						SlideActivationSimTick = FlecsSubsystem->GetCurrentSimTick();
+						SlideActivationSimTick = FreshTick;
 					}
 
 					bool bSimSlide = PosAtomics->bSlideActive.load(std::memory_order_relaxed);
-					if (!bSimSlide && FlecsSubsystem->GetCurrentSimTick() > SlideActivationSimTick + 3)
+					if (!bSimSlide && FreshTick > SlideActivationSimTick + 3)
 					{
 						FatumMovement->DeactivateAbility();
 						SlideActivationSimTick = 0;
@@ -668,16 +660,14 @@ void AFlecsCharacter::Tick(float DeltaTime)
 				}
 			}
 
-			// Jump impulse: consume from CMC (set by RequestJump) → send as OtherForce to Barrage.
-			// OtherForce adds directly to velocity in StepCharacter (Jolt m/s coords).
+			// Jump impulse: consume from CMC → send as OtherForce to Barrage
 			if (FatumMovement && FBarragePrimitive::IsNotNull(CachedBarrageBody))
 			{
 				float JumpImpulse = FatumMovement->ConsumePendingJumpImpulse();
 				if (JumpImpulse > 0.f)
 				{
-					// cm/s → m/s, Y is up in Jolt
 					FBarragePrimitive::ApplyForce(
-						FVector3d(0, JumpImpulse / 100.0, 0), CachedBarrageBody,
+						FVector3d(0, JumpImpulse, 0), CachedBarrageBody,
 						PhysicsInputType::OtherForce);
 				}
 			}

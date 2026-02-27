@@ -160,12 +160,8 @@ void UFatumMovementComponent::UpdatePosture(float DeltaTime)
 		float HeightDelta = HH - OldHH;
 		if (!FMath::IsNearlyZero(HeightDelta) && IsMovingOnGround())
 		{
-			// Grounded: adjust actor Z so feet stay on the floor.
-			// In air: Barrage sync handles offset via FeetToActorOffset (frozen in air).
-			FVector Loc = CharacterOwner->GetActorLocation();
-			Loc.Z += HeightDelta;
-			CharacterOwner->SetActorLocation(Loc);
-
+			// Barrage sync in AFlecsCharacter::Tick handles Z via FeetToActorOffset.
+			// No SetActorLocation here — would cause double-move in one frame.
 			PostureSM.CurrentEyeHeight -= HeightDelta;
 		}
 

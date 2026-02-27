@@ -39,6 +39,11 @@ struct FCharacterPosAtomics
 	std::atomic<float> VelY{0.f};
 	std::atomic<float> VelZ{0.f};
 	std::atomic<bool> bSlideActive{false};  // sim→game: slide is running
+
+	/** Sequence counter — incremented by sim thread AFTER writing all fields.
+	 *  Reader: load SeqNo(acquire) → read fields(relaxed) → re-load SeqNo(acquire).
+	 *  If the two SeqNo values differ, a write was in progress → retry or use previous snapshot. */
+	std::atomic<uint32> SeqNo{0};
 };
 
 /** Game→sim input direction atomics. Written by AFlecsCharacter::Move every tick (latest-wins).
@@ -520,12 +525,9 @@ private:
 	TSharedPtr<FCharacterInputAtomics, ESPMode::ThreadSafe> InputAtomics; // game→sim direction
 	bool bBarrageReady = false; // true after first valid sim-thread readback
 
-	// Interpolation state — matches ISM render manager approach (Prev/Curr + Alpha lerp).
-	// Without this, the character moves in 60Hz sim steps while ISM objects are smooth.
-	FVector PrevBarrageCenter = FVector::ZeroVector;  // capsule center at sim tick N-1
-	FVector CurrBarrageCenter = FVector::ZeroVector;  // capsule center at sim tick N
+	// Exponential smoothing: visual position chases physics position.
+	// Unlike Prev/Curr + Alpha lerp, this has zero discontinuities on sim tick transitions.
 	FVector LastSetPosition = FVector::ZeroVector;     // where we placed actor last game frame
-	uint64 LastCharacterSimTick = 0;
 
 	// Slide activation grace: sim tick when slide ability was activated on game thread.
 	// Prevents immediate deactivation before EnqueueCommand(FSlideInstance) is processed.

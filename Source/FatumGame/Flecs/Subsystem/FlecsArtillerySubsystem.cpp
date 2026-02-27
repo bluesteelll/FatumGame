@@ -137,8 +137,9 @@ void UFlecsArtillerySubsystem::SyncCharacterPositions()
 		Bridge.PosAtomics->VelY.store(Vel.Y, std::memory_order_relaxed);
 		Bridge.PosAtomics->VelZ.store(Vel.Z, std::memory_order_relaxed);
 
-		// bValid is the "version guard" — store LAST so game thread sees consistent data
-		Bridge.PosAtomics->bValid.store(true, std::memory_order_release);
+		// SeqNo: store LAST with release so game thread sees all fields above.
+		Bridge.PosAtomics->bValid.store(true, std::memory_order_relaxed);
+		Bridge.PosAtomics->SeqNo.fetch_add(1, std::memory_order_release);
 	}
 }
 

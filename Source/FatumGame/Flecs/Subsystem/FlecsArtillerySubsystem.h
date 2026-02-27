@@ -156,15 +156,31 @@ public:
 	// INTERPOLATION (game thread — computed in Tick, consumed by character + render manager)
 	// ═══════════════════════════════════════════════════════════════
 
-	/** Current interpolation Alpha ∈ [0,1]. 0 = just after sim tick, 1 = just before next. */
+	/** Current interpolation Alpha ∈ [0,1]. 0 = just after sim tick, 1 = just before next.
+	 *  Cached — computed once per Subsystem Tick (runs AFTER actor ticks). */
 	float GetCurrentAlpha() const { return CachedAlpha; }
 
-	/** Current sim tick count — uses cached value for consistency with CachedAlpha.
-	 *  Character Tick runs BEFORE Subsystem Tick (TG_PrePhysics vs TickableWorldSubsystem).
-	 *  Reading the atomic directly would get a NEWER SimTick while Alpha is stale from
-	 *  the previous frame — causing the character to jump 90% forward then snap back.
-	 *  Using CachedSimTick ensures the (Alpha, SimTick) pair is always consistent. */
+	/** Current sim tick count — cached for consistency with CachedAlpha. */
 	uint64 GetCurrentSimTick() const { return CachedSimTick; }
+
+	/** Compute a FRESH (Alpha, SimTick) pair directly from sim thread atomics.
+	 *  Use this when the caller ticks BEFORE the subsystem (e.g. AFlecsCharacter in TG_PrePhysics)
+	 *  to avoid using stale cached values from the previous frame. */
+	void ComputeFreshAlphaAndTick(float& OutAlpha, uint64& OutSimTick) const
+	{
+		OutSimTick = SimWorker.SimTickCount.load(std::memory_order_acquire);
+		const float SimDt = SimWorker.LastSimDeltaTime.load(std::memory_order_acquire);
+		const double LastSimTime = SimWorker.LastSimTickTimeSeconds.load(std::memory_order_acquire);
+		OutAlpha = 1.0f;
+		if (SimDt > 0.0f && LastSimTime > 0.0)
+		{
+			const double TimeSince = FPlatformTime::Seconds() - LastSimTime;
+			if (TimeSince >= 0.0)
+			{
+				OutAlpha = FMath::Clamp(static_cast<float>(TimeSince / SimDt), 0.0f, 1.0f);
+			}
+		}
+	}
 
 	// ═══════════════════════════════════════════════════════════════
 	// THREAD-SAFE API (callable from any thread)
