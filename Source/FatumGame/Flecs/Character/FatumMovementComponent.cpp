@@ -1,4 +1,6 @@
 #include "FatumMovementComponent.h"
+#include "MovementAbility.h"
+#include "SlideAbility.h"
 #include "FlecsMovementProfile.h"
 #include "GameFramework/Character.h"
 #include "Components/CapsuleComponent.h"
@@ -12,24 +14,21 @@ void UFatumMovementComponent::InitializeComponent()
 {
 	Super::InitializeComponent();
 	ApplyProfile();
+
+	// Register movement abilities
+	RegisterAbility(USlideAbility::StaticClass());
 }
 
 void UFatumMovementComponent::ApplyProfile()
 {
 	if (!MovementProfile)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("UFatumMovementComponent::ApplyProfile: No MovementProfile set! Using CMC defaults."));
+		UE_LOG(LogTemp, Warning, TEXT("UFatumMovementComponent::ApplyProfile: No MovementProfile set!"));
 		return;
 	}
 
-	MaxWalkSpeed = MovementProfile->WalkSpeed;
-	MaxWalkSpeedCrouched = MovementProfile->CrouchSpeed;
-	JumpZVelocity = MovementProfile->JumpVelocity;
-	GravityScale = MovementProfile->GravityScale;
-	AirControl = MovementProfile->AirControlMultiplier;
-	BrakingDecelerationWalking = MovementProfile->GroundDeceleration;
-	MaxAcceleration = MovementProfile->GroundAcceleration;
-
+	// CMC params are irrelevant (Barrage drives movement).
+	// Only eye height needs initialization for camera.
 	PostureSM.CurrentEyeHeight = MovementProfile->StandingEyeHeight;
 	PostureSM.TargetEyeHeight = MovementProfile->StandingEyeHeight;
 }
@@ -37,22 +36,100 @@ void UFatumMovementComponent::ApplyProfile()
 void UFatumMovementComponent::TickComponent(float DeltaTime, ELevelTick TickType,
 	FActorComponentTickFunction* ThisTickFunction)
 {
-	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+	// NO Super::TickComponent — Barrage is sole physics authority.
+	// Feed CMC Velocity + MovementMode for AnimBP only.
+	Velocity = BarrageVelocity;
+	SetMovementMode(BarrageGroundState == 0 ? MOVE_Walking : MOVE_Falling);
+
 	TickHSM(DeltaTime);
 	UpdateCameraEffects(DeltaTime);
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// ABILITY SYSTEM
+// ═══════════════════════════════════════════════════════════════════════════
+
+void UFatumMovementComponent::RegisterAbility(TSubclassOf<UMovementAbility> AbilityClass)
+{
+	check(AbilityClass);
+	UMovementAbility* Ability = NewObject<UMovementAbility>(this, AbilityClass);
+	Ability->Initialize(this);
+	Abilities.Add(Ability);
+}
+
+void UFatumMovementComponent::ActivateAbility(UMovementAbility* Ability)
+{
+	check(Ability);
+	checkf(Abilities.Contains(Ability), TEXT("Ability %s not registered"), *Ability->GetName());
+
+	if (ActiveAbility)
+	{
+		DeactivateAbility();
+	}
+	ActiveAbility = Ability;
+	Ability->bActive = true;
+	Ability->OnActivated();
+}
+
+void UFatumMovementComponent::DeactivateAbility()
+{
+	if (!ActiveAbility) return;
+
+	// Deregister before callback — prevents reentrancy crash if OnDeactivated
+	// triggers code that calls DeactivateAbility again.
+	UMovementAbility* Ability = ActiveAbility;
+	ActiveAbility = nullptr;
+	Ability->bActive = false;
+	Ability->OnDeactivated();
+}
+
+bool UFatumMovementComponent::IsSliding() const
+{
+	return ActiveAbility && ActiveAbility->GetMoveMode() == ECharacterMoveMode::Slide;
+}
+
+bool UFatumMovementComponent::CanExpandToHeight(float TargetHalfHeight) const
+{
+	if (!CharacterOwner) return false;
+
+	float CurrentHH = CharacterOwner->GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
+	if (TargetHalfHeight <= CurrentHH) return true; // shrinking is always ok
+
+	float HeightDiff = TargetHalfHeight - CurrentHH;
+	float Radius = CharacterOwner->GetCapsuleComponent()->GetScaledCapsuleRadius();
+
+	// Test at the position where capsule center would be after expansion (feet stay on ground).
+	FVector TestCenter = CharacterOwner->GetActorLocation() + FVector(0.f, 0.f, HeightDiff);
+
+	FCollisionShape Shape = FCollisionShape::MakeCapsule(Radius, TargetHalfHeight);
+	FCollisionQueryParams Params;
+	Params.AddIgnoredActor(CharacterOwner);
+
+	return !GetWorld()->OverlapBlockingTestByChannel(TestCenter, FQuat::Identity, ECC_Pawn, Shape, Params);
+}
+
+void UFatumMovementComponent::BroadcastPostureChanged(ECharacterPosture Posture)
+{
+	OnPostureChanged.Broadcast(Posture);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// HSM
+// ═══════════════════════════════════════════════════════════════════════════
+
 void UFatumMovementComponent::TickHSM(float DeltaTime)
 {
-	if (bIsSliding)
+	// Active ability may own posture (e.g. Slide manages capsule directly)
+	if (!ActiveAbility || !ActiveAbility->OwnsPosture())
 	{
-		// Slide owns capsule and eye height — skip PostureSM to avoid conflicts
-		UpdateSlide(DeltaTime);
-		UpdateMovementLayer(DeltaTime);
-		return;
+		UpdatePosture(DeltaTime);
 	}
 
-	UpdatePosture(DeltaTime);
+	if (ActiveAbility)
+	{
+		ActiveAbility->OnTick(DeltaTime);
+	}
+
 	UpdateMovementLayer(DeltaTime);
 }
 
@@ -64,8 +141,11 @@ void UFatumMovementComponent::UpdatePosture(float DeltaTime)
 {
 	if (!MovementProfile) return;
 
-	bool bCanStandUp = CheckCanExpandTo(MovementProfile->StandingHalfHeight);
-	bool bCanCrouch = CheckCanExpandTo(MovementProfile->CrouchHalfHeight);
+	bool bCanStandUp = CanExpandToHeight(MovementProfile->StandingHalfHeight);
+	bool bCanCrouch = CanExpandToHeight(MovementProfile->CrouchHalfHeight);
+
+	// Save pre-tick eye height for air camera stabilization
+	float PreTickEyeHeight = PostureSM.CurrentEyeHeight;
 
 	bool bChanged = PostureSM.Tick(DeltaTime, MovementProfile, bCanStandUp, bCanCrouch);
 
@@ -77,200 +157,36 @@ void UFatumMovementComponent::UpdatePosture(float DeltaTime)
 		MovementProfile->GetCapsuleForPosture(PostureSM.CurrentPosture, R, HH);
 		CharacterOwner->GetCapsuleComponent()->SetCapsuleSize(R, HH, true);
 
-		// Adjust actor position so feet stay on the ground.
-		// Capsule grows/shrinks from center — without this, expanding clips into floor
-		// and CMC resolves it next tick → jitter.
 		float HeightDelta = HH - OldHH;
-		if (!FMath::IsNearlyZero(HeightDelta))
+		if (!FMath::IsNearlyZero(HeightDelta) && IsMovingOnGround())
 		{
+			// Grounded: adjust actor Z so feet stay on the floor.
+			// In air: Barrage sync handles offset via FeetToActorOffset (frozen in air).
 			FVector Loc = CharacterOwner->GetActorLocation();
 			Loc.Z += HeightDelta;
 			CharacterOwner->SetActorLocation(Loc);
 
-			// Compensate eye height so camera stays at the same world-space position.
-			// Actor shifted by HeightDelta → offset CurrentEyeHeight by -HeightDelta.
-			// The smooth interpolation then transitions to TargetEyeHeight naturally.
 			PostureSM.CurrentEyeHeight -= HeightDelta;
 		}
 
 		OnPostureChanged.Broadcast(PostureSM.CurrentPosture);
 	}
-}
 
-bool UFatumMovementComponent::CheckCanExpandTo(float TargetHalfHeight) const
-{
-	if (!CharacterOwner) return false;
-
-	float CurrentHH = CharacterOwner->GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
-	if (TargetHalfHeight <= CurrentHH) return true; // shrinking is always ok
-
-	float HeightDiff = TargetHalfHeight - CurrentHH;
-	float Radius = CharacterOwner->GetCapsuleComponent()->GetScaledCapsuleRadius();
-
-	// Test at the position where capsule center would be after expansion (feet stay on ground).
-	// Feet = ActorZ - CurrentHH, new center = Feet + TargetHH = ActorZ + HeightDiff.
-	// Without this offset, the taller capsule clips through the floor → always blocked.
-	FVector TestCenter = CharacterOwner->GetActorLocation() + FVector(0.f, 0.f, HeightDiff);
-
-	FCollisionShape Shape = FCollisionShape::MakeCapsule(Radius, TargetHalfHeight);
-	FCollisionQueryParams Params;
-	Params.AddIgnoredActor(CharacterOwner);
-
-	return !GetWorld()->OverlapBlockingTestByChannel(TestCenter, FQuat::Identity, ECC_Pawn, Shape, Params);
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// SLIDE
-// ═══════════════════════════════════════════════════════════════════════════
-
-void UFatumMovementComponent::BeginSlide()
-{
-	check(CharacterOwner && MovementProfile);
-
-	bIsSliding = true;
-	SlideTimer = MovementProfile->SlideMaxDuration;
-	SlideCurrentSpeed = Velocity.Size2D() + MovementProfile->SlideInitialSpeedBoost;
-	bSlideCrouchHeld = true;
-
-	// Suppress CMC's ground friction during slide (it multiplies BrakingDeceleration)
-	GroundFriction = MovementProfile->SlideGroundFriction;
-
-	// Shrink capsule to crouch dimensions (same pattern as UpdatePosture)
-	float OldHH = CharacterOwner->GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
-	CharacterOwner->GetCapsuleComponent()->SetCapsuleSize(
-		MovementProfile->CrouchRadius, MovementProfile->CrouchHalfHeight, true);
-
-	float HeightDelta = MovementProfile->CrouchHalfHeight - OldHH;
-	if (!FMath::IsNearlyZero(HeightDelta))
+	if (!IsMovingOnGround())
 	{
-		FVector Loc = CharacterOwner->GetActorLocation();
-		Loc.Z += HeightDelta;
-		CharacterOwner->SetActorLocation(Loc);
-
-		PostureSM.CurrentEyeHeight -= HeightDelta;
-	}
-
-	// Set posture to Crouching so external queries (ECS sync, HUD) see correct state
-	PostureSM.CurrentPosture = ECharacterPosture::Crouching;
-	PostureSM.TargetEyeHeight = MovementProfile->SlideEyeHeight;
-
-	// Sync Barrage capsule to crouch dimensions
-	OnPostureChanged.Broadcast(ECharacterPosture::Crouching);
-}
-
-void UFatumMovementComponent::EndSlide()
-{
-	check(CharacterOwner && MovementProfile);
-
-	bIsSliding = false;
-	SlideTimer = 0.f;
-	SlideCurrentSpeed = 0.f;
-
-	// Restore CMC ground friction
-	GroundFriction = 8.f; // CMC default
-
-	// Determine target posture after slide
-	ECharacterPosture TargetPosture;
-	if (bSlideCrouchHeld)
-	{
-		TargetPosture = ECharacterPosture::Crouching;
-	}
-	else if (CheckCanExpandTo(MovementProfile->StandingHalfHeight))
-	{
-		TargetPosture = ECharacterPosture::Standing;
+		// In air: freeze eye height to prevent camera bounce.
+		PostureSM.CurrentEyeHeight = PreTickEyeHeight;
+		PostureSM.TargetEyeHeight = PreTickEyeHeight;
 	}
 	else
 	{
-		TargetPosture = ECharacterPosture::Crouching;
-	}
-
-	float OldHH = CharacterOwner->GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
-	float R, HH;
-	MovementProfile->GetCapsuleForPosture(TargetPosture, R, HH);
-	CharacterOwner->GetCapsuleComponent()->SetCapsuleSize(R, HH, true);
-
-	float HeightDelta = HH - OldHH;
-	if (!FMath::IsNearlyZero(HeightDelta))
-	{
-		FVector Loc = CharacterOwner->GetActorLocation();
-		Loc.Z += HeightDelta;
-		CharacterOwner->SetActorLocation(Loc);
-
-		PostureSM.CurrentEyeHeight -= HeightDelta;
-	}
-
-	// Sync PostureSM state to match the resulting posture
-	PostureSM.CurrentPosture = TargetPosture;
-	PostureSM.TargetEyeHeight = MovementProfile->GetEyeHeightForPosture(TargetPosture);
-
-	if (TargetPosture == ECharacterPosture::Crouching)
-	{
-		PostureSM.RequestCrouch(true, MovementProfile);
-	}
-	else
-	{
-		PostureSM.ForceClearCrouch();
-	}
-
-	OnPostureChanged.Broadcast(TargetPosture);
-}
-
-void UFatumMovementComponent::UpdateSlide(float DeltaTime)
-{
-	if (!bIsSliding) return;
-	check(MovementProfile); // Was valid at BeginSlide, must still be valid
-
-	// Decelerate
-	SlideCurrentSpeed -= MovementProfile->SlideDeceleration * DeltaTime;
-	SlideCurrentSpeed = FMath::Max(SlideCurrentSpeed, 0.f);
-
-	// Interpolate eye height toward slide eye height
-	PostureSM.CurrentEyeHeight = FMath::FInterpTo(
-		PostureSM.CurrentEyeHeight, PostureSM.TargetEyeHeight,
-		DeltaTime, MovementProfile->SlideTransitionSpeed);
-
-	// Decrement timer
-	SlideTimer -= DeltaTime;
-
-	// Exit conditions
-	if (SlideTimer <= 0.f
-		|| SlideCurrentSpeed < MovementProfile->SlideMinExitSpeed
-		|| !IsMovingOnGround())
-	{
-		EndSlide();
-	}
-}
-
-void UFatumMovementComponent::RequestCrouch(bool bPressed)
-{
-	// During slide: track crouch hold state
-	if (bIsSliding)
-	{
-		bSlideCrouchHeld = bPressed;
-		if (!bPressed)
+		// On ground: ensure target eye height matches current posture.
+		float ExpectedTarget = MovementProfile->GetEyeHeightForPosture(PostureSM.CurrentPosture);
+		if (!FMath::IsNearlyEqual(PostureSM.TargetEyeHeight, ExpectedTarget, 0.1f))
 		{
-			EndSlide();
+			PostureSM.TargetEyeHeight = ExpectedTarget;
 		}
-		return;
 	}
-
-	// Slide entry: sprint + grounded + fast enough
-	if (bPressed && CurrentMoveMode == ECharacterMoveMode::Sprint
-		&& IsMovingOnGround() && MovementProfile
-		&& Velocity.Size2D() >= MovementProfile->SlideMinEntrySpeed)
-	{
-		BeginSlide();
-		return;
-	}
-
-	PostureSM.RequestCrouch(bPressed, MovementProfile);
-}
-
-void UFatumMovementComponent::RequestProne(bool bPressed)
-{
-	if (bIsSliding) return; // No prone during slide
-
-	PostureSM.RequestProne(bPressed, MovementProfile);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -306,11 +222,11 @@ void UFatumMovementComponent::UpdateMovementLayer(float DeltaTime)
 			LandingCompressOffset = LandingCompressInitial;
 		}
 
-		// Jump buffer: execute stored jump on landing
-		if (JumpBufferTimer > 0.f)
+		// Jump buffer: execute stored jump on landing via Barrage OtherForce
+		if (JumpBufferTimer > 0.f && MovementProfile)
 		{
 			JumpBufferTimer = 0.f;
-			CharacterOwner->Jump();
+			PendingJumpImpulse = MovementProfile->JumpVelocity;
 		}
 
 		bJumpedIntentionally = false;
@@ -323,10 +239,10 @@ void UFatumMovementComponent::UpdateMovementLayer(float DeltaTime)
 		LandingFallSpeed = FMath::Max(LandingFallSpeed, FMath::Abs(Velocity.Z));
 	}
 
-	// Determine movement mode
-	if (bIsSliding)
+	// Determine movement mode — active ability takes priority
+	if (ActiveAbility)
 	{
-		TransitionMoveMode(ECharacterMoveMode::Slide);
+		TransitionMoveMode(ActiveAbility->GetMoveMode());
 	}
 	else if (bGrounded)
 	{
@@ -367,8 +283,16 @@ void UFatumMovementComponent::UpdateCameraEffects(float DeltaTime)
 {
 	if (!MovementProfile) return;
 
-	// Sprint / Slide FOV
-	TargetFOVOffset = (IsSprinting() || bIsSliding) ? MovementProfile->SprintFOVBoost : 0.f;
+	// FOV: sprint base + ability override (take larger)
+	TargetFOVOffset = IsSprinting() ? MovementProfile->SprintFOVBoost : 0.f;
+	if (ActiveAbility)
+	{
+		float AbilityFOV = ActiveAbility->GetTargetFOVOffset();
+		if (AbilityFOV > TargetFOVOffset)
+		{
+			TargetFOVOffset = AbilityFOV;
+		}
+	}
 	CurrentFOVOffset = FMath::FInterpTo(CurrentFOVOffset, TargetFOVOffset,
 		DeltaTime, MovementProfile->FOVInterpSpeed);
 
@@ -396,62 +320,7 @@ void UFatumMovementComponent::TransitionMoveMode(ECharacterMoveMode NewMode)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// SPEED OVERRIDES
-// ═══════════════════════════════════════════════════════════════════════════
-
-float UFatumMovementComponent::GetMaxSpeed() const
-{
-	if (!MovementProfile) return Super::GetMaxSpeed();
-
-	switch (CurrentMoveMode)
-	{
-	case ECharacterMoveMode::Sprint:
-		return MovementProfile->SprintSpeed;
-	case ECharacterMoveMode::Slide:
-		return SlideCurrentSpeed;
-	default:
-		break;
-	}
-
-	switch (PostureSM.CurrentPosture)
-	{
-	case ECharacterPosture::Crouching:
-		return MovementProfile->CrouchSpeed;
-	case ECharacterPosture::Prone:
-		return MovementProfile->ProneSpeed;
-	default:
-		return MovementProfile->WalkSpeed;
-	}
-}
-
-float UFatumMovementComponent::GetMaxAcceleration() const
-{
-	if (!MovementProfile) return Super::GetMaxAcceleration();
-
-	if (bIsSliding) return 100.f; // Minimal — allows slight direction tweaking only
-
-	if (IsFalling())
-	{
-		return MovementProfile->AirAcceleration;
-	}
-	if (IsSprinting())
-	{
-		return MovementProfile->SprintAcceleration;
-	}
-	return MovementProfile->GroundAcceleration;
-}
-
-float UFatumMovementComponent::GetMaxBrakingDeceleration() const
-{
-	if (!MovementProfile) return Super::GetMaxBrakingDeceleration();
-
-	if (bIsSliding) return MovementProfile->SlideGroundFriction * 100.f;
-
-	return MovementProfile->GroundDeceleration;
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// SPRINT / JUMP
+// COMMANDS
 // ═══════════════════════════════════════════════════════════════════════════
 
 void UFatumMovementComponent::RequestSprint(bool bSprint)
@@ -463,39 +332,37 @@ void UFatumMovementComponent::RequestJump()
 {
 	check(CharacterOwner);
 
-	// Slide-cancel jump: end slide, preserve horizontal momentum, jump
-	if (bIsSliding && MovementProfile)
+	// Let active ability handle jump (e.g. slide-cancel jump)
+	if (ActiveAbility && ActiveAbility->HandleJumpRequest())
 	{
-		EndSlide();
-		JumpZVelocity = MovementProfile->SlideJumpVelocity;
 		CoyoteTimer = 0.f;
 		JumpBufferTimer = 0.f;
 		bJumpedIntentionally = true;
-		CharacterOwner->Jump();
 		return;
 	}
 
 	// No jump from prone
 	if (PostureSM.CurrentPosture == ECharacterPosture::Prone) return;
 
-	// Crouch jump: stand up + jump with reduced velocity
+	// Determine jump velocity (cm/s) — crouch jump uses reduced velocity
+	float JumpVel = 0.f;
 	if (PostureSM.CurrentPosture == ECharacterPosture::Crouching && MovementProfile)
 	{
 		PostureSM.ForceClearCrouch();
-		JumpZVelocity = MovementProfile->CrouchJumpVelocity;
+		JumpVel = MovementProfile->CrouchJumpVelocity;
 	}
 	else if (MovementProfile)
 	{
-		JumpZVelocity = MovementProfile->JumpVelocity;
+		JumpVel = MovementProfile->JumpVelocity;
 	}
 
-	// Grounded or coyote time -> jump immediately
+	// Grounded or coyote time -> jump immediately via Barrage OtherForce
 	if (IsMovingOnGround() || CoyoteTimer > 0.f)
 	{
 		CoyoteTimer = 0.f;
 		JumpBufferTimer = 0.f;
 		bJumpedIntentionally = true;
-		CharacterOwner->Jump();
+		PendingJumpImpulse = JumpVel;
 	}
 	else
 	{
@@ -509,6 +376,40 @@ void UFatumMovementComponent::RequestJump()
 
 void UFatumMovementComponent::ReleaseJump()
 {
-	check(CharacterOwner);
-	CharacterOwner->StopJumping();
+	// Barrage handles jump physics — nothing to do on release.
+}
+
+void UFatumMovementComponent::RequestCrouch(bool bPressed)
+{
+	check(MovementProfile);
+
+	// Active slide ability intercepts crouch input
+	if (auto* Slide = Cast<USlideAbility>(ActiveAbility))
+	{
+		Slide->OnCrouchInput(bPressed);
+		return;
+	}
+
+	// Try slide activation: sprint + grounded + fast enough
+	if (bPressed)
+	{
+		if (auto* Slide = FindAbility<USlideAbility>())
+		{
+			if (Slide->CanActivate())
+			{
+				ActivateAbility(Slide);
+				return;
+			}
+		}
+	}
+
+	PostureSM.RequestCrouch(bPressed, MovementProfile);
+}
+
+void UFatumMovementComponent::RequestProne(bool bPressed)
+{
+	check(MovementProfile);
+	if (ActiveAbility) return; // No prone during active ability
+
+	PostureSM.RequestProne(bPressed, MovementProfile);
 }

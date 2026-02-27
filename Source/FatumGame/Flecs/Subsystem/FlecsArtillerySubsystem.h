@@ -22,6 +22,25 @@ class UNiagaraSystem;
 struct BarrageContactEvent;
 struct FItemStaticData;
 class FDebrisPool;
+class AFlecsCharacter;
+class FBarragePrimitive;
+
+struct FCharacterPosAtomics;
+struct FCharacterInputAtomics;
+class FBCharacterBase;
+
+/** Lightweight bridge for sim→game character position feedback + game→sim input.
+ *  PosAtomics lives on the heap — shared with AFlecsCharacter via TSharedPtr.
+ *  Even if the actor is destroyed before the sim thread unregisters, the atomics stay alive. */
+struct FCharacterPhysBridge
+{
+	TSharedPtr<FBarragePrimitive> CachedBody;                          // cached at registration
+	TSharedPtr<FCharacterPosAtomics, ESPMode::ThreadSafe> PosAtomics;  // sim→game
+	TSharedPtr<FCharacterInputAtomics, ESPMode::ThreadSafe> InputAtomics; // game→sim
+	FSkeletonKey CharacterKey;                                          // identity for unregister
+	flecs::entity Entity;                                               // for reading FMovementStatic + FCharacterMoveState
+	TSharedPtr<FBCharacterBase> CachedFBChar;                           // direct pointer to FBCharacter (no per-tick lookup)
+};
 
 /**
  * Pending ISM render instance for a sim-thread-spawned entity.
@@ -105,6 +124,14 @@ public:
 	/** Apply all late-sync buffers to Flecs entities. Called by sim thread before ProgressWorld(). */
 	void ApplyLateSyncBuffers();
 
+	/** Read resolved character positions from Barrage and write to atomics. Called by FSimulationWorker after StepWorld. */
+	void SyncCharacterPositions();
+
+	/** Compute acceleration-smoothed locomotion for all characters. Called by FSimulationWorker before StackUp.
+	 *  Reads InputAtomics (direction), FCharacterMoveState (sprint/posture), FMovementStatic (speeds/accel),
+	 *  CharacterVirtual (ground state, velocity). Writes mLocomotionUpdate on FBCharacter. */
+	void PrepareCharacterStep(float DeltaTime);
+
 	// ═══════════════════════════════════════════════════════════════
 	// LOCAL PLAYER REGISTRATION (local player cache)
 	// ═══════════════════════════════════════════════════════════════
@@ -114,6 +141,30 @@ public:
 
 	static void RegisterLocalPlayer(AActor* Player, FSkeletonKey Key);
 	static void UnregisterLocalPlayer();
+
+	// ═══════════════════════════════════════════════════════════════
+	// CHARACTER PHYSICS BRIDGE (sim thread only)
+	// ═══════════════════════════════════════════════════════════════
+
+	/** Register character for sim-thread position readback. Called from BeginPlay EnqueueCommand. */
+	void RegisterCharacterBridge(AFlecsCharacter* Character);
+
+	/** Unregister character bridge by key. Called from EndPlay EnqueueCommand. */
+	void UnregisterCharacterBridge(FSkeletonKey CharacterKey);
+
+	// ═══════════════════════════════════════════════════════════════
+	// INTERPOLATION (game thread — computed in Tick, consumed by character + render manager)
+	// ═══════════════════════════════════════════════════════════════
+
+	/** Current interpolation Alpha ∈ [0,1]. 0 = just after sim tick, 1 = just before next. */
+	float GetCurrentAlpha() const { return CachedAlpha; }
+
+	/** Current sim tick count — uses cached value for consistency with CachedAlpha.
+	 *  Character Tick runs BEFORE Subsystem Tick (TG_PrePhysics vs TickableWorldSubsystem).
+	 *  Reading the atomic directly would get a NEWER SimTick while Alpha is stale from
+	 *  the previous frame — causing the character to jump 90% forward then snap back.
+	 *  Using CachedSimTick ensures the (Alpha, SimTick) pair is always consistent. */
+	uint64 GetCurrentSimTick() const { return CachedSimTick; }
 
 	// ═══════════════════════════════════════════════════════════════
 	// THREAD-SAFE API (callable from any thread)
@@ -357,6 +408,12 @@ private:
 	FDelegateHandle ContactEventHandle;
 
 	// ═══════════════════════════════════════════════════════════════
+	// INTERPOLATION STATE (game thread only, computed in Tick)
+	// ═══════════════════════════════════════════════════════════════
+	float CachedAlpha = 1.f;
+	uint64 CachedSimTick = 0;
+
+	// ═══════════════════════════════════════════════════════════════
 	// CACHED SUBSYSTEM POINTERS
 	// ═══════════════════════════════════════════════════════════════
 	UBarrageDispatch* CachedBarrageDispatch = nullptr;
@@ -403,4 +460,10 @@ private:
 
 	/** Bridge for lock-free game→sim "latest wins" data. */
 	TUniquePtr<FLateSyncBridge> LateSyncBridge;
+
+	// ═══════════════════════════════════════════════════════════════
+	// CHARACTER PHYSICS BRIDGE
+	// Sim thread only — no lock needed. Typically 1 entry (local player).
+	// ═══════════════════════════════════════════════════════════════
+	TArray<FCharacterPhysBridge> CharacterBridges;
 };

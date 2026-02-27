@@ -19,6 +19,9 @@
 #include "FlecsRenderManager.h"
 #include "FlecsNiagaraManager.h"
 #include "FDebrisPool.h"
+#include "FlecsCharacter.h"
+#include "FlecsMovementStatic.h"
+#include "FWorldSimOwner.h"
 #include "HAL/PlatformTime.h"
 
 // ═══════════════════════════════════════════════════════════════
@@ -58,6 +61,205 @@ void UFlecsArtillerySubsystem::ApplyLateSyncBuffers()
 	if (LateSyncBridge && FlecsWorld)
 	{
 		LateSyncBridge->ApplyAll(FlecsWorld.Get());
+	}
+}
+
+// ═══════════════════════════════════════════════════════════════
+// CHARACTER PHYSICS BRIDGE
+// ═══════════════════════════════════════════════════════════════
+
+void UFlecsArtillerySubsystem::RegisterCharacterBridge(AFlecsCharacter* Character)
+{
+	check(Character);
+	check(Character->PosAtomics.IsValid());
+	check(Character->CachedBarrageBody.IsValid());
+	check(Character->InputAtomics.IsValid());
+
+	FCharacterPhysBridge Bridge;
+	Bridge.CachedBody = Character->CachedBarrageBody;
+	Bridge.PosAtomics = Character->PosAtomics;
+	Bridge.InputAtomics = Character->InputAtomics;
+	Bridge.CharacterKey = Character->CharacterKey;
+
+	// Resolve Flecs entity for this character (bidirectional binding already set)
+	Bridge.Entity = GetEntityForBarrageKey(Character->CharacterKey);
+
+	// Cache FBCharacterBase pointer for direct sim-thread access (no per-tick lookup)
+	if (CachedBarrageDispatch && CachedBarrageDispatch->JoltGameSim
+		&& CachedBarrageDispatch->JoltGameSim->CharacterToJoltMapping)
+	{
+		TSharedPtr<FBCharacterBase>* CharPtr =
+			CachedBarrageDispatch->JoltGameSim->CharacterToJoltMapping->Find(
+				Character->CachedBarrageBody->KeyIntoBarrage);
+		if (CharPtr && *CharPtr)
+		{
+			Bridge.CachedFBChar = *CharPtr;
+		}
+	}
+
+	CharacterBridges.Add(MoveTemp(Bridge));
+}
+
+void UFlecsArtillerySubsystem::UnregisterCharacterBridge(FSkeletonKey CharacterKey)
+{
+	CharacterBridges.RemoveAll([CharacterKey](const FCharacterPhysBridge& B) { return B.CharacterKey == CharacterKey; });
+}
+
+void UFlecsArtillerySubsystem::SyncCharacterPositions()
+{
+	for (FCharacterPhysBridge& Bridge : CharacterBridges)
+	{
+		if (!Bridge.PosAtomics.IsValid()) continue;
+		if (!FBarragePrimitive::IsNotNull(Bridge.CachedBody)) continue;
+
+		FVector3f Pos = FBarragePrimitive::GetPosition(Bridge.CachedBody);
+
+		// NaN guard: GetPosition returns NaN on lookup failure. Don't write NaN to atomics —
+		// game thread would SetActorLocation(NaN) and corrupt LastBarragePosition.
+		// Root cause (zero-velocity Normalized) is fixed — this is a safety net.
+		if (FMath::IsNaN(Pos.X) || FMath::IsNaN(Pos.Y) || FMath::IsNaN(Pos.Z))
+		{
+			ensureMsgf(false, TEXT("SyncCharacterPositions: NaN from GetPosition — body mapping corrupt?"));
+			continue;
+		}
+
+		Bridge.PosAtomics->PosX.store(Pos.X, std::memory_order_relaxed);
+		Bridge.PosAtomics->PosY.store(Pos.Y, std::memory_order_relaxed);
+		Bridge.PosAtomics->PosZ.store(Pos.Z, std::memory_order_relaxed);
+
+		// Ground state from CharacterVirtual
+		uint8 GS = static_cast<uint8>(FBarragePrimitive::GetCharacterGroundState(Bridge.CachedBody));
+		Bridge.PosAtomics->GroundState.store(GS, std::memory_order_relaxed);
+
+		// Velocity in UE cm/s
+		FVector3f Vel = FBarragePrimitive::GetVelocity(Bridge.CachedBody);
+		Bridge.PosAtomics->VelX.store(Vel.X, std::memory_order_relaxed);
+		Bridge.PosAtomics->VelY.store(Vel.Y, std::memory_order_relaxed);
+		Bridge.PosAtomics->VelZ.store(Vel.Z, std::memory_order_relaxed);
+
+		// bValid is the "version guard" — store LAST so game thread sees consistent data
+		Bridge.PosAtomics->bValid.store(true, std::memory_order_release);
+	}
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PREPARE CHARACTER STEP (sim thread, before StackUp)
+// Reads all inputs + Flecs components + Jolt state,
+// computes acceleration-smoothed velocity, writes to FBCharacter.mLocomotionUpdate.
+// ═══════════════════════════════════════════════════════════════
+
+void UFlecsArtillerySubsystem::PrepareCharacterStep(float DeltaTime)
+{
+	for (FCharacterPhysBridge& Bridge : CharacterBridges)
+	{
+		if (!Bridge.CachedFBChar || !Bridge.InputAtomics) continue;
+		FBCharacterBase* FBChar = Bridge.CachedFBChar.Get();
+
+		// 1. Read input direction from atomics (latest-wins, lock-free)
+		float DirX = Bridge.InputAtomics->DirX.load(std::memory_order_relaxed);
+		float DirZ = Bridge.InputAtomics->DirZ.load(std::memory_order_relaxed);
+
+		// 2. Read movement params from Flecs
+		const FMovementStatic* MS = Bridge.Entity.is_valid() ? Bridge.Entity.try_get<FMovementStatic>() : nullptr;
+		const FCharacterMoveState* State = Bridge.Entity.is_valid() ? Bridge.Entity.try_get<FCharacterMoveState>() : nullptr;
+		if (!MS)
+		{
+			FBChar->mLocomotionUpdate = JPH::Vec3::sZero();
+			continue;
+		}
+
+		// 3. Slide deceleration (sim-thread owned)
+		FSlideInstance* Slide = Bridge.Entity.try_get_mut<FSlideInstance>();
+		bool bSliding = false;
+		if (Slide)
+		{
+			Slide->CurrentSpeed -= MS->SlideDeceleration * DeltaTime;
+			Slide->CurrentSpeed = FMath::Max(Slide->CurrentSpeed, 0.f);
+			Slide->Timer -= DeltaTime;
+			bSliding = true;
+
+			// Exit conditions (sim-thread decides)
+			bool bOnGroundForSlide = (FBChar->mCharacter->GetGroundState()
+				== JPH::CharacterVirtual::EGroundState::OnGround);
+			if (Slide->Timer <= 0.f || Slide->CurrentSpeed < MS->SlideMinExitSpeed || !bOnGroundForSlide)
+			{
+				Bridge.Entity.remove<FSlideInstance>();
+				bSliding = false;
+			}
+		}
+		if (Bridge.PosAtomics)
+		{
+			Bridge.PosAtomics->bSlideActive.store(bSliding, std::memory_order_relaxed);
+		}
+
+		// 4. Compute target speed from posture/sprint/slide
+		float TargetSpeedCm;
+		float AccelCm;
+		if (bSliding)
+		{
+			TargetSpeedCm = Slide->CurrentSpeed;
+			AccelCm = MS->SlideMinAcceleration;  // minimal steering
+		}
+		else if (State && State->bSprinting && State->Posture == 0)
+		{
+			TargetSpeedCm = MS->SprintSpeed;
+			AccelCm = MS->SprintAcceleration;
+		}
+		else
+		{
+			TargetSpeedCm = MS->WalkSpeed;
+			AccelCm = MS->GroundAcceleration;
+			if (State)
+			{
+				switch (State->Posture)
+				{
+				case 1: TargetSpeedCm = MS->CrouchSpeed; break;
+				case 2: TargetSpeedCm = MS->ProneSpeed; break;
+				}
+			}
+		}
+
+		// 5. Ground state from Jolt CharacterVirtual
+		bool bOnGround = (FBChar->mCharacter->GetGroundState()
+			== JPH::CharacterVirtual::EGroundState::OnGround);
+
+		// 6. Deceleration + air accel (cm/s^2)
+		float DecelCm = MS->GroundDeceleration;
+		float AirAccelCm = MS->AirAcceleration;
+
+		// 7. Build target horizontal velocity (UE cm/s → Jolt m/s)
+		float DirLen = FMath::Sqrt(DirX * DirX + DirZ * DirZ);
+		JPH::Vec3 TargetH = JPH::Vec3::sZero();
+		if (DirLen > 0.01f)
+		{
+			float InvDirLen = 1.f / DirLen;
+			float SpeedJolt = TargetSpeedCm / 100.f;  // cm→m
+			TargetH = JPH::Vec3(DirX * InvDirLen * SpeedJolt, 0, DirZ * InvDirLen * SpeedJolt);
+		}
+
+		// 8. Read current horizontal from CharacterVirtual
+		JPH::Vec3 CurVelo = FBChar->mCharacter->GetLinearVelocity();
+		JPH::Vec3 CurH(CurVelo.GetX(), 0, CurVelo.GetZ());
+
+		// 9. Pick accel rate (m/s^2)
+		float AccelRate;
+		if (bOnGround)
+			AccelRate = TargetH.IsNearZero() ? (DecelCm / 100.f) : (AccelCm / 100.f);
+		else
+			AccelRate = AirAccelCm / 100.f;
+
+		// 10. MoveTowards: smooth current → target
+		JPH::Vec3 Diff = TargetH - CurH;
+		float DiffLen = Diff.Length();
+		float Step = AccelRate * DeltaTime;
+		JPH::Vec3 SmoothedH;
+		if (DiffLen <= Step || DiffLen < 1.0e-6f)
+			SmoothedH = TargetH;
+		else
+			SmoothedH = CurH + (Diff / DiffLen) * Step;
+
+		// 11. Write pre-smoothed velocity to FBCharacter (consumed by StepCharacter)
+		FBChar->mLocomotionUpdate = SmoothedH;
 	}
 }
 
@@ -220,16 +422,11 @@ void UFlecsArtillerySubsystem::Tick(float DeltaTime)
 		}
 	}
 
-	// Periodic log: alpha, sim tick, timing health (~1/sec)
-	{
-		static uint32 TickLog = 0;
-		if (++TickLog % 60 == 0)
-		{
-			UE_LOG(LogTemp, Log, TEXT("INTERP [Tick] Alpha=%.3f SimTick=%llu SimDt=%.4f TimeSince=%.4f"),
-				Alpha, SimTick, SimDt,
-				(LastSimTime > 0.0) ? FPlatformTime::Seconds() - LastSimTime : -1.0);
-		}
-	}
+	// Cache for consumers (AFlecsCharacter::Tick reads these).
+	// IMPORTANT: Character Tick runs BEFORE Subsystem Tick (TG_PrePhysics vs TickableWorldSubsystem).
+	// Character reads CachedAlpha + CachedSimTick from the PREVIOUS frame — must be a consistent pair.
+	CachedAlpha = Alpha;
+	CachedSimTick = SimTick;
 
 	// Step 1: Interpolate all existing ISM transforms between sim-tick states.
 	// RenderManager is NOT self-ticking — we drive it here for guaranteed ordering.

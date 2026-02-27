@@ -629,6 +629,80 @@ void UBarrageDispatch::SetBodyCapsuleShape(FBarrageKey BarrageKey, double JoltHa
 	}
 }
 
+void UBarrageDispatch::SetCharacterCapsuleShape(FSkeletonKey Key, double JoltHalfHeight, double JoltRadius)
+{
+	if (!JoltGameSim)
+	{
+		UE_LOG(LogTemp, Error, TEXT("SetCharacterCapsuleShape: JoltGameSim is null"));
+		return;
+	}
+
+	FBLet Body = GetShapeRef(Key);
+	if (!FBarragePrimitive::IsNotNull(Body))
+	{
+		UE_LOG(LogTemp, Error, TEXT("SetCharacterCapsuleShape: Body not found for key %llu"), static_cast<uint64>(Key));
+		return;
+	}
+
+	auto* CharPtr = JoltGameSim->CharacterToJoltMapping->Find(Body->KeyIntoBarrage);
+	if (!CharPtr || !*CharPtr)
+	{
+		UE_LOG(LogTemp, Error, TEXT("SetCharacterCapsuleShape: CharacterVirtual not found for key %llu"), static_cast<uint64>(Key));
+		return;
+	}
+
+	auto& Char = *CharPtr;
+	if (!Char->mCharacter) return;
+
+	float HH = static_cast<float>(JoltHalfHeight);
+	float R = static_cast<float>(JoltRadius);
+
+	// Update cached dimensions (used by ExtendedUpdate for step-up and walkability)
+	Char->mHeightStanding = 2.0f * HH;
+	Char->mRadiusStanding = R;
+
+	// Rebuild outer shape (RotatedTranslated capsule, same convention as Create)
+	JPH::Ref<JPH::Shape> Capsule = new JPH::CapsuleShape(HH, R);
+	JPH::RotatedTranslatedShapeSettings Settings(
+		JPH::Vec3(0, HH + R, 0), JPH::Quat::sIdentity(), Capsule);
+	auto Result = Settings.Create();
+	if (Result.HasError())
+	{
+		UE_LOG(LogTemp, Error, TEXT("SetCharacterCapsuleShape: Outer shape creation failed"));
+		return;
+	}
+
+	// SetShape requires full collision filters (same as ExtendedUpdate)
+	if (Char->World)
+	{
+		JPH::TempAllocatorMalloc Allocator;
+		Char->mCharacter->SetShape(
+			Result.Get().GetPtr(), 0.02f,
+			Char->World->GetDefaultBroadPhaseLayerFilter(Layers::MOVING),
+			Char->World->GetDefaultLayerFilter(Layers::MOVING),
+			JPH::IgnoreSingleBodyFilter(Char->mCharacter->GetInnerBodyID()),
+			{},
+			Allocator);
+	}
+
+	// Rebuild inner body shape
+	JPH::Ref<JPH::Shape> InnerCapsule = new JPH::CapsuleShape(HH, R);
+	JPH::RotatedTranslatedShapeSettings InnerSettings(
+		JPH::Vec3(0, HH + R, 0), JPH::Quat::sIdentity(), InnerCapsule);
+	auto InnerResult = InnerSettings.Create();
+	if (!InnerResult.HasError())
+	{
+		Char->InnerStandingShape = InnerResult.Get();
+		JPH::BodyID InnerID = Char->mCharacter->GetInnerBodyID();
+		JoltGameSim->body_interface->SetShape(
+			InnerID, InnerResult.Get().GetPtr(), true, JPH::EActivation::Activate);
+	}
+	else
+	{
+		UE_LOG(LogTemp, Error, TEXT("SetCharacterCapsuleShape: Inner shape creation failed"));
+	}
+}
+
 bool UBarrageDispatch::RemoveConstraint(FBarrageConstraintKey Key)
 {
 	FBarrageConstraintSystem* System = GetConstraintSystem();

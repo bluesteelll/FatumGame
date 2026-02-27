@@ -248,6 +248,12 @@ public:
 	 *  Call from sim thread via EnqueueCommand. */
 	void SetBodyCapsuleShape(FBarrageKey BarrageKey, double JoltHalfHeight, double JoltRadius);
 
+	/** Change a CharacterVirtual's outer shape AND inner body shape to a capsule at runtime.
+	 *  For posture changes on characters created via FBCharParams.
+	 *  JoltHalfHeight and JoltRadius are in Jolt meters.
+	 *  Call from sim thread via EnqueueCommand. */
+	void SetCharacterCapsuleShape(FSkeletonKey Key, double JoltHalfHeight, double JoltRadius);
+
 	/**
 	 * Remove a constraint.
 	 * @param Key The constraint to remove

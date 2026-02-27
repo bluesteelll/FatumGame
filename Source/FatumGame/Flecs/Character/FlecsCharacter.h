@@ -22,6 +22,32 @@ class UInputMappingContext;
 class USpringArmComponent;
 class UCameraComponent;
 struct FInputActionValue;
+class FBarragePrimitive;
+
+/** Heap-allocated position atomics shared between AFlecsCharacter (game thread)
+ *  and FCharacterPhysBridge (sim thread). TSharedPtr keeps this alive until both
+ *  sides release — prevents use-after-free when actor is destroyed before
+ *  the sim thread unregisters the bridge. */
+struct FCharacterPosAtomics
+{
+	std::atomic<float> PosX{0.f};
+	std::atomic<float> PosY{0.f};
+	std::atomic<float> PosZ{0.f};
+	std::atomic<bool> bValid{false};
+	std::atomic<uint8> GroundState{3};  // FBGroundState: 0=OnGround, 1=SteepGround, 2=NotSupported, 3=InAir
+	std::atomic<float> VelX{0.f};       // effective velocity in UE cm/s
+	std::atomic<float> VelY{0.f};
+	std::atomic<float> VelZ{0.f};
+	std::atomic<bool> bSlideActive{false};  // sim→game: slide is running
+};
+
+/** Game→sim input direction atomics. Written by AFlecsCharacter::Move every tick (latest-wins).
+ *  Read by PrepareCharacterStep on sim thread. Lock-free, no queue buildup. */
+struct FCharacterInputAtomics
+{
+	std::atomic<float> DirX{0.f};  // world-space horizontal input (UE X = forward)
+	std::atomic<float> DirZ{0.f};  // world-space horizontal input (UE Y = right)
+};
 
 /**
  * Character fully integrated with Flecs ECS.
@@ -483,6 +509,39 @@ private:
 	uint8 LastSyncedPosture = 0;
 	uint8 LastSyncedMoveMode = 0;
 	void SyncMovementStateToECS();
+
+	// ─────────────────────────────────────────────────────────
+	// BARRAGE CHARACTER POSITION BRIDGE (sim→game)
+	// Shared struct lives on the heap — both actor and bridge hold a TSharedPtr.
+	// Sim thread writes positions, game thread reads.
+	// TSharedPtr<T, ESPMode::ThreadSafe> for safe cross-thread ref counting.
+	// ─────────────────────────────────────────────────────────
+	TSharedPtr<FCharacterPosAtomics, ESPMode::ThreadSafe> PosAtomics;
+	TSharedPtr<FCharacterInputAtomics, ESPMode::ThreadSafe> InputAtomics; // game→sim direction
+	bool bBarrageReady = false; // true after first valid sim-thread readback
+
+	// Interpolation state — matches ISM render manager approach (Prev/Curr + Alpha lerp).
+	// Without this, the character moves in 60Hz sim steps while ISM objects are smooth.
+	FVector PrevBarrageCenter = FVector::ZeroVector;  // capsule center at sim tick N-1
+	FVector CurrBarrageCenter = FVector::ZeroVector;  // capsule center at sim tick N
+	FVector LastSetPosition = FVector::ZeroVector;     // where we placed actor last game frame
+	uint64 LastCharacterSimTick = 0;
+
+	// Slide activation grace: sim tick when slide ability was activated on game thread.
+	// Prevents immediate deactivation before EnqueueCommand(FSlideInstance) is processed.
+	uint64 SlideActivationSimTick = 0;
+
+	// Feet-to-actor offset: Z distance from Barrage feet to UE capsule center.
+	// On ground: = CapsuleHalfHeight (standard).
+	// In air: FROZEN when posture changes — keeps actor Z stable, capsule shrinks from bottom.
+	float FeetToActorOffset = 0.f;
+
+	/** Cached Barrage body — set once in BeginPlay, avoids per-frame GetShapeRef lookup.
+	 *  Written on sim thread (EnqueueCommand), read on game thread (Tick).
+	 *  Gate reads behind PosAtomics->bValid (which is set AFTER body is cached). */
+	TSharedPtr<FBarragePrimitive> CachedBarrageBody;
+
+	friend class UFlecsArtillerySubsystem;
 
 	/**
 	 * Pending weapon equip data (sim thread → game thread via atomics).

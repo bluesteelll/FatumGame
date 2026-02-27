@@ -47,6 +47,16 @@ uint32 FSimulationWorker::Run()
 
 		if (!bRunning.load(std::memory_order_acquire)) break;
 
+		// Compute acceleration-smoothed locomotion for characters.
+		// Must run AFTER DrainCommandQueue (state flags set there) and BEFORE StackUp
+		// (which processes mLocomotionUpdate via IngestUpdate).
+		if (FlecsSubsystem)
+		{
+			FlecsSubsystem->PrepareCharacterStep(DeltaTime);
+		}
+
+		if (!bRunning.load(std::memory_order_acquire)) break;
+
 		if (BarrageDispatch)
 		{
 			BarrageDispatch->StackUp();
@@ -54,6 +64,12 @@ uint32 FSimulationWorker::Run()
 			if (!bRunning.load(std::memory_order_acquire)) break;
 
 			BarrageDispatch->StepWorld(DeltaTime, TickCount);
+
+			// Read resolved character positions from Barrage → atomics (zero-copy bridge)
+			if (FlecsSubsystem)
+			{
+				FlecsSubsystem->SyncCharacterPositions();
+			}
 
 			if (!bRunning.load(std::memory_order_acquire)) break;
 

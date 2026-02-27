@@ -42,52 +42,50 @@ JPH::BodyID FBCharacter::Create(JPH::CharacterVsCharacterCollision* CVCColliderS
 
 void FBCharacter::StepCharacter()
 {
-	// Determine new basic velocity
 	Vec3 MyVelo = mCharacter->GetLinearVelocity();
-	Vec3 current_vertical_velocity = Vec3(0, MyVelo.GetY(), 0);
-	Vec3 current_planar_velocity = Vec3(MyVelo.GetX(), 0, MyVelo.GetZ());
+	Vec3 current_vertical = Vec3(0, MyVelo.GetY(), 0);
 	Vec3 ground_velocity = mCharacter->GetGroundVelocity();
-	Vec3 new_velocity = Vec3::sZero(); // start with nothing.
+	bool bOnGround = (mCharacter->GetGroundState() == CharacterVirtual::EGroundState::OnGround);
 
-	//build carry-over.
-	//this ensures small forces won't knock us off the ground, vastly reducing jitter.
-	if (mCharacter->GetGroundState() == CharacterVirtual::EGroundState::OnGround)
-	// And not moving away from ground
-	{
-		if(ground_velocity.IsNearZero())
-		{//during initial settling, we want to maintain velocity.
-			new_velocity += current_planar_velocity;
-		}
-		else
-		{// Assume ground velocity when on ground for multiple ticks.
-			new_velocity += ground_velocity;
-		}
-	}
-	else
-	{
-		new_velocity += current_planar_velocity + current_vertical_velocity;
-	}
+	// VERTICAL: carry in air (gravity + jump), zero on ground
+	Vec3 carry_vertical = bOnGround ? Vec3::sZero() : current_vertical * mThrottleModel.GetX();
 
-	//Throttle carry-over
-	new_velocity *= mThrottleModel.GetX();
-	// Gravity
-	if(World)
-	{
-		new_velocity += mGravity * mDeltaTime * mThrottleModel.GetY();
-	}
-	
-	new_velocity += mLocomotionUpdate * mThrottleModel.GetZ();
+	// HORIZONTAL: pre-smoothed by PrepareCharacterStep (already acceleration-applied)
+	Vec3 smoothed_horizontal = Vec3(mLocomotionUpdate.GetX(), 0, mLocomotionUpdate.GetZ())
+		* mThrottleModel.GetZ();
 	mLocomotionUpdate = Vec3::sZero();
-	new_velocity += mForcesUpdate * mThrottleModel.GetW();
+
+	// Moving platform
+	if (bOnGround && !ground_velocity.IsNearZero())
+		smoothed_horizontal += Vec3(ground_velocity.GetX(), 0, ground_velocity.GetZ());
+
+	// Gravity
+	Vec3 gravity_v = Vec3::sZero();
+	if (World)
+	{
+		gravity_v = Vec3(0, mGravity.GetY() * mDeltaTime * mThrottleModel.GetY(), 0);
+	}
+
+	// Forces (jump impulse via OtherForce)
+	Vec3 forces = mForcesUpdate * mThrottleModel.GetW();
 	mForcesUpdate = Vec3::sZero();
+
+	Vec3 new_velocity = smoothed_horizontal + carry_vertical + gravity_v + forces;
 	
 	RVec3 start_pos = GetPosition();
 	//allow single frame exccession
 	//TODO: factor this into a stupid constant.
-	float SpeedLimit = min(new_velocity.Length(), (mMaxSpeed * 1.20f));
-	Vec3 clamped = (new_velocity.Normalized() * SpeedLimit);
-	
-	mCharacter->SetLinearVelocity(clamped);
+	float Speed = new_velocity.Length();
+	if (Speed > 1.0e-6f)
+	{
+		float SpeedLimit = min(Speed, (mMaxSpeed * 1.20f));
+		Vec3 clamped = (new_velocity / Speed) * SpeedLimit;
+		mCharacter->SetLinearVelocity(clamped);
+	}
+	else
+	{
+		mCharacter->SetLinearVelocity(Vec3::sZero());
+	}
 	// Update the character position. splitting this into two half-length updates allows you to get VERY
 	// fine grained control by moving them around with respect to the clamp and update.
     {
@@ -103,11 +101,20 @@ void FBCharacter::StepCharacter()
     }
 
 	// Update character velocity for carry over.
-	SpeedLimit = min(new_velocity.Length(), (mMaxSpeed));
-	clamped = (new_velocity.Normalized() * SpeedLimit);
-	
-	mCharacter->SetLinearVelocity(clamped);
-	mEffectiveVelocity = Vec3(GetPosition() - start_pos) / mDeltaTime;
+	Speed = new_velocity.Length();
+	if (Speed > 1.0e-6f)
+	{
+		float SpeedLimit = min(Speed, (mMaxSpeed));
+		Vec3 clamped = (new_velocity / Speed) * SpeedLimit;
+		mCharacter->SetLinearVelocity(clamped);
+	}
+	else
+	{
+		mCharacter->SetLinearVelocity(Vec3::sZero());
+	}
+	mEffectiveVelocity = (mDeltaTime > 1.0e-6f)
+		? Vec3(GetPosition() - start_pos) / mDeltaTime
+		: Vec3::sZero();
 }
 
 void FBCharacter::IngestUpdate(FBPhysicsInput& input)

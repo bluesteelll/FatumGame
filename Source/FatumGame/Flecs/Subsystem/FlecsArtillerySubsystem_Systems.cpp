@@ -18,6 +18,7 @@
 #include "FBShapeParams.h"
 #include "Skeletonize.h"
 #include "FlecsMessageSubsystem.h"
+#include "FlecsMovementStatic.h"
 #include "FlecsUIMessages.h"
 #include "FlecsNiagaraManager.h"
 #include "FlecsNiagaraProfile.h"
@@ -112,6 +113,9 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 	// MOVEMENT COMPONENTS
 	// ─────────────────────────────────────────────────────────
 	World.component<FMovementState>();
+	World.component<FCharacterMoveState>();
+	World.component<FSlideInstance>();
+	World.component<FMovementStatic>();
 
 	// ─────────────────────────────────────────────────────────
 	// COLLISION PAIR SYSTEM COMPONENTS

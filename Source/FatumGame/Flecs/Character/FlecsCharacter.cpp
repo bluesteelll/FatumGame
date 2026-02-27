@@ -33,6 +33,7 @@
 #include "FatumInputComponent.h"
 #include "FatumInputTags.h"
 #include "FlecsMovementProfile.h"
+#include "FlecsMovementStatic.h"
 #include "EnhancedInputSubsystems.h"
 #include "InputActionValue.h"
 #include "Components/SkeletalMeshComponent.h"
@@ -150,33 +151,94 @@ void AFlecsCharacter::BeginPlay()
 			float CapsuleRadius = GetCapsuleComponent()->GetScaledCapsuleRadius();
 			float CapsuleHalfHeight = GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
 
+			// Allocate shared atomics on game thread — bridge will hold a second ref.
+			PosAtomics = MakeShared<FCharacterPosAtomics, ESPMode::ThreadSafe>();
+			InputAtomics = MakeShared<FCharacterInputAtomics, ESPMode::ThreadSafe>();
+			FeetToActorOffset = CapsuleHalfHeight; // init offset = standing HH
+			bBarrageReady = false;
+
+			// Capture movement profile values for sim thread (can't access UObjects there).
+			float CapturedGravityScale = 1.f;
+			FMovementStatic CapturedMS;
+			if (FatumMovement && FatumMovement->MovementProfile)
+			{
+				const UFlecsMovementProfile* MoveProf = FatumMovement->MovementProfile;
+				CapturedGravityScale = MoveProf->GravityScale;
+				CapturedMS.WalkSpeed = MoveProf->WalkSpeed;
+				CapturedMS.SprintSpeed = MoveProf->SprintSpeed;
+				CapturedMS.CrouchSpeed = MoveProf->CrouchSpeed;
+				CapturedMS.ProneSpeed = MoveProf->ProneSpeed;
+				CapturedMS.GroundAcceleration = MoveProf->GroundAcceleration;
+				CapturedMS.GroundDeceleration = MoveProf->GroundDeceleration;
+				CapturedMS.AirAcceleration = MoveProf->AirAcceleration;
+				CapturedMS.SprintAcceleration = MoveProf->SprintAcceleration;
+				CapturedMS.JumpVelocity = MoveProf->JumpVelocity;
+				CapturedMS.CrouchJumpVelocity = MoveProf->CrouchJumpVelocity;
+				CapturedMS.GravityScale = MoveProf->GravityScale;
+				CapturedMS.StandingHalfHeight = MoveProf->StandingHalfHeight;
+				CapturedMS.StandingRadius = MoveProf->StandingRadius;
+				CapturedMS.CrouchHalfHeight = MoveProf->CrouchHalfHeight;
+				CapturedMS.CrouchRadius = MoveProf->CrouchRadius;
+				CapturedMS.ProneHalfHeight = MoveProf->ProneHalfHeight;
+				CapturedMS.ProneRadius = MoveProf->ProneRadius;
+				CapturedMS.SlideMinEntrySpeed = MoveProf->SlideMinEntrySpeed;
+				CapturedMS.SlideDeceleration = MoveProf->SlideDeceleration;
+				CapturedMS.SlideMinExitSpeed = MoveProf->SlideMinExitSpeed;
+				CapturedMS.SlideMaxDuration = MoveProf->SlideMaxDuration;
+				CapturedMS.SlideInitialSpeedBoost = MoveProf->SlideInitialSpeedBoost;
+				CapturedMS.SlideMinAcceleration = 100.f;
+			}
+
+			TWeakObjectPtr<AFlecsCharacter> WeakSelf(this);
+			auto SharedAtomics = PosAtomics; // capture thread-safe copy for lambda
 			FlecsSubsystem->EnqueueCommand([FlecsSubsystem, Key, CapturedMaxHealth, CapturedInitialHealth,
-				CapturedArmor, SpawnLocation, CapsuleRadius, CapsuleHalfHeight]()
+				CapturedArmor, SpawnLocation, CapsuleRadius, CapsuleHalfHeight, WeakSelf, SharedAtomics,
+				CapturedGravityScale, CapturedMS]()
 			{
 				flecs::world* FlecsWorld = FlecsSubsystem->GetFlecsWorld();
 				if (!FlecsWorld) return;
 
-				// Create Barrage physics body for character (sensor for collision detection).
-				// This body mirrors the UE actor position — real movement/gravity is handled
-				// by UCharacterMovementComponent. GravityFactor=0 prevents Jolt from
-				// pulling the sensor body down between SetPosition updates.
+				// Create Barrage CharacterVirtual for collision-resolved movement.
+				// Barrage is the sole physics authority — drives position, velocity, gravity, collision.
+				// Game thread sends input direction via atomics, reads back resolved position.
 				UBarrageDispatch* Physics = UBarrageDispatch::SelfPtr;
 				if (Physics)
 				{
-					FBCapParams CapsuleParams = FBarrageBounder::GenerateCapsuleBounds(
-						SpawnLocation, CapsuleRadius, CapsuleHalfHeight * 2.0f,
-						FMassByCategory::MostEnemies, FVector3f::ZeroVector);
+					FBCharParams CharParams;
+					// Send FEET position to Jolt, not capsule center.
+					// Jolt CharacterVirtual base = feet (shape is RotatedTranslated upward).
+					// UE GetActorLocation() = capsule center = feet + HalfHeight.
+					CharParams.point = SpawnLocation - FVector(0, 0, CapsuleHalfHeight);
+					// UE CapsuleHalfHeight = total half-extent (cylinder half + hemisphere radius).
+					// Jolt CapsuleShape(halfHeight, radius) wants CYLINDER half-height only.
+					// Cylinder half = CapsuleHalfHeight - CapsuleRadius.
+					// Clamp to minimum 0.01m for near-sphere capsules (e.g. prone HH < R).
+					CharParams.JoltHalfHeightOfCylinder = FMath::Max((CapsuleHalfHeight - CapsuleRadius) / 100.0, 0.01);
+					CharParams.JoltRadius = CapsuleRadius / 100.0;
+					CharParams.speed = 50.0; // 50 m/s (5000 cm/s) — generous clamp for free-fall + sprint
 
 					FBLet Body = Physics->CreatePrimitive(
-						CapsuleParams, Key,
-						static_cast<uint16>(EPhysicsLayer::MOVING),
-						true,  // sensor - still sensor so projectiles get contact events
-						false, // not force dynamic
-						true); // movable
+						CharParams, Key,
+						static_cast<uint16>(EPhysicsLayer::MOVING));
 
 					if (FBarragePrimitive::IsNotNull(Body))
 					{
-						FBarragePrimitive::SetGravityFactor(0.0f, Body);
+						// Throttle: carry=1, gravity=1, locomotion=1, forces=1
+						// Barrage is sole authority — all channels active.
+						// carry=1 preserves vertical velocity in air (gravity + jump arc).
+						FBarragePrimitive::Apply_Unsafe(
+							FQuat4d(1, 1, 1, 1), Body, PhysicsInputType::Throttle);
+
+						// Jolt gravity: -980 cm/s² → -9.8 m/s² (Y is up in Jolt coords)
+						FBarragePrimitive::Apply_Unsafe(
+							FQuat4d(0, -980.0 * CapturedGravityScale / 100.0, 0, 0),
+							Body, PhysicsInputType::SetCharacterGravity);
+
+						// Cache body pointer for zero-lookup sim thread access
+						if (WeakSelf.IsValid())
+						{
+							WeakSelf->CachedBarrageBody = Body;
+						}
 					}
 				}
 
@@ -200,8 +262,21 @@ void AFlecsCharacter::BeginPlay()
 				// Bidirectional binding: sets FBarrageBody + atomic in FBarragePrimitive
 				FlecsSubsystem->BindEntityToBarrage(Entity, Key);
 
+				// Movement state: AnimBP sync (cosmetic) + sim thread authority (FCharacterMoveState)
 				FMovementState InitState;
 				Entity.set<FMovementState>(InitState);
+
+				FCharacterMoveState InitMoveState;
+				Entity.set<FCharacterMoveState>(InitMoveState);
+
+				// Movement parameters for PrepareCharacterStep (speeds, accel, capsule)
+				Entity.set<FMovementStatic>(CapturedMS);
+
+				// Register for sim-thread position readback (no Flecs system needed)
+				if (WeakSelf.IsValid())
+				{
+					FlecsSubsystem->RegisterCharacterBridge(WeakSelf.Get());
+				}
 
 				// Send initial health to HUD (sim thread → EnqueueMessage)
 				if (UFlecsMessageSubsystem::SelfPtr)
@@ -355,6 +430,13 @@ void AFlecsCharacter::BeginPlay()
 
 void AFlecsCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	// Invalidate position readback — sim thread will stop writing to this bridge.
+	// PosAtomics lives on the heap, so it's safe even if actor is destroyed before sim thread drains.
+	if (PosAtomics.IsValid())
+	{
+		PosAtomics->bValid.store(false, std::memory_order_release);
+	}
+
 	if (LootPanel)
 	{
 		LootPanel->CloseLoot();
@@ -403,6 +485,14 @@ void AFlecsCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 		{
 			FlecsSubsystem->EnqueueCommand([FlecsSubsystem, Key]()
 			{
+				// Unregister character bridge by key (no raw actor pointer — safe even if actor is GC'd)
+				FlecsSubsystem->UnregisterCharacterBridge(Key);
+
+				// TODO: CharacterVirtual body cleanup for multiplayer/NPC characters.
+				// Currently only the player character exists, and Barrage::Deinitialize handles
+				// full world teardown on PIE exit. For mid-game character destruction (NPCs, respawn),
+				// add: SetBodyObjectLayer(DEBRIS) on inner body + remove from CharacterToJoltMapping.
+
 				// Lock-free O(1) lookup via bidirectional binding
 				flecs::entity Entity = FlecsSubsystem->GetEntityForBarrageKey(Key);
 				if (Entity.is_valid() && Entity.is_alive())
@@ -471,22 +561,127 @@ void AFlecsCharacter::Tick(float DeltaTime)
 
 	UFlecsArtillerySubsystem* FlecsSubsystem = GetWorld()->GetSubsystem<UFlecsArtillerySubsystem>();
 
-	// Sync UE actor position → Barrage physics body
-	if (CharacterKey.IsValid() && FlecsSubsystem)
+	// ──────────────────────────────────────────────────────────────────
+	// BARRAGE CHARACTER SYNC — interpolated, frame-rate independent.
+	//
+	// Barrage is sole physics authority. Game thread reads resolved position,
+	// ground state, and velocity from atomics. No SelfMovement — input direction
+	// goes through InputAtomics → PrepareCharacterStep on sim thread.
+	//
+	// FeetToActorOffset: on ground = CapsuleHH (standard). In air = frozen when
+	// posture changes — keeps actor Z stable so legs pull up, not head.
+	// ──────────────────────────────────────────────────────────────────
+	if (CharacterKey.IsValid() && FlecsSubsystem && PosAtomics.IsValid())
 	{
-		FVector Pos = GetActorLocation();
-		FlecsSubsystem->EnqueueCommand([Key = CharacterKey, Pos]()
+		if (PosAtomics->bValid.load(std::memory_order_acquire))
 		{
-			UBarrageDispatch* Physics = UBarrageDispatch::SelfPtr;
-			if (Physics)
+			FVector BarrageFeetPos(
+				PosAtomics->PosX.load(std::memory_order_relaxed),
+				PosAtomics->PosY.load(std::memory_order_relaxed),
+				PosAtomics->PosZ.load(std::memory_order_relaxed));
+
+			// Read ground state and velocity from sim thread
+			uint8 GS = PosAtomics->GroundState.load(std::memory_order_relaxed);
+			FVector BarrageVel(
+				PosAtomics->VelX.load(std::memory_order_relaxed),
+				PosAtomics->VelY.load(std::memory_order_relaxed),
+				PosAtomics->VelZ.load(std::memory_order_relaxed));
+
+			// Feed CMC for AnimBP (must happen before TickHSM in CMC::TickComponent)
+			if (FatumMovement)
 			{
-				FBLet Body = Physics->GetShapeRef(Key);
-				if (FBarragePrimitive::IsNotNull(Body))
+				FatumMovement->SetBarrageGroundState(GS);
+				FatumMovement->SetBarrageVelocity(BarrageVel);
+			}
+
+			if (BarrageFeetPos.ContainsNaN())
+			{
+				ensureMsgf(false, TEXT("CharVirt: NaN from Barrage"));
+			}
+			else
+			{
+				// On ground: FeetToActorOffset converges to current capsule HH.
+				// In air: offset is FROZEN — posture change doesn't shift actor Z.
+				// FInterpTo prevents Z-pop on landing after air posture change (e.g., air-crouch
+				// freezes offset at StandingHH, landing would snap to CrouchHH = 33-unit drop).
+				const bool bGrounded = FatumMovement && FatumMovement->IsMovingOnGround();
+				if (bGrounded)
 				{
-					FBarragePrimitive::SetPosition(Pos, Body);
+					float TargetOffset = GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
+					FeetToActorOffset = FMath::FInterpTo(FeetToActorOffset, TargetOffset, DeltaTime, 20.f);
+				}
+
+				FVector BarrageCapsuleCenter = BarrageFeetPos + FVector(0, 0, FeetToActorOffset);
+
+				// Read sim timing for interpolation.
+				const uint64 SimTick = FlecsSubsystem->GetCurrentSimTick();
+				const float Alpha = FlecsSubsystem->GetCurrentAlpha();
+
+				if (!bBarrageReady)
+				{
+					// First readback: initialize all state, snap.
+					bBarrageReady = true;
+					PrevBarrageCenter = BarrageCapsuleCenter;
+					CurrBarrageCenter = BarrageCapsuleCenter;
+					LastSetPosition = BarrageCapsuleCenter;
+					LastCharacterSimTick = SimTick;
+					SetActorLocation(BarrageCapsuleCenter);
+				}
+				else
+				{
+					// Detect new sim tick: shift Curr → Prev, update Curr.
+					if (SimTick > LastCharacterSimTick)
+					{
+						PrevBarrageCenter = CurrBarrageCenter;
+						CurrBarrageCenter = BarrageCapsuleCenter;
+						LastCharacterSimTick = SimTick;
+					}
+
+					// Smooth interpolation between sim ticks (same as ISM render manager).
+					FVector InterpolatedPos = FMath::Lerp(PrevBarrageCenter, CurrBarrageCenter, Alpha);
+					SetActorLocation(InterpolatedPos);
+					LastSetPosition = InterpolatedPos;
 				}
 			}
-		});
+
+			// Sim-thread slide exit detection: if sim removed FSlideInstance, deactivate game-thread ability.
+			// Grace period: skip check for 3 sim ticks after activation (EnqueueCommand in transit).
+			if (FatumMovement)
+			{
+				if (FatumMovement->IsSliding())
+				{
+					if (SlideActivationSimTick == 0)
+					{
+						SlideActivationSimTick = FlecsSubsystem->GetCurrentSimTick();
+					}
+
+					bool bSimSlide = PosAtomics->bSlideActive.load(std::memory_order_relaxed);
+					if (!bSimSlide && FlecsSubsystem->GetCurrentSimTick() > SlideActivationSimTick + 3)
+					{
+						FatumMovement->DeactivateAbility();
+						SlideActivationSimTick = 0;
+					}
+				}
+				else
+				{
+					SlideActivationSimTick = 0;
+				}
+			}
+
+			// Jump impulse: consume from CMC (set by RequestJump) → send as OtherForce to Barrage.
+			// OtherForce adds directly to velocity in StepCharacter (Jolt m/s coords).
+			if (FatumMovement && FBarragePrimitive::IsNotNull(CachedBarrageBody))
+			{
+				float JumpImpulse = FatumMovement->ConsumePendingJumpImpulse();
+				if (JumpImpulse > 0.f)
+				{
+					// cm/s → m/s, Y is up in Jolt
+					FBarragePrimitive::ApplyForce(
+						FVector3d(0, JumpImpulse / 100.0, 0), CachedBarrageBody,
+						PhysicsInputType::OtherForce);
+				}
+			}
+		}
 	}
 
 	// Continuously update aim direction, muzzle offset, and position so WeaponFireSystem has fresh data.
@@ -529,6 +724,7 @@ void AFlecsCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 	checkf(InputConfig, TEXT("AFlecsCharacter: InputConfig is not set! Assign a UFatumInputConfig Data Asset."));
 
 	FatumInput->BindNativeAction(InputConfig, TAG_Input_Move,      ETriggerEvent::Triggered, this, &AFlecsCharacter::Move);
+	FatumInput->BindNativeAction(InputConfig, TAG_Input_Move,      ETriggerEvent::Completed, this, &AFlecsCharacter::Move);
 	FatumInput->BindNativeAction(InputConfig, TAG_Input_Look,      ETriggerEvent::Triggered, this, &AFlecsCharacter::Look);
 	FatumInput->BindNativeAction(InputConfig, TAG_Input_Jump,      ETriggerEvent::Started,   this, &AFlecsCharacter::OnJumpStarted);
 	FatumInput->BindNativeAction(InputConfig, TAG_Input_Jump,      ETriggerEvent::Completed, this, &AFlecsCharacter::OnJumpCompleted);
@@ -561,7 +757,7 @@ void AFlecsCharacter::Move(const FInputActionValue& Value)
 	// Input is a Vector2D (X = Right/Left, Y = Forward/Back)
 	FVector2D MovementVector = Value.Get<FVector2D>();
 
-	if (Controller != nullptr)
+	if (Controller != nullptr && InputAtomics.IsValid())
 	{
 		// Get controller rotation and extract yaw only
 		const FRotator Rotation = Controller->GetControlRotation();
@@ -571,9 +767,13 @@ void AFlecsCharacter::Move(const FInputActionValue& Value)
 		const FVector ForwardDirection = FRotationMatrix(YawRotation).GetUnitAxis(EAxis::X);
 		const FVector RightDirection = FRotationMatrix(YawRotation).GetUnitAxis(EAxis::Y);
 
-		// Add movement input
-		AddMovementInput(ForwardDirection, MovementVector.Y);
-		AddMovementInput(RightDirection, MovementVector.X);
+		// Build world-space direction (not normalized — magnitude = stick tilt)
+		FVector WorldDir = ForwardDirection * MovementVector.Y + RightDirection * MovementVector.X;
+
+		// Write to atomics (lock-free, latest-wins) — sim thread reads in PrepareCharacterStep.
+		// DirX = UE X (forward), DirZ = UE Y (right).
+		InputAtomics->DirX.store(static_cast<float>(WorldDir.X), std::memory_order_relaxed);
+		InputAtomics->DirZ.store(static_cast<float>(WorldDir.Y), std::memory_order_relaxed);
 	}
 }
 
@@ -637,8 +837,11 @@ void AFlecsCharacter::HandlePostureChanged(ECharacterPosture NewPosture)
 	float R, HH;
 	FatumMovement->MovementProfile->GetCapsuleForPosture(NewPosture, R, HH);
 
-	// Convert UE cm to Jolt meters (match GenerateCapsuleBounds convention)
-	double JoltHH = HH / 100.0;
+	// Convert UE cm to Jolt meters.
+	// UE HH = total half-extent (cylinder half + hemisphere radius).
+	// Jolt CapsuleShape wants CYLINDER half-height only = HH - R.
+	// Clamp to minimum 0.01m for near-sphere capsules (e.g. prone HH < R).
+	double JoltHH = FMath::Max((HH - R) / 100.0, 0.01);
 	double JoltR = R / 100.0;
 
 	FSkeletonKey Key = CharacterKey;
@@ -650,12 +853,8 @@ void AFlecsCharacter::HandlePostureChanged(ECharacterPosture NewPosture)
 			UBarrageDispatch* P = UBarrageDispatch::SelfPtr;
 			if (!P) return;
 
-			// SkeletonKey → FBarragePrimitive → BarrageKey (body tracking path)
-			FBLet Body = P->GetShapeRef(Key);
-			if (FBarragePrimitive::IsNotNull(Body))
-			{
-				P->SetBodyCapsuleShape(Body->KeyIntoBarrage, JoltHH, JoltR);
-			}
+			// CharacterVirtual: update both outer shape and inner body shape
+			P->SetCharacterCapsuleShape(Key, JoltHH, JoltR);
 		});
 	}
 }
@@ -673,25 +872,33 @@ void AFlecsCharacter::SyncMovementStateToECS()
 	LastSyncedPosture = CurPosture;
 	LastSyncedMoveMode = CurMode;
 
-	float Speed = GetVelocity().Size2D();
-	float VSpeed = GetVelocity().Z;
+	bool bSprinting = FatumMovement->IsSprinting();
+	float Speed = FatumMovement->GetBarrageVelocity().Size2D();
+	float VSpeed = FatumMovement->GetBarrageVelocity().Z;
 	FSkeletonKey Key = CharacterKey;
 
 	UFlecsArtillerySubsystem* FlecsSubsystem = GetWorld()->GetSubsystem<UFlecsArtillerySubsystem>();
 	if (!FlecsSubsystem || !Key.IsValid()) return;
 
 	FlecsSubsystem->EnqueueCommand(
-		[FlecsSubsystem, Key, CurPosture, CurMode, Speed, VSpeed]()
+		[FlecsSubsystem, Key, CurPosture, CurMode, Speed, VSpeed, bSprinting]()
 	{
 		flecs::entity Entity = FlecsSubsystem->GetEntityForBarrageKey(Key);
 		if (!Entity.is_valid()) return;
 
+		// AnimBP cosmetic state (FMovementState)
 		FMovementState State;
 		State.Posture = CurPosture;
 		State.MoveMode = CurMode;
 		State.Speed = Speed;
 		State.VerticalSpeed = VSpeed;
 		Entity.set<FMovementState>(State);
+
+		// Sim thread authority state (FCharacterMoveState) — read by PrepareCharacterStep
+		FCharacterMoveState MoveState;
+		MoveState.bSprinting = bSprinting;
+		MoveState.Posture = CurPosture;
+		Entity.set<FCharacterMoveState>(MoveState);
 	});
 }
 

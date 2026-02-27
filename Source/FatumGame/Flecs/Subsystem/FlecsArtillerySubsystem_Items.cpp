@@ -15,6 +15,8 @@
 #include "FlecsDestructibleProfile.h"
 #include "FlecsDoorProfile.h"
 #include "FlecsDoorComponents.h"
+#include "FlecsMovementProfile.h"
+#include "FlecsMovementStatic.h"
 
 // ═══════════════════════════════════════════════════════════════
 // ENTITY PREFAB REGISTRY IMPLEMENTATION
@@ -216,12 +218,41 @@ flecs::entity UFlecsArtillerySubsystem::GetOrCreateEntityPrefab(UFlecsEntityDefi
 		Prefab.set<FDoorStatic>(DoorStatic);
 	}
 
+	if (UFlecsMovementProfile* MoveProf = EntityDefinition->MovementProfile)
+	{
+		FMovementStatic MS;
+		MS.WalkSpeed = MoveProf->WalkSpeed;
+		MS.SprintSpeed = MoveProf->SprintSpeed;
+		MS.CrouchSpeed = MoveProf->CrouchSpeed;
+		MS.ProneSpeed = MoveProf->ProneSpeed;
+		MS.GroundAcceleration = MoveProf->GroundAcceleration;
+		MS.GroundDeceleration = MoveProf->GroundDeceleration;
+		MS.AirAcceleration = MoveProf->AirAcceleration;
+		MS.SprintAcceleration = MoveProf->SprintAcceleration;
+		MS.JumpVelocity = MoveProf->JumpVelocity;
+		MS.CrouchJumpVelocity = MoveProf->CrouchJumpVelocity;
+		MS.GravityScale = MoveProf->GravityScale;
+		MS.StandingHalfHeight = MoveProf->StandingHalfHeight;
+		MS.StandingRadius = MoveProf->StandingRadius;
+		MS.CrouchHalfHeight = MoveProf->CrouchHalfHeight;
+		MS.CrouchRadius = MoveProf->CrouchRadius;
+		MS.ProneHalfHeight = MoveProf->ProneHalfHeight;
+		MS.ProneRadius = MoveProf->ProneRadius;
+		MS.SlideMinEntrySpeed = MoveProf->SlideMinEntrySpeed;
+		MS.SlideDeceleration = MoveProf->SlideDeceleration;
+		MS.SlideMinExitSpeed = MoveProf->SlideMinExitSpeed;
+		MS.SlideMaxDuration = MoveProf->SlideMaxDuration;
+		MS.SlideInitialSpeedBoost = MoveProf->SlideInitialSpeedBoost;
+		MS.SlideMinAcceleration = 100.f;
+		Prefab.set<FMovementStatic>(MS);
+	}
+
 	// TODO: Add FLootStatic if needed
 
 	// Store in registry
 	EntityPrefabs.Add(EntityDefinition, Prefab);
 
-	UE_LOG(LogTemp, Log, TEXT("Created entity prefab: '%s' (Health=%d, Damage=%d, Projectile=%d, Container=%d, Item=%d, Weapon=%d, Interaction=%d, Destructible=%d, Door=%d)"),
+	UE_LOG(LogTemp, Log, TEXT("Created entity prefab: '%s' (Health=%d, Damage=%d, Projectile=%d, Container=%d, Item=%d, Weapon=%d, Interaction=%d, Destructible=%d, Door=%d, Movement=%d)"),
 		*EntityDefinition->GetName(),
 		EntityDefinition->HealthProfile != nullptr,
 		EntityDefinition->DamageProfile != nullptr,
@@ -231,7 +262,8 @@ flecs::entity UFlecsArtillerySubsystem::GetOrCreateEntityPrefab(UFlecsEntityDefi
 		EntityDefinition->WeaponProfile != nullptr,
 		EntityDefinition->InteractionProfile != nullptr,
 		EntityDefinition->DestructibleProfile != nullptr,
-		EntityDefinition->DoorProfile != nullptr);
+		EntityDefinition->DoorProfile != nullptr,
+		EntityDefinition->MovementProfile != nullptr);
 
 	return Prefab;
 }

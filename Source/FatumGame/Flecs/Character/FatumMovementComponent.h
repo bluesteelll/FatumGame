@@ -1,5 +1,6 @@
 // Custom CharacterMovementComponent with hierarchical state machine.
-// Handles sprint, crouch, prone, jump buffering, coyote time.
+// Handles sprint, posture, jump buffering, coyote time.
+// Movement abilities (Slide, Dash, etc.) are modular UMovementAbility subclasses.
 
 #pragma once
 
@@ -10,6 +11,7 @@
 #include "FatumMovementComponent.generated.h"
 
 class UFlecsMovementProfile;
+class UMovementAbility;
 
 DECLARE_MULTICAST_DELEGATE_OneParam(FOnPostureChanged, ECharacterPosture /*NewPosture*/);
 
@@ -32,6 +34,18 @@ public:
 	void ApplyProfile();
 
 	// ═══════════════════════════════════════════════════════════════
+	// BARRAGE STATE (fed by FlecsCharacter from PosAtomics)
+	// ═══════════════════════════════════════════════════════════════
+
+	void SetBarrageVelocity(const FVector& V) { BarrageVelocity = V; }
+	void SetBarrageGroundState(uint8 GS) { BarrageGroundState = GS; }
+	const FVector& GetBarrageVelocity() const { return BarrageVelocity; }
+
+	/** Set pending jump impulse in cm/s (consumed by FlecsCharacter → OtherForce). */
+	void SetPendingJumpImpulse(float V) { PendingJumpImpulse = V; }
+	float ConsumePendingJumpImpulse() { float V = PendingJumpImpulse; PendingJumpImpulse = 0.f; return V; }
+
+	// ═══════════════════════════════════════════════════════════════
 	// QUERIES
 	// ═══════════════════════════════════════════════════════════════
 
@@ -45,7 +59,7 @@ public:
 	bool IsSprinting() const { return CurrentMoveMode == ECharacterMoveMode::Sprint; }
 
 	UFUNCTION(BlueprintPure, Category = "Fatum|Movement")
-	bool IsSliding() const { return bIsSliding; }
+	bool IsSliding() const;
 
 	UFUNCTION(BlueprintPure, Category = "Fatum|Movement")
 	float GetCurrentFOVOffset() const { return CurrentFOVOffset; }
@@ -57,7 +71,7 @@ public:
 	float GetCurrentEyeHeight() const { return PostureSM.GetCurrentEyeHeight(); }
 
 	// ═══════════════════════════════════════════════════════════════
-	// COMMANDS (called by AFlecsCharacter input handlers)
+	// COMMANDS (called by AFlecsCharacter input handlers or AI)
 	// ═══════════════════════════════════════════════════════════════
 
 	void RequestSprint(bool bSprint);
@@ -67,24 +81,86 @@ public:
 	void RequestProne(bool bPressed);
 
 	// ═══════════════════════════════════════════════════════════════
+	// ABILITY SYSTEM
+	// ═══════════════════════════════════════════════════════════════
+
+	/** Access PostureSM for abilities that own posture. */
+	FPostureStateMachine& GetPostureSM() { return PostureSM; }
+	const FPostureStateMachine& GetPostureSM() const { return PostureSM; }
+
+	/** Public ceiling check for abilities. */
+	bool CanExpandToHeight(float TargetHalfHeight) const;
+
+	/** Broadcast posture changed delegate (for abilities that change capsule). */
+	void BroadcastPostureChanged(ECharacterPosture Posture);
+
+	/** Find a registered ability by type. Returns nullptr if not found. */
+	template<typename T>
+	T* FindAbility() const
+	{
+		for (UMovementAbility* Ability : Abilities)
+		{
+			if (T* Typed = Cast<T>(Ability))
+			{
+				return Typed;
+			}
+		}
+		return nullptr;
+	}
+
+	/** Activate an ability (deactivates current if any). */
+	void ActivateAbility(UMovementAbility* Ability);
+
+	/** Deactivate the current active ability. */
+	void DeactivateAbility();
+
+	/** Get the currently active ability (nullptr if none). */
+	UMovementAbility* GetActiveAbility() const { return ActiveAbility; }
+
+	// ═══════════════════════════════════════════════════════════════
 	// DELEGATE
 	// ═══════════════════════════════════════════════════════════════
 
 	/** Fires when posture actually changes (after ceiling check). */
 	FOnPostureChanged OnPostureChanged;
 
+	// ═══════════════════════════════════════════════════════════════
+	// GROUND STATE (public — used by FlecsCharacter, SlideAbility, etc.)
+	// ═══════════════════════════════════════════════════════════════
+
+	virtual bool IsMovingOnGround() const override { return BarrageGroundState == 0; }
+	virtual bool IsFalling() const override { return BarrageGroundState != 0; }
+
 protected:
 	// ═══════════════════════════════════════════════════════════════
-	// CMC OVERRIDES
+	// CMC OVERRIDES — passive mode (Barrage is sole physics authority)
 	// ═══════════════════════════════════════════════════════════════
 
 	virtual void InitializeComponent() override;
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
-	virtual float GetMaxSpeed() const override;
-	virtual float GetMaxAcceleration() const override;
-	virtual float GetMaxBrakingDeceleration() const override;
+	virtual void PerformMovement(float DeltaTime) override {}
 
 private:
+	// ═══════════════════════════════════════════════════════════════
+	// ABILITY REGISTRY
+	// ═══════════════════════════════════════════════════════════════
+
+	UPROPERTY()
+	TArray<TObjectPtr<UMovementAbility>> Abilities;
+
+	UPROPERTY()
+	TObjectPtr<UMovementAbility> ActiveAbility;
+
+	void RegisterAbility(TSubclassOf<UMovementAbility> AbilityClass);
+
+	// ═══════════════════════════════════════════════════════════════
+	// BARRAGE STATE (game thread only)
+	// ═══════════════════════════════════════════════════════════════
+
+	FVector BarrageVelocity = FVector::ZeroVector;
+	uint8 BarrageGroundState = 3; // FBGroundState: 0=OnGround, 1=SteepGround, 2=NotSupported, 3=InAir
+	float PendingJumpImpulse = 0.f;
+
 	// ═══════════════════════════════════════════════════════════════
 	// HSM STATE
 	// ═══════════════════════════════════════════════════════════════
@@ -92,12 +168,6 @@ private:
 	FPostureStateMachine PostureSM;
 	ECharacterMoveMode CurrentMoveMode = ECharacterMoveMode::Idle;
 	bool bWantsToSprint = false;
-
-	// Slide state
-	bool bIsSliding = false;
-	float SlideTimer = 0.f;
-	float SlideCurrentSpeed = 0.f;
-	bool bSlideCrouchHeld = false;
 
 	// Jump buffering
 	float CoyoteTimer = 0.f;
@@ -119,13 +189,9 @@ private:
 
 	void TickHSM(float DeltaTime);
 	void UpdatePosture(float DeltaTime);
-	void UpdateSlide(float DeltaTime);
-	void BeginSlide();
-	void EndSlide();
 	void UpdateMovementLayer(float DeltaTime);
 	void UpdateCameraEffects(float DeltaTime);
 	void TransitionMoveMode(ECharacterMoveMode NewMode);
-	bool CheckCanExpandTo(float TargetHalfHeight) const;
 
 	static constexpr float SimFrameTime = 1.f / 60.f;
 };
