@@ -65,12 +65,6 @@ uint32 FSimulationWorker::Run()
 
 			BarrageDispatch->StepWorld(DeltaTime, TickCount);
 
-			// Read resolved character positions from Barrage → atomics (zero-copy bridge)
-			if (FlecsSubsystem)
-			{
-				FlecsSubsystem->SyncCharacterPositions();
-			}
-
 			if (!bRunning.load(std::memory_order_acquire)) break;
 
 			BarrageDispatch->BroadcastContactEvents();

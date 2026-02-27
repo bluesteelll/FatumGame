@@ -25,21 +25,26 @@ class FDebrisPool;
 class AFlecsCharacter;
 class FBarragePrimitive;
 
-struct FCharacterPosAtomics;
 struct FCharacterInputAtomics;
 class FBCharacterBase;
 
-/** Lightweight bridge for sim→game character position feedback + game→sim input.
- *  PosAtomics lives on the heap — shared with AFlecsCharacter via TSharedPtr.
- *  Even if the actor is destroyed before the sim thread unregisters, the atomics stay alive. */
+/** Lightweight bridge for character physics (sim-thread-only after registration).
+ *  PrepareCharacterStep reads InputAtomics, writes mLocomotionUpdate + SlideActive.
+ *  Position readback is in AFlecsCharacter::Tick (game thread, direct Jolt read). */
 struct FCharacterPhysBridge
 {
-	TSharedPtr<FBarragePrimitive> CachedBody;                          // cached at registration
-	TSharedPtr<FCharacterPosAtomics, ESPMode::ThreadSafe> PosAtomics;  // sim→game
+	// ── Shared (immutable after registration) ──
+	TSharedPtr<FBarragePrimitive> CachedBody;
+	FSkeletonKey CharacterKey;
+
+	// ── Sim thread (PrepareCharacterStep) ──
 	TSharedPtr<FCharacterInputAtomics, ESPMode::ThreadSafe> InputAtomics; // game→sim
-	FSkeletonKey CharacterKey;                                          // identity for unregister
-	flecs::entity Entity;                                               // for reading FMovementStatic + FCharacterMoveState
-	TSharedPtr<FBCharacterBase> CachedFBChar;                           // direct pointer to FBCharacter (no per-tick lookup)
+	flecs::entity Entity;                                                  // for reading FMovementStatic + FCharacterMoveState
+	TSharedPtr<FBCharacterBase> CachedFBChar;                              // direct pointer to FBCharacter
+
+	// Shared with AFlecsCharacter for cross-thread slide state.
+	// Written by PrepareCharacterStep (sim thread), read by AFlecsCharacter::Tick (game thread).
+	TSharedPtr<std::atomic<bool>> SlideActive;
 };
 
 /**
@@ -124,9 +129,6 @@ public:
 	/** Apply all late-sync buffers to Flecs entities. Called by sim thread before ProgressWorld(). */
 	void ApplyLateSyncBuffers();
 
-	/** Read resolved character positions from Barrage and write to atomics. Called by FSimulationWorker after StepWorld. */
-	void SyncCharacterPositions();
-
 	/** Compute acceleration-smoothed locomotion for all characters. Called by FSimulationWorker before StackUp.
 	 *  Reads InputAtomics (direction), FCharacterMoveState (sprint/posture), FMovementStatic (speeds/accel),
 	 *  CharacterVirtual (ground state, velocity). Writes mLocomotionUpdate on FBCharacter. */
@@ -162,25 +164,6 @@ public:
 
 	/** Current sim tick count — cached for consistency with CachedAlpha. */
 	uint64 GetCurrentSimTick() const { return CachedSimTick; }
-
-	/** Compute a FRESH (Alpha, SimTick) pair directly from sim thread atomics.
-	 *  Use this when the caller ticks BEFORE the subsystem (e.g. AFlecsCharacter in TG_PrePhysics)
-	 *  to avoid using stale cached values from the previous frame. */
-	void ComputeFreshAlphaAndTick(float& OutAlpha, uint64& OutSimTick) const
-	{
-		OutSimTick = SimWorker.SimTickCount.load(std::memory_order_acquire);
-		const float SimDt = SimWorker.LastSimDeltaTime.load(std::memory_order_acquire);
-		const double LastSimTime = SimWorker.LastSimTickTimeSeconds.load(std::memory_order_acquire);
-		OutAlpha = 1.0f;
-		if (SimDt > 0.0f && LastSimTime > 0.0)
-		{
-			const double TimeSince = FPlatformTime::Seconds() - LastSimTime;
-			if (TimeSince >= 0.0)
-			{
-				OutAlpha = FMath::Clamp(static_cast<float>(TimeSince / SimDt), 0.0f, 1.0f);
-			}
-		}
-	}
 
 	// ═══════════════════════════════════════════════════════════════
 	// THREAD-SAFE API (callable from any thread)
@@ -404,6 +387,11 @@ public:
 	// UTickableWorldSubsystem - Game thread tick
 	virtual void Tick(float DeltaTime) override;
 
+	/** Compute fresh interpolation Alpha from SimWorker timing atomics.
+	 *  Unlike GetCurrentAlpha() (cached, stale for actors), this reads wall-clock time for a fresh value.
+	 *  Used by AFlecsCharacter::Tick() which runs before subsystem Tick. */
+	float ComputeFreshAlpha(uint64& OutSimTick) const;
+
 private:
 	/** Set up Flecs systems that run on the simulation thread. */
 	void SetupFlecsSystems();
@@ -478,8 +466,11 @@ private:
 	TUniquePtr<FLateSyncBridge> LateSyncBridge;
 
 	// ═══════════════════════════════════════════════════════════════
-	// CHARACTER PHYSICS BRIDGE
-	// Sim thread only — no lock needed. Typically 1 entry (local player).
+	// CHARACTER PHYSICS BRIDGE (sim thread only)
+	// PrepareCharacterStep reads InputAtomics + writes mLocomotionUpdate + SlideActive.
+	// Registration/unregistration via EnqueueCommand (sim thread).
+	// Position readback moved to AFlecsCharacter::Tick (game thread, direct Jolt read).
+	// No lock needed — all access is sequential on sim thread.
 	// ═══════════════════════════════════════════════════════════════
 	TArray<FCharacterPhysBridge> CharacterBridges;
 };

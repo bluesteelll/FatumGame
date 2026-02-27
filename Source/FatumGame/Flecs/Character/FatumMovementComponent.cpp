@@ -36,11 +36,14 @@ void UFatumMovementComponent::ApplyProfile()
 void UFatumMovementComponent::TickComponent(float DeltaTime, ELevelTick TickType,
 	FActorComponentTickFunction* ThisTickFunction)
 {
-	// NO Super::TickComponent — Barrage is sole physics authority.
-	// Feed CMC Velocity + MovementMode for AnimBP only.
-	Velocity = BarrageVelocity;
-	SetMovementMode(BarrageGroundState == 0 ? MOVE_Walking : MOVE_Falling);
+	// WARNING: Do NOT add logic here.
+	// All movement state ticking is driven by AFlecsCharacter::Tick() to ensure correct ordering:
+	//   ReadBarragePosition → TickPostureAndEffects → Camera Update.
+	// Velocity/MovementMode are set in ApplyBarrageSync (before TickPostureAndEffects).
+}
 
+void UFatumMovementComponent::TickPostureAndEffects(float DeltaTime)
+{
 	TickHSM(DeltaTime);
 	UpdateCameraEffects(DeltaTime);
 }

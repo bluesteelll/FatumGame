@@ -24,28 +24,6 @@ class UCameraComponent;
 struct FInputActionValue;
 class FBarragePrimitive;
 
-/** Heap-allocated position atomics shared between AFlecsCharacter (game thread)
- *  and FCharacterPhysBridge (sim thread). TSharedPtr keeps this alive until both
- *  sides release — prevents use-after-free when actor is destroyed before
- *  the sim thread unregisters the bridge. */
-struct FCharacterPosAtomics
-{
-	std::atomic<float> PosX{0.f};
-	std::atomic<float> PosY{0.f};
-	std::atomic<float> PosZ{0.f};
-	std::atomic<bool> bValid{false};
-	std::atomic<uint8> GroundState{3};  // FBGroundState: 0=OnGround, 1=SteepGround, 2=NotSupported, 3=InAir
-	std::atomic<float> VelX{0.f};       // effective velocity in UE cm/s
-	std::atomic<float> VelY{0.f};
-	std::atomic<float> VelZ{0.f};
-	std::atomic<bool> bSlideActive{false};  // sim→game: slide is running
-
-	/** Sequence counter — incremented by sim thread AFTER writing all fields.
-	 *  Reader: load SeqNo(acquire) → read fields(relaxed) → re-load SeqNo(acquire).
-	 *  If the two SeqNo values differ, a write was in progress → retry or use previous snapshot. */
-	std::atomic<uint32> SeqNo{0};
-};
-
 /** Game→sim input direction atomics. Written by AFlecsCharacter::Move every tick (latest-wins).
  *  Read by PrepareCharacterStep on sim thread. Lock-free, no queue buildup. */
 struct FCharacterInputAtomics
@@ -516,18 +494,15 @@ private:
 	void SyncMovementStateToECS();
 
 	// ─────────────────────────────────────────────────────────
-	// BARRAGE CHARACTER POSITION BRIDGE (sim→game)
-	// Shared struct lives on the heap — both actor and bridge hold a TSharedPtr.
-	// Sim thread writes positions, game thread reads.
-	// TSharedPtr<T, ESPMode::ThreadSafe> for safe cross-thread ref counting.
+	// BARRAGE CHARACTER BRIDGE
+	// InputAtomics: game→sim (written by Move(), read by PrepareCharacterStep)
+	// Position readback: direct Jolt read in Tick() (before CameraManager)
 	// ─────────────────────────────────────────────────────────
-	TSharedPtr<FCharacterPosAtomics, ESPMode::ThreadSafe> PosAtomics;
 	TSharedPtr<FCharacterInputAtomics, ESPMode::ThreadSafe> InputAtomics; // game→sim direction
-	bool bBarrageReady = false; // true after first valid sim-thread readback
 
-	// Exponential smoothing: visual position chases physics position.
-	// Unlike Prev/Curr + Alpha lerp, this has zero discontinuities on sim tick transitions.
-	FVector LastSetPosition = FVector::ZeroVector;     // where we placed actor last game frame
+	// Slide state: written by PrepareCharacterStep (sim thread), read by Tick (game thread).
+	// Shared with FCharacterPhysBridge — allocated here, copied to bridge on registration.
+	TSharedPtr<std::atomic<bool>> SlideActiveAtomic;
 
 	// Slide activation grace: sim tick when slide ability was activated on game thread.
 	// Prevents immediate deactivation before EnqueueCommand(FSlideInstance) is processed.
@@ -538,10 +513,25 @@ private:
 	// In air: FROZEN when posture changes — keeps actor Z stable, capsule shrinks from bottom.
 	float FeetToActorOffset = 0.f;
 
-	/** Cached Barrage body — set once in BeginPlay, avoids per-frame GetShapeRef lookup.
-	 *  Written on sim thread (EnqueueCommand), read on game thread (Tick).
-	 *  Gate reads behind PosAtomics->bValid (which is set AFTER body is cached). */
+	/** Cached Barrage body — set once in BeginPlay EnqueueCommand (sim thread).
+	 *  Read by Tick() (game thread) for direct Jolt position reads. */
 	TSharedPtr<FBarragePrimitive> CachedBarrageBody;
+
+	// ─────────────────────────────────────────────────────────
+	// POSITION INTERPOLATION (game thread only, updated in Tick)
+	// Same pattern as ISM FEntityTransformState + VInterpTo smoothing.
+	// ─────────────────────────────────────────────────────────
+	FVector PrevBarragePos = FVector::ZeroVector;
+	FVector CurrBarragePos = FVector::ZeroVector;
+	FVector SmoothedBarragePos = FVector::ZeroVector;
+	uint64 LastBarrageSimTick = 0;
+	bool bBarrageJustSpawned = true;
+
+	/** Read Jolt position, interpolate, call ApplyBarrageSync. Called from Tick(). */
+	void ReadAndApplyBarragePosition(float DeltaTime);
+
+	/** Apply interpolated position: CMC feed + FeetToActorOffset + SetActorLocation. */
+	void ApplyBarrageSync(const FVector& FeetPos, uint8 GroundState, const FVector& Velocity, bool bSlideActive);
 
 	friend class UFlecsArtillerySubsystem;
 

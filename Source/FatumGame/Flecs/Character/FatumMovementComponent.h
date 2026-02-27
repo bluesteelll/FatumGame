@@ -34,7 +34,7 @@ public:
 	void ApplyProfile();
 
 	// ═══════════════════════════════════════════════════════════════
-	// BARRAGE STATE (fed by FlecsCharacter from PosAtomics)
+	// BARRAGE STATE (fed by ApplyBarrageSync from AFlecsCharacter::Tick)
 	// ═══════════════════════════════════════════════════════════════
 
 	void SetBarrageVelocity(const FVector& V) { BarrageVelocity = V; }
@@ -83,6 +83,10 @@ public:
 	// ═══════════════════════════════════════════════════════════════
 	// ABILITY SYSTEM
 	// ═══════════════════════════════════════════════════════════════
+
+	/** Tick posture, abilities, and camera effects. Called from AFlecsCharacter::Tick()
+	 *  AFTER velocity/GS are fed, BEFORE camera update. Ensures fresh eye height for camera. */
+	void TickPostureAndEffects(float DeltaTime);
 
 	/** Access PostureSM for abilities that own posture. */
 	FPostureStateMachine& GetPostureSM() { return PostureSM; }

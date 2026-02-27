@@ -151,11 +151,10 @@ void AFlecsCharacter::BeginPlay()
 			float CapsuleRadius = GetCapsuleComponent()->GetScaledCapsuleRadius();
 			float CapsuleHalfHeight = GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
 
-			// Allocate shared atomics on game thread — bridge will hold a second ref.
-			PosAtomics = MakeShared<FCharacterPosAtomics, ESPMode::ThreadSafe>();
+			// Allocate shared atomics on game thread — bridge will hold second refs.
 			InputAtomics = MakeShared<FCharacterInputAtomics, ESPMode::ThreadSafe>();
+			SlideActiveAtomic = MakeShared<std::atomic<bool>>(false);
 			FeetToActorOffset = CapsuleHalfHeight; // init offset = standing HH
-			bBarrageReady = false;
 
 			// Capture movement profile values for sim thread (can't access UObjects there).
 			float CapturedGravityScale = 1.f;
@@ -190,9 +189,8 @@ void AFlecsCharacter::BeginPlay()
 			}
 
 			TWeakObjectPtr<AFlecsCharacter> WeakSelf(this);
-			auto SharedAtomics = PosAtomics; // capture thread-safe copy for lambda
 			FlecsSubsystem->EnqueueCommand([FlecsSubsystem, Key, CapturedMaxHealth, CapturedInitialHealth,
-				CapturedArmor, SpawnLocation, CapsuleRadius, CapsuleHalfHeight, WeakSelf, SharedAtomics,
+				CapturedArmor, SpawnLocation, CapsuleRadius, CapsuleHalfHeight, WeakSelf,
 				CapturedGravityScale, CapturedMS]()
 			{
 				flecs::world* FlecsWorld = FlecsSubsystem->GetFlecsWorld();
@@ -430,13 +428,6 @@ void AFlecsCharacter::BeginPlay()
 
 void AFlecsCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
-	// Invalidate position readback — sim thread will stop writing to this bridge.
-	// PosAtomics lives on the heap, so it's safe even if actor is destroyed before sim thread drains.
-	if (PosAtomics.IsValid())
-	{
-		PosAtomics->bValid.store(false, std::memory_order_release);
-	}
-
 	if (LootPanel)
 	{
 		LootPanel->CloseLoot();
@@ -511,11 +502,36 @@ void AFlecsCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 void AFlecsCharacter::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
+
+	// 1. Read Jolt position, feed CMC, set actor location.
+	//    Must happen in TG_PrePhysics — BEFORE CameraManager (TG_PostPhysics).
+	ReadAndApplyBarragePosition(DeltaTime);
+
+	// 2. Posture/abilities/camera effects — uses CURRENT velocity/GS from step 1.
+	//    Must run BEFORE camera update so eye height is fresh (not 1 frame stale).
+	if (FatumMovement)
+	{
+		FatumMovement->TickPostureAndEffects(DeltaTime);
+
+		// If posture changed capsule while grounded, re-snap FeetToActorOffset
+		// and re-set actor location (step 1 used pre-posture capsule HH).
+		if (FatumMovement->IsMovingOnGround())
+		{
+			float CurrentHH = GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
+			if (!FMath::IsNearlyEqual(FeetToActorOffset, CurrentHH, 0.01f))
+			{
+				FeetToActorOffset = CurrentHH;
+				SetActorLocation(SmoothedBarragePos + FVector(0, 0, FeetToActorOffset),
+					false, nullptr, ETeleportType::TeleportPhysics);
+			}
+		}
+	}
+
 	CheckHealthChanges();
 	TickInteractionStateMachine(DeltaTime);
 
-	// Apply camera effects from movement system.
-	// Skip when Focus interaction manually drives camera position/rotation.
+	// 3. Camera update — reads CURRENT eye height (fresh from step 2).
+	//    Skip when Focus interaction manually drives camera position/rotation.
 	bool bFocusDrivingCamera = (InteractionState == EInteractionState::Focusing
 		|| InteractionState == EInteractionState::Unfocusing
 		|| (InteractionState == EInteractionState::Focused
@@ -561,119 +577,6 @@ void AFlecsCharacter::Tick(float DeltaTime)
 
 	UFlecsArtillerySubsystem* FlecsSubsystem = GetWorld()->GetSubsystem<UFlecsArtillerySubsystem>();
 
-	// ──────────────────────────────────────────────────────────────────
-	// BARRAGE CHARACTER SYNC — interpolated, frame-rate independent.
-	//
-	// Barrage is sole physics authority. Game thread reads resolved position,
-	// ground state, and velocity from atomics. No SelfMovement — input direction
-	// goes through InputAtomics → PrepareCharacterStep on sim thread.
-	//
-	// FeetToActorOffset: on ground = CapsuleHH (standard). In air = frozen when
-	// posture changes — keeps actor Z stable so legs pull up, not head.
-	// ──────────────────────────────────────────────────────────────────
-	if (CharacterKey.IsValid() && FlecsSubsystem && PosAtomics.IsValid())
-	{
-		// SeqNo acquire: synchronizes with release in SyncCharacterPositions.
-		// Ensures all position/velocity/ground-state fields are from the same sim tick.
-		(void)PosAtomics->SeqNo.load(std::memory_order_acquire);
-		if (PosAtomics->bValid.load(std::memory_order_relaxed))
-		{
-			FVector BarrageFeetPos(
-				PosAtomics->PosX.load(std::memory_order_relaxed),
-				PosAtomics->PosY.load(std::memory_order_relaxed),
-				PosAtomics->PosZ.load(std::memory_order_relaxed));
-
-			// Read ground state and velocity from sim thread
-			uint8 GS = PosAtomics->GroundState.load(std::memory_order_relaxed);
-			FVector BarrageVel(
-				PosAtomics->VelX.load(std::memory_order_relaxed),
-				PosAtomics->VelY.load(std::memory_order_relaxed),
-				PosAtomics->VelZ.load(std::memory_order_relaxed));
-
-			// Feed CMC for AnimBP (must happen before TickHSM in CMC::TickComponent)
-			if (FatumMovement)
-			{
-				FatumMovement->SetBarrageGroundState(GS);
-				FatumMovement->SetBarrageVelocity(BarrageVel);
-			}
-
-			if (BarrageFeetPos.ContainsNaN())
-			{
-				ensureMsgf(false, TEXT("CharVirt: NaN from Barrage"));
-			}
-			else
-			{
-				// On ground: FeetToActorOffset converges to current capsule HH.
-				// In air: offset is FROZEN so posture change pulls legs up, not head down.
-				const bool bGrounded = FatumMovement && FatumMovement->IsMovingOnGround();
-				if (bGrounded)
-				{
-					float TargetOffset = GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
-					FeetToActorOffset = FMath::FInterpTo(FeetToActorOffset, TargetOffset, DeltaTime, 20.f);
-				}
-
-				// Exponential smoothing: visual position chases physics position.
-				// Unlike Prev/Curr + Alpha lerp, this has zero discontinuities when
-				// sim ticks arrive — eliminates stutter from torn atomic reads and
-				// Alpha timing mismatches. ~1 frame latency at InterpSpeed=30.
-				FVector TargetPos = BarrageFeetPos + FVector(0, 0, FeetToActorOffset);
-
-				if (!bBarrageReady)
-				{
-					bBarrageReady = true;
-					LastSetPosition = TargetPos;
-				}
-				else
-				{
-					LastSetPosition = FMath::VInterpTo(LastSetPosition, TargetPos, DeltaTime, 30.f);
-				}
-
-				// TeleportPhysics: skip UE capsule overlap tests — Barrage is physics authority.
-				// Without this, SetActorLocation triggers OverlapBlockingTestByChannel every frame.
-				SetActorLocation(LastSetPosition, false, nullptr, ETeleportType::TeleportPhysics);
-			}
-
-			// Sim-thread slide exit detection
-			if (FatumMovement)
-			{
-				float FreshAlpha;
-				uint64 FreshTick;
-				FlecsSubsystem->ComputeFreshAlphaAndTick(FreshAlpha, FreshTick);
-
-				if (FatumMovement->IsSliding())
-				{
-					if (SlideActivationSimTick == 0)
-					{
-						SlideActivationSimTick = FreshTick;
-					}
-
-					bool bSimSlide = PosAtomics->bSlideActive.load(std::memory_order_relaxed);
-					if (!bSimSlide && FreshTick > SlideActivationSimTick + 3)
-					{
-						FatumMovement->DeactivateAbility();
-						SlideActivationSimTick = 0;
-					}
-				}
-				else
-				{
-					SlideActivationSimTick = 0;
-				}
-			}
-
-			// Jump impulse: consume from CMC → send as OtherForce to Barrage
-			if (FatumMovement && FBarragePrimitive::IsNotNull(CachedBarrageBody))
-			{
-				float JumpImpulse = FatumMovement->ConsumePendingJumpImpulse();
-				if (JumpImpulse > 0.f)
-				{
-					FBarragePrimitive::ApplyForce(
-						FVector3d(0, JumpImpulse, 0), CachedBarrageBody,
-						PhysicsInputType::OtherForce);
-				}
-			}
-		}
-	}
-
 	// Continuously update aim direction, muzzle offset, and position so WeaponFireSystem has fresh data.
 	// Uses lock-free TTripleBuffer — sim thread reads latest value right before ProgressWorld().
 	// CharacterPosition = camera position (not actor center) to eliminate crosshair parallax.
@@ -698,6 +601,130 @@ void AFlecsCharacter::Tick(float DeltaTime)
 		if (HUDWidget && HUDWidget->CachedPlayerEntityId == 0)
 		{
 			HUDWidget->SetPlayerEntityId(CharId);
+		}
+	}
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// BARRAGE POSITION READ (game thread, in Tick — BEFORE CameraManager at TG_PostPhysics)
+// Direct Jolt read → Prev/Curr double-buffer → Alpha lerp → VInterpTo → ApplyBarrageSync.
+// Same pattern as ISM UpdateTransforms + VInterpTo smoothing (camera amplifies tick-boundary jitter).
+// ═══════════════════════════════════════════════════════════════════════════
+
+void AFlecsCharacter::ReadAndApplyBarragePosition(float DeltaTime)
+{
+	if (!FBarragePrimitive::IsNotNull(CachedBarrageBody)) return;
+
+	UFlecsArtillerySubsystem* Sub = GetWorld()->GetSubsystem<UFlecsArtillerySubsystem>();
+	if (!Sub) return;
+
+	// 1. Fresh Alpha from SimWorker atomics (not cached — character ticks before subsystem).
+	uint64 SimTick;
+	float Alpha = Sub->ComputeFreshAlpha(SimTick);
+
+	// 2. Read position directly from Jolt
+	FVector3f Pos3f = FBarragePrimitive::GetPosition(CachedBarrageBody);
+	FVector PhysPos(Pos3f);
+	if (PhysPos.ContainsNaN()) return;
+
+	// 3. Read ground state + velocity
+	uint8 GS = static_cast<uint8>(FBarragePrimitive::GetCharacterGroundState(CachedBarrageBody));
+	FVector3f Vel3f = FBarragePrimitive::GetVelocity(CachedBarrageBody);
+	FVector Vel(Vel3f);
+
+	// 4. Prev/Curr double-buffer (same as ISM FEntityTransformState)
+	if (SimTick > LastBarrageSimTick)
+	{
+		PrevBarragePos = CurrBarragePos;
+		CurrBarragePos = PhysPos;
+		LastBarrageSimTick = SimTick;
+	}
+
+	// 5. Interpolate + smooth
+	FVector FeetPos;
+	if (bBarrageJustSpawned)
+	{
+		PrevBarragePos = PhysPos;
+		CurrBarragePos = PhysPos;
+		SmoothedBarragePos = PhysPos;
+		FeetPos = PhysPos;
+		bBarrageJustSpawned = false;
+	}
+	else
+	{
+		FVector LerpTarget = FMath::Lerp(PrevBarragePos, CurrBarragePos, Alpha);
+		SmoothedBarragePos = FMath::VInterpTo(SmoothedBarragePos, LerpTarget, DeltaTime, 30.f);
+		FeetPos = SmoothedBarragePos;
+	}
+
+	// 6. Slide state from sim thread
+	bool bSlideActive = SlideActiveAtomic ? SlideActiveAtomic->load(std::memory_order_relaxed) : false;
+
+	// 7. Apply (CMC feed + FeetToActorOffset + SetActorLocation)
+	ApplyBarrageSync(FeetPos, GS, Vel, bSlideActive);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// BARRAGE POSITION APPLY (feeds CMC, offsets feet→actor, teleports actor)
+// ═══════════════════════════════════════════════════════════════════════════
+
+void AFlecsCharacter::ApplyBarrageSync(const FVector& FeetPos, uint8 GS, const FVector& Vel, bool bSlideActive)
+{
+	// Feed CMC state. Velocity + MovementMode set here (not in CMC::TickComponent)
+	// so TickPostureAndEffects has fresh data when called from actor Tick.
+	if (FatumMovement)
+	{
+		FatumMovement->SetBarrageGroundState(GS);
+		FatumMovement->SetBarrageVelocity(Vel);
+		FatumMovement->Velocity = Vel;
+		FatumMovement->SetMovementMode(GS == 0 ? MOVE_Walking : MOVE_Falling);
+	}
+
+	// On ground: snap FeetToActorOffset to capsule HH (eye height handles smooth transitions).
+	// In air: offset is FROZEN so posture change pulls legs up, not head down.
+	const bool bGrounded = FatumMovement && FatumMovement->IsMovingOnGround();
+	if (bGrounded)
+	{
+		FeetToActorOffset = GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
+	}
+
+	// TeleportPhysics: skip UE capsule overlap tests — Barrage is physics authority.
+	FVector FinalPos = FeetPos + FVector(0, 0, FeetToActorOffset);
+	SetActorLocation(FinalPos, false, nullptr, ETeleportType::TeleportPhysics);
+
+	// Sim-thread slide exit detection
+	if (FatumMovement)
+	{
+		uint64 SimTick = LastBarrageSimTick;
+
+		if (FatumMovement->IsSliding())
+		{
+			if (SlideActivationSimTick == 0)
+			{
+				SlideActivationSimTick = SimTick;
+			}
+
+			if (!bSlideActive && SimTick > SlideActivationSimTick + 3)
+			{
+				FatumMovement->DeactivateAbility();
+				SlideActivationSimTick = 0;
+			}
+		}
+		else
+		{
+			SlideActivationSimTick = 0;
+		}
+	}
+
+	// Jump impulse: consume from CMC → send as OtherForce to Barrage
+	if (FatumMovement && FBarragePrimitive::IsNotNull(CachedBarrageBody))
+	{
+		float JumpImpulse = FatumMovement->ConsumePendingJumpImpulse();
+		if (JumpImpulse > 0.f)
+		{
+			FBarragePrimitive::ApplyForce(
+				FVector3d(0, 0, JumpImpulse), CachedBarrageBody,
+				PhysicsInputType::OtherForce);
 		}
 	}
 }

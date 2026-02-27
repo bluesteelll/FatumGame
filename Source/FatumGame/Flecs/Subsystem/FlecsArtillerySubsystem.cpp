@@ -71,15 +71,14 @@ void UFlecsArtillerySubsystem::ApplyLateSyncBuffers()
 void UFlecsArtillerySubsystem::RegisterCharacterBridge(AFlecsCharacter* Character)
 {
 	check(Character);
-	check(Character->PosAtomics.IsValid());
 	check(Character->CachedBarrageBody.IsValid());
 	check(Character->InputAtomics.IsValid());
 
 	FCharacterPhysBridge Bridge;
 	Bridge.CachedBody = Character->CachedBarrageBody;
-	Bridge.PosAtomics = Character->PosAtomics;
 	Bridge.InputAtomics = Character->InputAtomics;
 	Bridge.CharacterKey = Character->CharacterKey;
+	Bridge.SlideActive = Character->SlideActiveAtomic;
 
 	// Resolve Flecs entity for this character (bidirectional binding already set)
 	Bridge.Entity = GetEntityForBarrageKey(Character->CharacterKey);
@@ -96,6 +95,8 @@ void UFlecsArtillerySubsystem::RegisterCharacterBridge(AFlecsCharacter* Characte
 			Bridge.CachedFBChar = *CharPtr;
 		}
 	}
+	checkf(Bridge.CachedFBChar, TEXT("RegisterCharacterBridge: Failed to resolve FBCharacter for key %llu"),
+		static_cast<uint64>(Character->CharacterKey));
 
 	CharacterBridges.Add(MoveTemp(Bridge));
 }
@@ -105,42 +106,25 @@ void UFlecsArtillerySubsystem::UnregisterCharacterBridge(FSkeletonKey CharacterK
 	CharacterBridges.RemoveAll([CharacterKey](const FCharacterPhysBridge& B) { return B.CharacterKey == CharacterKey; });
 }
 
-void UFlecsArtillerySubsystem::SyncCharacterPositions()
+// ═══════════════════════════════════════════════════════════════
+// FRESH ALPHA COMPUTATION (for AFlecsCharacter::Tick, runs before subsystem Tick)
+// ═══════════════════════════════════════════════════════════════
+
+float UFlecsArtillerySubsystem::ComputeFreshAlpha(uint64& OutSimTick) const
 {
-	for (FCharacterPhysBridge& Bridge : CharacterBridges)
+	OutSimTick = SimWorker.SimTickCount.load(std::memory_order_acquire);
+	const float SimDt = SimWorker.LastSimDeltaTime.load(std::memory_order_acquire);
+	const double LastSimTime = SimWorker.LastSimTickTimeSeconds.load(std::memory_order_acquire);
+
+	if (SimDt > 0.0f && LastSimTime > 0.0)
 	{
-		if (!Bridge.PosAtomics.IsValid()) continue;
-		if (!FBarragePrimitive::IsNotNull(Bridge.CachedBody)) continue;
-
-		FVector3f Pos = FBarragePrimitive::GetPosition(Bridge.CachedBody);
-
-		// NaN guard: GetPosition returns NaN on lookup failure. Don't write NaN to atomics —
-		// game thread would SetActorLocation(NaN) and corrupt LastBarragePosition.
-		// Root cause (zero-velocity Normalized) is fixed — this is a safety net.
-		if (FMath::IsNaN(Pos.X) || FMath::IsNaN(Pos.Y) || FMath::IsNaN(Pos.Z))
+		const double TimeSince = FPlatformTime::Seconds() - LastSimTime;
+		if (TimeSince >= 0.0)
 		{
-			ensureMsgf(false, TEXT("SyncCharacterPositions: NaN from GetPosition — body mapping corrupt?"));
-			continue;
+			return FMath::Clamp(static_cast<float>(TimeSince / SimDt), 0.0f, 1.0f);
 		}
-
-		Bridge.PosAtomics->PosX.store(Pos.X, std::memory_order_relaxed);
-		Bridge.PosAtomics->PosY.store(Pos.Y, std::memory_order_relaxed);
-		Bridge.PosAtomics->PosZ.store(Pos.Z, std::memory_order_relaxed);
-
-		// Ground state from CharacterVirtual
-		uint8 GS = static_cast<uint8>(FBarragePrimitive::GetCharacterGroundState(Bridge.CachedBody));
-		Bridge.PosAtomics->GroundState.store(GS, std::memory_order_relaxed);
-
-		// Velocity in UE cm/s
-		FVector3f Vel = FBarragePrimitive::GetVelocity(Bridge.CachedBody);
-		Bridge.PosAtomics->VelX.store(Vel.X, std::memory_order_relaxed);
-		Bridge.PosAtomics->VelY.store(Vel.Y, std::memory_order_relaxed);
-		Bridge.PosAtomics->VelZ.store(Vel.Z, std::memory_order_relaxed);
-
-		// SeqNo: store LAST with release so game thread sees all fields above.
-		Bridge.PosAtomics->bValid.store(true, std::memory_order_relaxed);
-		Bridge.PosAtomics->SeqNo.fetch_add(1, std::memory_order_release);
 	}
+	return 1.0f;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -188,10 +172,7 @@ void UFlecsArtillerySubsystem::PrepareCharacterStep(float DeltaTime)
 				bSliding = false;
 			}
 		}
-		if (Bridge.PosAtomics)
-		{
-			Bridge.PosAtomics->bSlideActive.store(bSliding, std::memory_order_relaxed);
-		}
+		Bridge.SlideActive->store(bSliding, std::memory_order_relaxed);
 
 		// 4. Compute target speed from posture/sprint/slide
 		float TargetSpeedCm;
@@ -436,7 +417,10 @@ void UFlecsArtillerySubsystem::Tick(float DeltaTime)
 		Renderer->UpdateTransforms(Alpha, SimTick);
 	}
 
-	// Step 2: Update Niagara VFX arrays (positions/velocities from physics).
+	// Step 2: Character positions are updated in AFlecsCharacter::Tick (TG_PrePhysics)
+	// — must run before CameraManager (TG_PostPhysics) to avoid 1-frame camera lag.
+
+	// Step 3: Update Niagara VFX arrays (positions/velocities from physics).
 	if (UFlecsNiagaraManager* NiagaraMgr = GetNiagaraManager())
 	{
 		NiagaraMgr->ProcessPendingRegistrations();
@@ -445,12 +429,12 @@ void UFlecsArtillerySubsystem::Tick(float DeltaTime)
 		NiagaraMgr->ProcessPendingDeathEffects();
 	}
 
-	// Step 3: Add new ISM instances for projectiles fired since last tick.
+	// Step 4: Add new ISM instances for projectiles fired since last tick.
 	// Uses inverted flow: game-thread recomputes position from fresh camera + raw offset.
 	// Since UpdateTransforms already ran, new positions won't be overwritten.
 	ProcessPendingProjectileSpawns();
 
-	// Step 4: Add new ISM instances for fragments from destroyed objects.
+	// Step 5: Add new ISM instances for fragments from destroyed objects.
 	ProcessPendingFragmentSpawns();
 }
 
