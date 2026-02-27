@@ -5,7 +5,7 @@
 Five phases extending the hierarchical movement state machine.
 Pattern: **Profile data** → **Movement component logic** → **Character wiring**.
 
-**Existing (Phases 1-2):** PostureSM (Stand/Crouch/Prone), Sprint, Jump buffer + coyote time, landing compress, Barrage capsule sync.
+**Existing (Phases 1-2):** PostureSM (Stand/Crouch/Prone), Sprint, Jump buffer + coyote time, landing compress, Barrage capsule sync, Ability System (`UMovementAbility` base).
 
 **Implementation order:** 3 → 4 → 5 → 6 → 7 (dependencies flow forward)
 
@@ -13,82 +13,29 @@ Pattern: **Profile data** → **Movement component logic** → **Character wirin
 
 | Phase | Profile | Components.h | PostureSM | MovementComp | Character | InputTags | New Files | Barrage |
 |-------|---------|-------------|-----------|--------------|-----------|-----------|-----------|---------|
-| 3 Slide | Add params | — | — | Add slide logic | Modify RequestCrouch | — | — | Capsule resize |
-| 4 Camera | Add params | — | — | Head bob, slide tilt | Consume new offsets + manual rotation | — | — | — |
-| 5 Mantle | Add params | Add EMantleType | — | Add mantle SM | Mantle trigger (jump) | — | FMantleStateMachine.h/.cpp | UE traces |
+| ~~3 Slide~~ | ~~Done~~ | ~~Done~~ | ~~—~~ | ~~Done~~ | ~~Done~~ | ~~—~~ | ~~SlideAbility.h/cpp~~ | ~~Capsule resize~~ |
+| 4 Camera | Add params | — | — | Head bob, slide tilt | Manual rotation + consume offsets | — | — | — |
+| 5 Mantle | Add params | Add EMantleType | — | MantleAbility | Mantle trigger (jump) | — | MantleAbility.h/.cpp | SetPosition during mantle |
 | 6 Lean | Add params | Already has ELeanDirection | — | Add lean logic | Lean input handlers | Add LeanLeft/Right | — | UE traces for wall |
 | 7 Animation | — | Add FAnimMovementData | — | Add getter | — | — | FatumAnimInstance.h/.cpp | — |
 
 ---
 
-## Phase 3: Slide
+## Phase 3: Slide — COMPLETE
 
-### Design (from mechanics research)
+Implemented as `USlideAbility : UMovementAbility` (game-thread visuals/capsule) + `FSlideInstance` Flecs component (sim-thread physics in `PrepareCharacterStep`).
 
-**Key insight:** Slide is a **movement mode** (`ECharacterMoveMode::Slide`), NOT a posture. Uses crouch capsule but has velocity-dependent entry/exit. Based on Apex Legends / Titanfall 2 / CoD approach: friction-decelerating, slope-sensitive, cancellable by jump.
+**What was built:**
+- `SlideAbility.h/cpp` — CanActivate, OnActivated (capsule + EnqueueCommand), OnTick (eye height only), OnDeactivated (restore capsule + posture), HandleJumpRequest (slide-cancel jump), OnCrouchInput
+- `FSlideInstance` in `FlecsMovementStatic.h` — `CurrentSpeed`, `Timer`, `SlideDirX`, `SlideDirZ` (sim-thread owned)
+- `PrepareCharacterStep` — direct velocity control bypassing MoveTowards, deceleration at `SlideDeceleration` cm/s², direction captured from Jolt on first tick, minor steering via `SlideMinAcceleration`
+- `SlideActive` atomic (sim→game) + 3-tick grace period for deactivation
+- All slide params in `UFlecsMovementProfile` (including `SlideMinAcceleration`)
 
-**Entry conditions (ALL):**
-1. Currently sprinting
-2. Crouch input pressed
-3. Grounded
-4. Horizontal speed >= `SlideMinEntrySpeed` (default 500 cm/s)
-
-**Per-tick:** Decelerate by `SlideDeceleration` cm/s^2. Slope factor modifies decel (downhill = slower decel, uphill = faster).
-
-**Exit conditions (ANY):**
-- Speed < `SlideMinExitSpeed` (150 cm/s)
-- Timer expired (`SlideMaxDuration` = 1.5s safety cap)
-- Player jumps → **slide-jump** (preserve horizontal momentum + jump Z velocity)
-- Player releases crouch (hold mode) → stand if ceiling allows
-- Leaves ground → Fall mode
-- `bSlideRequiresForwardInput` && no forward input
-
-**Slide-jump interaction:** Horizontal speed preserved at jump moment. This is the core advanced technique.
-
-**Camera:** Eye height transitions to `SlideEyeHeight` (25cm, lower than crouch). Faster transition speed (16 vs 14 for crouch).
-
-### Architecture
-
-**Profile params (UFlecsMovementProfile):**
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `SlideMinEntrySpeed` | 500.0 | Min horizontal speed to start slide (cm/s) |
-| `SlideInitialSpeedBoost` | 50.0 | Speed added on slide start (cm/s) |
-| `SlideDeceleration` | 400.0 | Deceleration on flat ground (cm/s^2) |
-| `SlideMinExitSpeed` | 100.0 | Speed below which slide auto-ends (cm/s) |
-| `SlideMaxDuration` | 1.5 | Safety cap on flat ground (seconds) |
-| `SlideJumpVelocity` | 500.0 | Jump Z velocity from slide-cancel (cm/s) |
-| `SlideEyeHeight` | 25.0 | Camera height during slide (cm) |
-| `SlideTransitionSpeed` | 16.0 | Eye height interp speed (FInterpTo) |
-| `SlideGroundFriction` | 0.1 | BrakingDeceleration override during slide |
-| `bSlideRequiresForwardInput` | false | If true, releasing W ends slide |
-
-**State in UFatumMovementComponent:**
-```
-bool bIsSliding, float SlideTimer, float SlideCurrentSpeed, bool bSlideCrouchHeld
-```
-
-**HSM flow:**
-```
-TickHSM → UpdatePosture → UpdateSlide [NEW] → UpdateMovementLayer
-```
-
-**Modified methods:**
-- `RequestCrouch()` — if sprinting + fast enough → `BeginSlide()`, else normal crouch
-- `RequestJump()` — if sliding → `EndSlide()` + slide-jump
-- `GetMaxSpeed()` — case Slide: return `SlideCurrentSpeed`
-- `GetMaxBrakingDeceleration()` — if sliding: return low friction
-- `GetMaxAcceleration()` — if sliding: return 100 (minimal, direction tweaking only)
-- `UpdateMovementLayer()` — if `bIsSliding` → `TransitionMoveMode(Slide)`, skip normal logic
-
-**Capsule:** Uses crouch dimensions. PostureSM stays at Standing — slide manages capsule directly. On exit, restores based on whether crouch is held.
-
-### Edge Cases
-- Slide off ledge → end slide, enter Fall, preserve momentum
-- Slide into wall → speed drops below min → end slide
-- Sprint + crouch when slow → normal crouch (speed gate)
-- Slide + prone → blocked (slide has priority)
+**Key architectural decisions:**
+- Slide is an **Ability** (not inline CMC logic). `OwnsPosture() = true` — suspends PostureSM, ability manages capsule directly.
+- Physics runs on **sim thread** via `FSlideInstance`. Game thread is thin wrapper.
+- Direction is **locked at entry** with minor steering, not driven by input.
 
 ---
 
@@ -105,16 +52,45 @@ BobHorizontal = sin(timer * HorizFreq * 2PI) * AmpH * SpeedScale   // HorizFreq 
 
 **Slide tilt:** Camera roll toward lateral velocity direction during slide (2-5 degrees). FInterpTo transition.
 
-**Camera rotation pipeline change:** `bUsePawnControlRotation = false` for first-person camera. Manually set `FollowCamera->SetWorldRotation(ControlRot.Pitch, ControlRot.Yaw, AdditiveRoll)` to support roll effects (slide tilt, lean roll, bob roll).
+**Camera rotation pipeline change:** Currently `bUsePawnControlRotation = true` — UE auto-rotates camera from ControlRotation. Switch to `bUsePawnControlRotation = false` + manually apply `SetWorldRotation(Pitch, Yaw, Roll)` to support additive roll effects (slide tilt, lean roll, head bob roll).
 
-### Profile Params
+**BaseFOV fix:** Currently hardcoded as `float BaseFOV = 90.f` local in Tick(). Move to `UPROPERTY` on `AFlecsCharacter` for editor tuning.
+
+### Current Camera Pipeline (before Phase 4)
+```cpp
+// BeginPlay (first-person):
+FollowCamera->bUsePawnControlRotation = true;   // UE auto-rotates
+bUseControllerRotationYaw = true;
+
+// Tick() camera section:
+FollowCamera->SetFieldOfView(90.f + FOVOffset);
+FVector BaseEyePos(0.f, 0.f, EyeHeight + LandingOffset);
+FollowCamera->SetRelativeLocation(BaseEyePos);
+// No rotation calls — UE handles Pitch/Yaw automatically
+```
+
+### Target Camera Pipeline (after Phase 4)
+```cpp
+// BeginPlay (first-person):
+FollowCamera->bUsePawnControlRotation = false;   // CHANGED: we control rotation
+bUseControllerRotationYaw = true;                 // actor still follows yaw
+
+// Tick() camera section:
+FollowCamera->SetFieldOfView(BaseFOV + FOVOffset);
+FVector CameraPos(BobH, 0.f, EyeHeight + LandingOffset + BobV);
+FollowCamera->SetRelativeLocation(CameraPos);
+FRotator ControlRot = GetControlRotation();
+FRotator CameraRot(ControlRot.Pitch, ControlRot.Yaw, SlideTilt);  // Phase 6 adds + LeanRoll
+FollowCamera->SetWorldRotation(CameraRot);
+```
+
+### Profile Params (new in UFlecsMovementProfile)
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `BobVerticalAmplitude` | 0.6 | Walk vertical bob (cm) |
 | `BobHorizontalAmplitude` | 0.3 | Walk horizontal bob (cm) |
 | `BobVerticalFrequency` | 12.0 | Vertical oscillation (Hz) |
-| `BobHorizontalFrequency` | 6.0 | Horizontal oscillation (Hz, half of vertical) |
 | `BobSprintMultiplier` | 1.4 | Amplitude scale during sprint |
 | `BobCrouchMultiplier` | 0.5 | Amplitude scale during crouch |
 | `BobInterpSpeed` | 10.0 | Fade in/out speed |
@@ -123,28 +99,51 @@ BobHorizontal = sin(timer * HorizFreq * 2PI) * AmpH * SpeedScale   // HorizFreq 
 
 ### Architecture
 
-**New in UFatumMovementComponent:**
-```
-float HeadBobTimer, HeadBobVertical, HeadBobHorizontal, HeadBobAmplitudeScale
-float SlideTiltCurrent
-void UpdateHeadBob(DeltaTime), void UpdateSlideTilt(DeltaTime)
-Getters: GetHeadBobVerticalOffset(), GetHeadBobHorizontalOffset(), GetSlideTiltAngle()
-```
-
-**Camera application in AFlecsCharacter::Tick():**
+**New state in UFatumMovementComponent:**
 ```cpp
-FVector CameraPos(BobH + LeanY, 0.f, EyeH + LandingZ + BobV);
-FollowCamera->SetRelativeLocation(CameraPos);
+// Head bob
+float HeadBobTimer = 0.f;
+float HeadBobVerticalOffset = 0.f;
+float HeadBobHorizontalOffset = 0.f;
+float HeadBobAmplitudeScale = 0.f;  // lerped 0→1 when moving
 
-FRotator CameraRot(ControlRot.Pitch, ControlRot.Yaw, SlideTilt + LeanRoll);
-FollowCamera->SetWorldRotation(CameraRot);
+// Slide tilt
+float SlideTiltCurrent = 0.f;
 ```
+
+**New methods in UFatumMovementComponent:**
+```cpp
+void UpdateHeadBob(float DeltaTime);       // called from UpdateCameraEffects
+void UpdateSlideTilt(float DeltaTime);     // called from UpdateCameraEffects
+float GetHeadBobVerticalOffset() const;
+float GetHeadBobHorizontalOffset() const;
+float GetSlideTiltAngle() const;
+```
+
+**New member on AFlecsCharacter:**
+```cpp
+UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Camera")
+float BaseFOV = 90.f;
+```
+
+**Modified:**
+- `UFatumMovementComponent::UpdateCameraEffects()` — add `UpdateHeadBob()` and `UpdateSlideTilt()` calls
+- `AFlecsCharacter::BeginPlay()` — `FollowCamera->bUsePawnControlRotation = false` (first-person path)
+- `AFlecsCharacter::Tick()` camera section — apply bob offsets to position, apply tilt + ControlRotation to rotation
+
+### Implementation Steps
+1. Add `BaseFOV` UPROPERTY to `AFlecsCharacter`, replace hardcoded 90.f
+2. Add head bob + slide tilt params to `UFlecsMovementProfile`
+3. Add bob/tilt state + UpdateHeadBob/UpdateSlideTilt to `UFatumMovementComponent::UpdateCameraEffects`
+4. Switch to manual camera rotation in `AFlecsCharacter::BeginPlay` + `Tick()`
 
 ### Gotchas
 - Do NOT reset BobTimer on mode change — causes visible snap
-- Lerp offsets to zero on stop (0.15s), don't snap
+- Lerp HeadBobAmplitudeScale to zero on stop (0.15s), don't snap offsets
 - Clamp total offset (5cm V, 3cm H) to prevent additive stacking extremes
 - Motion sickness: keep roll under 0.3 degrees for regular bob. Slide roll OK at 2-5 degrees (intentional player action)
+- Aim direction sync: `GetControlRotation()` is unaffected by manual camera rotation — aim stays correct
+- Third-person mode: skip bob/tilt entirely (camera is on boom, not head)
 
 ---
 
@@ -154,7 +153,7 @@ FollowCamera->SetWorldRotation(CameraRot);
 
 **Vault** (50-120cm): Fast pop-over obstacle, ~0.35s. Keep momentum.
 **Mantle** (120-200cm): Pull up onto ledge, ~0.55s. Slower.
-**Below 50cm:** CMC step-up handles natively.
+**Below 50cm:** Jolt CharacterVirtual step-up handles natively.
 **Above 200cm:** Rejected.
 
 **Triggered on jump input when facing obstacle + moving forward.** NOT continuous per-frame.
@@ -164,13 +163,36 @@ FollowCamera->SetWorldRotation(CameraRot);
 2. **Height trace** (ray down from above): find top surface
 3. **Clearance check** (overlap at destination): can capsule fit?
 
-**Execution:** 3-phase lerp of actor position. CMC disabled (`MOVE_None`). Capsule collision stays active. Barrage body follows via normal Tick sync.
+**Execution:** `UMantleAbility` (game-thread thin wrapper) + `FMantleInstance` (sim-thread Flecs component) + `MantlePositionSystem` (Flecs system, runs AFTER StepWorld).
 
 Phase 1 (Rise): Lerp up to grab point. 40% of time. EaseOut curve.
 Phase 2 (Pull): Lerp forward onto ledge. 60% of time. EaseInOut curve.
-Phase 3 (Land): Brief settle. Restore CMC to Walking.
+Phase 3 (Land): Brief settle. Remove FMantleInstance.
 
-**Cancel:** Crouch during Rising phase → abort, drop with gravity.
+**Cancel:** Crouch during Rising phase → `DeactivateAbility()` → `remove<FMantleInstance>` → gravity resumes.
+
+### Barrage Integration (Flecs system approach — consistent with pipeline)
+
+Mantle follows the same pattern as Slide: game-thread ability wrapper + sim-thread Flecs component + sim-thread logic. **No pipeline inversion.** Position readback stays unchanged.
+
+```
+PrepareCharacterStep:
+  if entity has FMantleInstance → mLocomotionUpdate = Vec3::sZero() (suppress locomotion)
+
+StepWorld:
+  Jolt steps character with zero velocity + gravity → doesn't matter, gets overridden
+
+progress() → MantlePositionSystem (runs AFTER StepWorld):
+  for each entity with (FMantleInstance, FBarrageBody):
+    compute lerp position from phase/timer/start/end
+    CharacterVirtual->SetPosition(lerpedJoltPos)    // override Jolt result
+    tick timer, advance phases
+    if done → remove<FMantleInstance>
+
+Game thread GetPosition():
+  reads overridden position → normal Alpha-lerp → SetActorLocation
+  No special flags needed. Pipeline unchanged.
+```
 
 ### Profile Params
 
@@ -188,26 +210,54 @@ Phase 3 (Land): Brief settle. Restore CMC to Walking.
 
 ### Architecture
 
-**New files:** `FMantleStateMachine.h/.cpp`
+**New files:** `MantleAbility.h/.cpp`
+
+**New Flecs component** in FlecsMovementStatic.h:
+```cpp
+struct FMantleInstance
+{
+    float StartX, StartY, StartZ;   // Jolt coords, feet position at activation
+    float EndX, EndY, EndZ;         // Jolt coords, target ledge top
+    float Timer = 0.f;              // elapsed time in current phase
+    float RiseDuration = 0.25f;     // from FMovementStatic
+    float PullDuration = 0.3f;
+    float LandDuration = 0.1f;
+    uint8 Phase = 0;                // 0=Rise, 1=Pull, 2=Land
+    uint8 MantleType = 0;           // EMantleType
+};
+```
 
 **New enum** in FlecsMovementComponents.h:
 ```cpp
 enum class EMantleType : uint8 { None, Vault, Mantle, HighClimb };
 ```
 
-**State machine phases:** None → Rising → Pulling → Landing → None
+**New Flecs system:** `MantlePositionSystem` — registered during world setup, runs in `progress()` (after StepWorld). Reads `FMantleInstance` + `FBarrageBody`, sets `CharacterVirtual->SetPosition()`.
 
-**Integration:**
-- `TickHSM()` — if mantling, call `UpdateMantle()` and skip all other HSM updates
-- `RequestJump()` — `TryBeginMantle()` before normal jump logic
-- `RequestCrouch()` — if mantling → `AbortMantle()`
-- `GetMaxSpeed()` — case Mantle/Vault: return 0
+**`UMantleAbility : UMovementAbility` overrides (game-thread thin wrapper):**
+```cpp
+CanActivate()       — 3-trace detection (game-thread UE traces)
+OnActivated()       — EnqueueCommand → entity.set<FMantleInstance>(start/end/durations)
+OnTick(DeltaTime)   — eye height only (like SlideAbility)
+OnDeactivated()     — EnqueueCommand → entity.remove<FMantleInstance>
+HandleJumpRequest() — false (jump doesn't cancel, crouch does)
+OwnsPosture()       — true (capsule may change during mantle)
+GetMoveMode()       — ECharacterMoveMode::Mantle (or Vault)
+```
+
+**Integration points:**
+- `RequestJump()` — `if (FindAbility<UMantleAbility>()->CanActivate()) ActivateAbility(...)` before normal jump
+- `RequestCrouch()` — if mantle active → `DeactivateAbility()` (abort)
+- `PrepareCharacterStep` — if entity has `FMantleInstance` → `mLocomotionUpdate = Vec3::sZero()`
+- No changes to `ApplyBarrageSync` — pipeline unchanged
 
 ### Gotchas
-- Barrage body: normal Tick sync handles it (actor moves → Barrage follows)
-- Camera during mantle: follows actor position. Allow free look (don't lock pitch/yaw)
+- `CharacterVirtual::SetPosition()` in MantlePositionSystem — must run AFTER StepWorld (Flecs system ordering)
+- Post-mantle: `ApplyForce(OtherForce)` ~250 cm/s forward via `EnqueueCommand` from `OnDeactivated`
+- Camera during mantle: follows actor position via eye height. Allow free look (don't lock pitch/yaw)
 - Thin walls: use capsule sweep (not line trace) for forward detection
-- Post-mantle: give ~250 cm/s forward velocity, don't start from zero
+- Ledge detection coordinates: UE traces give UE coords → convert to Jolt for FMantleInstance start/end
+- Flecs worker thread access: MantlePositionSystem needs `EnsureBarrageAccess()` for Barrage calls
 
 ---
 
@@ -216,6 +266,8 @@ enum class EMantleType : uint8 { None, Vault, Mantle, HighClimb };
 ### Design
 
 **Camera-only lean.** Capsule and Barrage body do NOT move. Q/E (or custom keys) to peek. Hold-mode by default.
+
+**NOT an ability** — lean is a parallel state layer (like sprint), not a movement mode override. Does not displace active abilities.
 
 **Algorithm:**
 ```
@@ -242,23 +294,30 @@ RollAngle = LeanAlpha * LeanMaxRoll * WallClamp
 
 **New input tags:** `InputTag.LeanLeft`, `InputTag.LeanRight`
 
-**State in UFatumMovementComponent:**
-```
-ELeanDirection CurrentLeanDirection, float CurrentLeanAlpha (-1..1)
-bool bWantsLeanLeft, bWantsLeanRight, float LeanWallClamp
+**State in UFatumMovementComponent (NOT an ability):**
+```cpp
+bool bWantsLeanLeft = false;
+bool bWantsLeanRight = false;
+float CurrentLeanAlpha = 0.f;   // -1..+1
+float LeanWallClamp = 1.f;
 ```
 
 **New methods:**
 - `RequestLeanLeft(bool)`, `RequestLeanRight(bool)` — commands
-- `UpdateLean(DeltaTime)` — interp + wall check
+- `UpdateLean(DeltaTime)` — called from UpdateCameraEffects, interp + wall check
 - `GetLeanCameraOffset()`, `GetLeanRollAngle()` — queries for camera
 
-**Camera:** `LeanY` and `LeanRoll` consumed in `AFlecsCharacter::Tick()` alongside head bob and slide tilt.
+**Camera (requires Phase 4 manual rotation):**
+```cpp
+FVector CameraPos(BobH + LeanOffset, 0.f, EyeHeight + LandingOffset + BobV);
+FRotator CameraRot(ControlRot.Pitch, ControlRot.Yaw, SlideTilt + LeanRoll);
+```
 
 ### Gotchas
 - Direction switch: don't snap through center. FInterpTo handles this naturally
 - Wall check every frame while leaning (doors can open)
 - Sprint suppresses lean (smooth return to center, not snap)
+- Lean is **suppressed** when `ActiveAbility != nullptr` (slide, mantle block lean)
 
 ---
 
@@ -284,8 +343,7 @@ Custom `UAnimInstance` subclass with **NativeUpdateAnimation** data gathering. A
 | bIsGrounded | bool | FatumMovement->IsMovingOnGround() |
 | bIsSprinting | bool | FatumMovement->IsSprinting() |
 | bIsSliding | bool | MoveMode == Slide |
-| bIsMantling | bool | FatumMovement->IsMantling() |
-| LeanDirection | ELeanDirection | FatumMovement->GetLeanDirection() |
+| bIsMantling | bool | MoveMode == Mantle or Vault |
 | LeanAlpha | float | FatumMovement->GetLeanAlpha() |
 | AimPitch | float | Controller rotation |
 | AimYaw | float | Relative to actor forward |
@@ -317,31 +375,35 @@ Custom `UAnimInstance` subclass with **NativeUpdateAnimation** data gathering. A
 
 ## Implementation Steps (Ordered)
 
-### Phase 3 — Slide
-1. Add slide params to `UFlecsMovementProfile`
-2. Add slide state + logic to `UFatumMovementComponent` (BeginSlide, EndSlide, UpdateSlide)
-3. Wire into existing: modify RequestCrouch, RequestJump, GetMaxSpeed, GetMaxBrakingDeceleration, TickHSM, UpdateMovementLayer
+### Phase 3 — Slide (COMPLETE)
+~~1. Add slide params to `UFlecsMovementProfile`~~
+~~2. Create `USlideAbility` with sim-thread `FSlideInstance`~~
+~~3. Wire: RequestCrouch gate, HandleJumpRequest, PrepareCharacterStep direct velocity control~~
 
 ### Phase 4 — Camera Effects
-4. Add head bob + slide tilt params to `UFlecsMovementProfile`
-5. Implement UpdateHeadBob, UpdateSlideTilt in `UFatumMovementComponent`
-6. Update `AFlecsCharacter::Tick()` — consume bob/tilt offsets, switch to manual camera rotation (`bUsePawnControlRotation = false`)
+4. Add `BaseFOV` UPROPERTY to `AFlecsCharacter`, replace hardcoded 90.f
+5. Add head bob + slide tilt params to `UFlecsMovementProfile`
+6. Implement UpdateHeadBob, UpdateSlideTilt in `UFatumMovementComponent::UpdateCameraEffects`
+7. Switch `FollowCamera->bUsePawnControlRotation = false` (first-person path)
+8. Update `AFlecsCharacter::Tick()` — apply bob position + manual rotation with tilt roll
 
 ### Phase 5 — Mantle/Vault
-7. Add `EMantleType` to `FlecsMovementComponents.h`
-8. Add mantle params to `UFlecsMovementProfile`
-9. Create `FMantleStateMachine.h/.cpp` (DetectLedge, Begin, Tick, Abort)
-10. Integrate into `UFatumMovementComponent` (UpdateMantle, TryBeginMantle, modify RequestJump/RequestCrouch, TickHSM)
+9. Add `EMantleType` + `FMantleInstance` to `FlecsMovementComponents.h` / `FlecsMovementStatic.h`
+10. Add mantle params to `UFlecsMovementProfile` + `FMovementStatic`
+11. Create `MantleAbility.h/.cpp` (game-thread: 3-trace detection, EnqueueCommand, eye height)
+12. Register `MantlePositionSystem` in Flecs world (sim-thread: phase lerp, SetPosition, exit)
+13. Register ability in CMC, wire into RequestJump (before normal jump) and RequestCrouch (abort)
+14. In `PrepareCharacterStep`: suppress `mLocomotionUpdate` when `FMantleInstance` present
 
 ### Phase 6 — Lean
-11. Add lean params to `UFlecsMovementProfile`
-12. Add `InputTag.LeanLeft`, `InputTag.LeanRight` to `FatumInputTags`
-13. Implement lean logic in `UFatumMovementComponent` (UpdateLean, wall check)
-14. Wire lean input in `AFlecsCharacter` + consume lean offsets in camera update
+15. Add lean params to `UFlecsMovementProfile`
+16. Add `InputTag.LeanLeft`, `InputTag.LeanRight` to `FatumInputTags`
+17. Implement lean logic in `UFatumMovementComponent` (UpdateLean in UpdateCameraEffects, wall check)
+18. Wire lean input in `AFlecsCharacter` + consume lean offsets in camera update (Position Y + Roll)
 
 ### Phase 7 — Animation Hooks
-15. Create `FatumAnimInstance.h/.cpp` with NativeUpdateAnimation data gathering
-16. Add `FAnimMovementData` struct to `FlecsMovementComponents.h` (optional, for struct-based access)
+19. Create `FatumAnimInstance.h/.cpp` with NativeUpdateAnimation data gathering
+20. Add `FAnimMovementData` struct to `FlecsMovementComponents.h` (optional, for struct-based access)
 
 ---
 
