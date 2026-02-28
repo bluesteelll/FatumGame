@@ -42,9 +42,11 @@ struct FCharacterPhysBridge
 	flecs::entity Entity;                                                  // for reading FMovementStatic + FCharacterMoveState
 	TSharedPtr<FBCharacterBase> CachedFBChar;                              // direct pointer to FBCharacter
 
-	// Shared with AFlecsCharacter for cross-thread slide state.
+	// Shared with AFlecsCharacter for cross-thread state.
 	// Written by PrepareCharacterStep (sim thread), read by AFlecsCharacter::Tick (game thread).
 	TSharedPtr<std::atomic<bool>> SlideActive;
+	TSharedPtr<std::atomic<bool>> MantleActive;
+	TSharedPtr<std::atomic<bool>> Hanging;
 };
 
 /**

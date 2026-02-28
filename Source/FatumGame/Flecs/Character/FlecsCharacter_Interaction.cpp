@@ -419,7 +419,8 @@ void AFlecsCharacter::BeginFocusTransition()
 	SavedCameraTransform = FollowCamera->GetComponentTransform();
 	SavedCameraFOV = FollowCamera->FieldOfView;
 
-	// Disable camera following — we drive it manually via lerp
+	// Disable camera following — we drive it manually via lerp.
+	// First-person: already false (Phase 4 manual rotation). Third-person: disable boom rotation.
 	FollowCamera->bUsePawnControlRotation = false;
 
 	// Block movement and input
@@ -473,8 +474,9 @@ void AFlecsCharacter::RestoreCameraControl()
 {
 	check(FollowCamera);
 
-	// Restore camera rotation control (first-person mode)
-	FollowCamera->bUsePawnControlRotation = true;
+	// Restore camera rotation: first-person uses manual SetWorldRotation (Phase 4),
+	// third-person uses bUsePawnControlRotation via boom.
+	FollowCamera->bUsePawnControlRotation = !bFirstPersonCamera;
 	FollowCamera->SetFieldOfView(SavedCameraFOV);
 
 	// Restore player input

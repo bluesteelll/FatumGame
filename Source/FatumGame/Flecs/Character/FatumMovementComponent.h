@@ -62,6 +62,9 @@ public:
 	bool IsSliding() const;
 
 	UFUNCTION(BlueprintPure, Category = "Fatum|Movement")
+	bool IsMantling() const;
+
+	UFUNCTION(BlueprintPure, Category = "Fatum|Movement")
 	float GetCurrentFOVOffset() const { return CurrentFOVOffset; }
 
 	UFUNCTION(BlueprintPure, Category = "Fatum|Movement")
@@ -69,6 +72,15 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Fatum|Movement")
 	float GetCurrentEyeHeight() const { return PostureSM.GetCurrentEyeHeight(); }
+
+	UFUNCTION(BlueprintPure, Category = "Fatum|Movement")
+	float GetHeadBobVerticalOffset() const { return HeadBobVerticalOffset; }
+
+	UFUNCTION(BlueprintPure, Category = "Fatum|Movement")
+	float GetHeadBobHorizontalOffset() const { return HeadBobHorizontalOffset; }
+
+	UFUNCTION(BlueprintPure, Category = "Fatum|Movement")
+	float GetSlideTiltAngle() const { return SlideTiltCurrent; }
 
 	// ═══════════════════════════════════════════════════════════════
 	// COMMANDS (called by AFlecsCharacter input handlers or AI)
@@ -187,6 +199,18 @@ private:
 	float LandingCompressInitial = 0.f;
 	float LandingFallSpeed = 0.f;
 
+	// Head bob
+	float HeadBobTimer = 0.f;
+	float HeadBobVerticalOffset = 0.f;
+	float HeadBobHorizontalOffset = 0.f;
+	float HeadBobAmplitudeScale = 0.f;
+
+	// Slide tilt
+	float SlideTiltCurrent = 0.f;
+
+	// Airborne ledge detection timer (~10Hz)
+	float AirborneDetectionTimer = 0.f;
+
 	// ═══════════════════════════════════════════════════════════════
 	// HSM LOGIC
 	// ═══════════════════════════════════════════════════════════════
@@ -195,6 +219,8 @@ private:
 	void UpdatePosture(float DeltaTime);
 	void UpdateMovementLayer(float DeltaTime);
 	void UpdateCameraEffects(float DeltaTime);
+	void UpdateHeadBob(float DeltaTime);
+	void UpdateSlideTilt(float DeltaTime);
 	void TransitionMoveMode(ECharacterMoveMode NewMode);
 
 	static constexpr float SimFrameTime = 1.f / 60.f;

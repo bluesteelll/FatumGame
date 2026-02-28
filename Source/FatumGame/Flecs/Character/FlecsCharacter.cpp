@@ -34,6 +34,7 @@
 #include "FatumInputTags.h"
 #include "FlecsMovementProfile.h"
 #include "FlecsMovementStatic.h"
+#include "MantleAbility.h"
 #include "EnhancedInputSubsystems.h"
 #include "InputActionValue.h"
 #include "Components/SkeletalMeshComponent.h"
@@ -87,7 +88,7 @@ void AFlecsCharacter::BeginPlay()
 		FollowCamera->AttachToComponent(RootComponent, FAttachmentTransformRules::KeepRelativeTransform);
 		float EyeH = FatumMovement ? FatumMovement->GetCurrentEyeHeight() : 60.f;
 		FollowCamera->SetRelativeLocation(FVector(0.f, 0.f, EyeH));
-		FollowCamera->bUsePawnControlRotation = true;
+		FollowCamera->bUsePawnControlRotation = false; // Manual rotation for additive Roll (tilt/lean)
 		bUseControllerRotationYaw = true;
 		bUseControllerRotationPitch = false;
 		bUseControllerRotationRoll = false;
@@ -154,6 +155,8 @@ void AFlecsCharacter::BeginPlay()
 			// Allocate shared atomics on game thread — bridge will hold second refs.
 			InputAtomics = MakeShared<FCharacterInputAtomics, ESPMode::ThreadSafe>();
 			SlideActiveAtomic = MakeShared<std::atomic<bool>>(false);
+			MantleActiveAtomic = MakeShared<std::atomic<bool>>(false);
+			HangingAtomic = MakeShared<std::atomic<bool>>(false);
 			FeetToActorOffset = CapsuleHalfHeight; // init offset = standing HH
 
 			// Capture movement profile values for sim thread (can't access UObjects there).
@@ -186,6 +189,22 @@ void AFlecsCharacter::BeginPlay()
 				CapturedMS.SlideMaxDuration = MoveProf->SlideMaxDuration;
 				CapturedMS.SlideInitialSpeedBoost = MoveProf->SlideInitialSpeedBoost;
 				CapturedMS.SlideMinAcceleration = MoveProf->SlideMinAcceleration;
+				// Mantle/Vault params
+				CapturedMS.MantleForwardReach = MoveProf->MantleForwardReach;
+				CapturedMS.MantleMinHeight = MoveProf->MantleMinHeight;
+				CapturedMS.MantleVaultMaxHeight = MoveProf->MantleVaultMaxHeight;
+				CapturedMS.MantleMaxHeight = MoveProf->MantleMaxHeight;
+				CapturedMS.MantleRiseDuration = MoveProf->MantleRiseDuration;
+				CapturedMS.MantlePullDuration = MoveProf->MantlePullDuration;
+				CapturedMS.MantleLandDuration = MoveProf->MantleLandDuration;
+				CapturedMS.VaultSpeedMultiplier = MoveProf->VaultSpeedMultiplier;
+				// Ledge Grab params
+				CapturedMS.LedgeGrabMaxHeight = MoveProf->LedgeGrabMaxHeight;
+				CapturedMS.LedgeGrabTransitionDuration = MoveProf->LedgeGrabTransitionDuration;
+				CapturedMS.LedgeGrabMaxDuration = MoveProf->bUseLedgeHangTimeout ? MoveProf->LedgeHangMaxDuration : 0.f;
+				CapturedMS.WallJumpHorizontalForce = MoveProf->WallJumpHorizontalForce;
+				CapturedMS.WallJumpVerticalForce = MoveProf->WallJumpVerticalForce;
+				CapturedMS.LedgeGrabCooldown = MoveProf->LedgeGrabCooldown;
 			}
 
 			TWeakObjectPtr<AFlecsCharacter> WeakSelf(this);
@@ -539,14 +558,23 @@ void AFlecsCharacter::Tick(float DeltaTime)
 
 	if (FatumMovement && FollowCamera && !bFocusDrivingCamera)
 	{
-		float BaseFOV = 90.f;
 		FollowCamera->SetFieldOfView(BaseFOV + FatumMovement->GetCurrentFOVOffset());
 
 		if (bFirstPersonCamera)
 		{
-			FVector BaseEyePos(0.f, 0.f, FatumMovement->GetCurrentEyeHeight());
-			BaseEyePos.Z += FatumMovement->GetLandingCameraOffset();
-			FollowCamera->SetRelativeLocation(BaseEyePos);
+			// Position: eye height + landing compress + head bob (Y = lateral sway, Z = vertical)
+			FVector CameraPos(
+				0.f,
+				FatumMovement->GetHeadBobHorizontalOffset(),
+				FatumMovement->GetCurrentEyeHeight()
+					+ FatumMovement->GetLandingCameraOffset()
+					+ FatumMovement->GetHeadBobVerticalOffset());
+			FollowCamera->SetRelativeLocation(CameraPos);
+
+			// Rotation: ControlRotation + additive Roll (slide tilt, future: lean)
+			FRotator ControlRot = GetControlRotation();
+			FollowCamera->SetWorldRotation(
+				FRotator(ControlRot.Pitch, ControlRot.Yaw, FatumMovement->GetSlideTiltAngle()));
 		}
 	}
 
@@ -713,6 +741,34 @@ void AFlecsCharacter::ApplyBarrageSync(const FVector& FeetPos, uint8 GS, const F
 		else
 		{
 			SlideActivationSimTick = 0;
+		}
+
+		// Mantle exit detection (same 3-tick grace pattern as slide)
+		bool bMantleActive = MantleActiveAtomic ? MantleActiveAtomic->load(std::memory_order_relaxed) : false;
+		bool bHanging = HangingAtomic ? HangingAtomic->load(std::memory_order_relaxed) : false;
+
+		if (FatumMovement->IsMantling())
+		{
+			if (MantleActivationSimTick == 0)
+			{
+				MantleActivationSimTick = SimTick;
+			}
+
+			if (!bMantleActive && SimTick > MantleActivationSimTick + 3)
+			{
+				FatumMovement->DeactivateAbility();
+				MantleActivationSimTick = 0;
+			}
+		}
+		else
+		{
+			MantleActivationSimTick = 0;
+		}
+
+		// Sync hang state to MantleAbility (for HandleJumpRequest routing)
+		if (UMantleAbility* MA = FatumMovement->FindAbility<UMantleAbility>())
+		{
+			MA->SetHangingFromSim(bHanging);
 		}
 	}
 

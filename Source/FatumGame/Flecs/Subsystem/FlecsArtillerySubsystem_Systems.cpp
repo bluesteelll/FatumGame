@@ -115,6 +115,7 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 	World.component<FMovementState>();
 	World.component<FCharacterMoveState>();
 	World.component<FSlideInstance>();
+	World.component<FMantleInstance>();
 	World.component<FMovementStatic>();
 
 	// ─────────────────────────────────────────────────────────

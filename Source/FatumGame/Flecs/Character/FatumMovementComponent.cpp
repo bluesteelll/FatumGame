@@ -1,6 +1,8 @@
 #include "FatumMovementComponent.h"
 #include "MovementAbility.h"
 #include "SlideAbility.h"
+#include "MantleAbility.h"
+#include "GameFramework/PlayerController.h"
 #include "FlecsMovementProfile.h"
 #include "GameFramework/Character.h"
 #include "Components/CapsuleComponent.h"
@@ -17,6 +19,7 @@ void UFatumMovementComponent::InitializeComponent()
 
 	// Register movement abilities
 	RegisterAbility(USlideAbility::StaticClass());
+	RegisterAbility(UMantleAbility::StaticClass());
 }
 
 void UFatumMovementComponent::ApplyProfile()
@@ -46,6 +49,12 @@ void UFatumMovementComponent::TickPostureAndEffects(float DeltaTime)
 {
 	TickHSM(DeltaTime);
 	UpdateCameraEffects(DeltaTime);
+
+	// Tick mantle cooldown even when ability is inactive
+	if (UMantleAbility* MA = FindAbility<UMantleAbility>())
+	{
+		MA->TickCooldown(DeltaTime);
+	}
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -91,6 +100,13 @@ bool UFatumMovementComponent::IsSliding() const
 	return ActiveAbility && ActiveAbility->GetMoveMode() == ECharacterMoveMode::Slide;
 }
 
+bool UFatumMovementComponent::IsMantling() const
+{
+	if (!ActiveAbility) return false;
+	ECharacterMoveMode Mode = ActiveAbility->GetMoveMode();
+	return Mode == ECharacterMoveMode::Vault || Mode == ECharacterMoveMode::Mantle || Mode == ECharacterMoveMode::LedgeHang;
+}
+
 bool UFatumMovementComponent::CanExpandToHeight(float TargetHalfHeight) const
 {
 	if (!CharacterOwner) return false;
@@ -134,6 +150,36 @@ void UFatumMovementComponent::TickHSM(float DeltaTime)
 	}
 
 	UpdateMovementLayer(DeltaTime);
+
+	// Airborne ledge detection at ~10Hz for ledge grab
+	if (IsFalling() && !ActiveAbility)
+	{
+		AirborneDetectionTimer += DeltaTime;
+		if (AirborneDetectionTimer >= 0.1f)
+		{
+			AirborneDetectionTimer -= 0.1f;
+			if (UMantleAbility* MA = FindAbility<UMantleAbility>())
+			{
+				if (MA->GetCooldownRemaining() <= 0.f)
+				{
+					ACharacter* Char = GetCharacterOwner();
+					if (Char)
+					{
+						APlayerController* PC = Cast<APlayerController>(Char->Controller);
+						FVector LookDir = PC ? PC->GetControlRotation().Vector() : Char->GetActorForwardVector();
+						float HH = Char->GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
+						FVector FeetPos = Char->GetActorLocation() - FVector(0, 0, HH);
+						float Radius = Char->GetCapsuleComponent()->GetScaledCapsuleRadius();
+						MA->PerformDetection(FeetPos, LookDir, Radius, HH);
+					}
+				}
+			}
+		}
+	}
+	else
+	{
+		AirborneDetectionTimer = 0.f;
+	}
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -212,6 +258,12 @@ void UFatumMovementComponent::UpdateMovementLayer(float DeltaTime)
 	// Landing detection
 	if (!bWasGroundedLastFrame && bGrounded)
 	{
+		// Invalidate airborne ledge detection cache on landing
+		if (UMantleAbility* MA = FindAbility<UMantleAbility>())
+		{
+			MA->InvalidateCache();
+		}
+
 		// Trigger landing camera compress
 		if (MovementProfile && LandingFallSpeed >= MovementProfile->LandingMinFallSpeed)
 		{
@@ -295,6 +347,10 @@ void UFatumMovementComponent::UpdateCameraEffects(float DeltaTime)
 	CurrentFOVOffset = FMath::FInterpTo(CurrentFOVOffset, TargetFOVOffset,
 		DeltaTime, MovementProfile->FOVInterpSpeed);
 
+	// Head bob + slide tilt
+	UpdateHeadBob(DeltaTime);
+	UpdateSlideTilt(DeltaTime);
+
 	// Landing compress spring-back
 	if (LandingCompressTimer > 0.f)
 	{
@@ -310,6 +366,84 @@ void UFatumMovementComponent::UpdateCameraEffects(float DeltaTime)
 			LandingCompressOffset = LandingCompressInitial * Alpha;
 		}
 	}
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// HEAD BOB
+// ═══════════════════════════════════════════════════════════════════════════
+
+void UFatumMovementComponent::UpdateHeadBob(float DeltaTime)
+{
+	// Determine target amplitude scale based on movement state
+	float TargetScale = 0.f;
+	bool bOnGround = IsMovingOnGround();
+	bool bHasActiveAbility = ActiveAbility != nullptr;
+	float HorizSpeed = BarrageVelocity.Size2D();
+
+	if (bOnGround && !bHasActiveAbility && HorizSpeed > 10.f
+		&& PostureSM.CurrentPosture != ECharacterPosture::Prone)
+	{
+		TargetScale = 1.f;
+		if (CurrentMoveMode == ECharacterMoveMode::Sprint)
+		{
+			TargetScale = MovementProfile->BobSprintMultiplier;
+		}
+		else if (PostureSM.CurrentPosture == ECharacterPosture::Crouching)
+		{
+			TargetScale = MovementProfile->BobCrouchMultiplier;
+		}
+	}
+
+	// Smooth fade in/out (never snap)
+	HeadBobAmplitudeScale = FMath::FInterpTo(
+		HeadBobAmplitudeScale, TargetScale, DeltaTime, MovementProfile->BobInterpSpeed);
+
+	// Advance timer continuously (no reset on mode change)
+	if (HeadBobAmplitudeScale > 0.001f)
+	{
+		HeadBobTimer += DeltaTime;
+	}
+
+	// Lissajous offsets: Vert = sin(2f*t), Horiz = sin(f*t)
+	float VertFreq = FMath::Max(MovementProfile->BobVerticalFrequency, 0.01f);
+
+	// Wrap timer to avoid float precision degradation in long sessions.
+	// Common period = 2/VertFreq (horiz completes 1 cycle, vert completes 2).
+	float Period = 2.f / VertFreq;
+	HeadBobTimer = FMath::Fmod(HeadBobTimer, Period);
+	float HorizFreq = VertFreq * 0.5f;
+
+	HeadBobVerticalOffset = FMath::Sin(HeadBobTimer * VertFreq * UE_TWO_PI)
+		* MovementProfile->BobVerticalAmplitude * HeadBobAmplitudeScale;
+	HeadBobHorizontalOffset = FMath::Sin(HeadBobTimer * HorizFreq * UE_TWO_PI)
+		* MovementProfile->BobHorizontalAmplitude * HeadBobAmplitudeScale;
+
+	// Safety clamp (matches UPROPERTY ClampMax on profile)
+	HeadBobVerticalOffset = FMath::Clamp(HeadBobVerticalOffset, -15.f, 15.f);
+	HeadBobHorizontalOffset = FMath::Clamp(HeadBobHorizontalOffset, -10.f, 10.f);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SLIDE TILT
+// ═══════════════════════════════════════════════════════════════════════════
+
+void UFatumMovementComponent::UpdateSlideTilt(float DeltaTime)
+{
+	float TargetTilt = 0.f;
+
+	if (IsSliding() && CharacterOwner)
+	{
+		// Project velocity onto actor right vector → lateral component
+		FVector Right = CharacterOwner->GetActorRightVector();
+		float LateralSpeed = FVector::DotProduct(BarrageVelocity, Right);
+
+		// Normalize to [-1, 1] using sprint speed as reference
+		float NormLateral = FMath::Clamp(LateralSpeed / FMath::Max(MovementProfile->SprintSpeed, 1.f), -1.f, 1.f);
+		TargetTilt = NormLateral * MovementProfile->SlideCameraTiltAngle;
+	}
+
+	SlideTiltCurrent = FMath::FInterpTo(
+		SlideTiltCurrent, TargetTilt, DeltaTime, MovementProfile->SlideTiltInterpSpeed);
 }
 
 void UFatumMovementComponent::TransitionMoveMode(ECharacterMoveMode NewMode)
@@ -331,13 +465,49 @@ void UFatumMovementComponent::RequestJump()
 {
 	check(CharacterOwner);
 
-	// Let active ability handle jump (e.g. slide-cancel jump)
+	// Let active ability handle jump (e.g. slide-cancel jump, mantle exit)
 	if (ActiveAbility && ActiveAbility->HandleJumpRequest())
 	{
 		CoyoteTimer = 0.f;
 		JumpBufferTimer = 0.f;
 		bJumpedIntentionally = true;
 		return;
+	}
+
+	// No active ability — check mantle/vault/ledge grab BEFORE normal jump
+	if (UMantleAbility* MantleAbil = FindAbility<UMantleAbility>())
+	{
+		// Grounded: run detection on-demand when jump is pressed
+		if (IsMovingOnGround())
+		{
+			ACharacter* Char = GetCharacterOwner();
+			APlayerController* PC = Char ? Cast<APlayerController>(Char->Controller) : nullptr;
+			FVector LookDir = PC ? PC->GetControlRotation().Vector() : Char->GetActorForwardVector();
+			float HH = Char->GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
+			FVector FeetPos = Char->GetActorLocation() - FVector(0, 0, HH);
+			float Radius = Char->GetCapsuleComponent()->GetScaledCapsuleRadius();
+
+			UE_LOG(LogTemp, Warning, TEXT("Mantle: RequestJump grounded - FeetPos=(%.1f,%.1f,%.1f) HH=%.1f R=%.1f Cooldown=%.2f"),
+				FeetPos.X, FeetPos.Y, FeetPos.Z, HH, Radius, MantleAbil->GetCooldownRemaining());
+
+			MantleAbil->PerformDetection(FeetPos, LookDir, Radius, HH);
+		}
+		// Airborne: CachedCandidate already populated by 10Hz timer
+
+		if (MantleAbil->CanActivate())
+		{
+			UE_LOG(LogTemp, Warning, TEXT("Mantle: ACTIVATING ability"));
+			ActivateAbility(MantleAbil);
+			CoyoteTimer = 0.f;
+			JumpBufferTimer = 0.f;
+			bJumpedIntentionally = true;
+			return;
+		}
+		else
+		{
+			UE_LOG(LogTemp, Warning, TEXT("Mantle: CanActivate=false (valid=%d cooldown=%.2f)"),
+				MantleAbil->GetCachedCandidate().bValid, MantleAbil->GetCooldownRemaining());
+		}
 	}
 
 	// No jump from prone
@@ -381,6 +551,16 @@ void UFatumMovementComponent::ReleaseJump()
 void UFatumMovementComponent::RequestCrouch(bool bPressed)
 {
 	check(MovementProfile);
+
+	// Active mantle/hang: crouch = let go / cancel
+	if (auto* MA = Cast<UMantleAbility>(ActiveAbility))
+	{
+		if (bPressed)
+		{
+			MA->RequestLetGo();
+		}
+		return;
+	}
 
 	// Active slide ability intercepts crouch input
 	if (auto* Slide = Cast<USlideAbility>(ActiveAbility))

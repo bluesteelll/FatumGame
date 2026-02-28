@@ -23,6 +23,7 @@ class USpringArmComponent;
 class UCameraComponent;
 struct FInputActionValue;
 class FBarragePrimitive;
+class UMantleAbility;
 
 /** Game→sim input direction atomics. Written by AFlecsCharacter::Move every tick (latest-wins).
  *  Read by PrepareCharacterStep on sim thread. Lock-free, no queue buildup. */
@@ -69,6 +70,10 @@ public:
 	/** If true, camera is first-person (attached to mesh). If false, third-person with boom. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Camera")
 	bool bFirstPersonCamera = true;
+
+	/** Base field of view (degrees). Sprint/ability FOV offsets are added on top. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Camera", meta = (ClampMin = "60", ClampMax = "130"))
+	float BaseFOV = 90.f;
 
 	// ═══════════════════════════════════════════════════════════════
 	// ENHANCED INPUT
@@ -504,9 +509,14 @@ private:
 	// Shared with FCharacterPhysBridge — allocated here, copied to bridge on registration.
 	TSharedPtr<std::atomic<bool>> SlideActiveAtomic;
 
+	// Mantle/hang state: same pattern as slide.
+	TSharedPtr<std::atomic<bool>> MantleActiveAtomic;
+	TSharedPtr<std::atomic<bool>> HangingAtomic;
+
 	// Slide activation grace: sim tick when slide ability was activated on game thread.
 	// Prevents immediate deactivation before EnqueueCommand(FSlideInstance) is processed.
 	uint64 SlideActivationSimTick = 0;
+	uint64 MantleActivationSimTick = 0;
 
 	// Feet-to-actor offset: Z distance from Barrage feet to UE capsule center.
 	// On ground: = CapsuleHalfHeight (standard).
@@ -534,6 +544,7 @@ private:
 	void ApplyBarrageSync(const FVector& FeetPos, uint8 GroundState, const FVector& Velocity, bool bSlideActive);
 
 	friend class UFlecsArtillerySubsystem;
+	friend class UMantleAbility;
 
 	/**
 	 * Pending weapon equip data (sim thread → game thread via atomics).

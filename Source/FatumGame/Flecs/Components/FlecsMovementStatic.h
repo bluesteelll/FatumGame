@@ -33,6 +33,22 @@ struct FMovementStatic
 	float SlideMaxDuration = 1.5f;
 	float SlideInitialSpeedBoost = 100.f;
 	float SlideMinAcceleration = 100.f;  // minimal steering during slide
+	// Mantle/Vault params
+	float MantleForwardReach = 80.f;         // cm
+	float MantleMinHeight = 50.f;            // cm above feet
+	float MantleVaultMaxHeight = 120.f;      // cm
+	float MantleMaxHeight = 200.f;           // cm
+	float MantleRiseDuration = 0.25f;        // seconds
+	float MantlePullDuration = 0.3f;
+	float MantleLandDuration = 0.1f;
+	float VaultSpeedMultiplier = 0.8f;
+	// Ledge Grab params
+	float LedgeGrabMaxHeight = 236.f;        // cm above feet
+	float LedgeGrabTransitionDuration = 0.13f;
+	float LedgeGrabMaxDuration = 5.f;        // 0 = infinite
+	float WallJumpHorizontalForce = 400.f;   // cm/s
+	float WallJumpVerticalForce = 400.f;     // cm/s
+	float LedgeGrabCooldown = 0.3f;          // seconds
 };
 
 // INSTANCE component: per character, mutable state set via EnqueueCommand from game thread.
@@ -52,4 +68,21 @@ struct FSlideInstance
 	float Timer = 0.f;         // remaining duration (seconds)
 	float SlideDirX = 0.f;    // Jolt horizontal X (normalized, captured on first tick)
 	float SlideDirZ = 0.f;    // Jolt horizontal Z (normalized, captured on first tick)
+};
+
+// INSTANCE component: active mantle/vault/ledge grab.
+// Added via EnqueueCommand on activation, removed when complete.
+// Sim thread owns position lerp in PrepareCharacterStep.
+struct FMantleInstance
+{
+	float StartX = 0.f, StartY = 0.f, StartZ = 0.f;       // Jolt coords, feet position at phase start
+	float EndX = 0.f, EndY = 0.f, EndZ = 0.f;             // Jolt coords, target position for current phase
+	float WallNormalX = 0.f, WallNormalZ = 0.f;            // Jolt horizontal wall outward normal
+	float Timer = 0.f;                                      // elapsed time in current phase
+	float PhaseDuration = 0.f;                               // duration of current phase (seconds)
+	float PullEndX = 0.f, PullEndY = 0.f, PullEndZ = 0.f; // Jolt coords, final position after pull (onto ledge top)
+	float PullDuration = 0.f;                                // cached from profile
+	float LandDuration = 0.f;                                // cached from profile
+	uint8 Phase = 0;     // 0=GrabTransition, 1=Rise, 2=Pull, 3=Land, 4=Hanging
+	uint8 MantleType = 0; // 0=Vault, 1=Mantle, 2=LedgeGrab
 };

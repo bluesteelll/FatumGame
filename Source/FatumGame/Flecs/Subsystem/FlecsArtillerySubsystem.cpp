@@ -79,6 +79,8 @@ void UFlecsArtillerySubsystem::RegisterCharacterBridge(AFlecsCharacter* Characte
 	Bridge.InputAtomics = Character->InputAtomics;
 	Bridge.CharacterKey = Character->CharacterKey;
 	Bridge.SlideActive = Character->SlideActiveAtomic;
+	Bridge.MantleActive = Character->MantleActiveAtomic;
+	Bridge.Hanging = Character->HangingAtomic;
 
 	// Resolve Flecs entity for this character (bidirectional binding already set)
 	Bridge.Entity = GetEntityForBarrageKey(Character->CharacterKey);
@@ -151,6 +153,118 @@ void UFlecsArtillerySubsystem::PrepareCharacterStep(float DeltaTime)
 		{
 			FBChar->mLocomotionUpdate = JPH::Vec3::sZero();
 			continue;
+		}
+
+		// 2.5. Mantle/Vault/LedgeGrab position control (sim-thread owned)
+		FMantleInstance* Mantle = Bridge.Entity.try_get_mut<FMantleInstance>();
+		bool bMantling = false;
+		bool bHanging = false;
+		if (Mantle)
+		{
+			bMantling = true;
+			Mantle->Timer += DeltaTime;
+
+			if (Mantle->Phase == 4) // Hanging
+			{
+				bHanging = true;
+				// Pin position — override CharacterVirtual to hang position
+				JPH::Vec3 HangPos(Mantle->EndX, Mantle->EndY, Mantle->EndZ);
+				FBChar->mCharacter->SetPosition(HangPos);
+				FBChar->mLocomotionUpdate = JPH::Vec3::sZero();
+				// Zero velocity to prevent gravity accumulation during hang.
+				FBChar->mCharacter->SetLinearVelocity(JPH::Vec3::sZero());
+
+				// Check timeout (LedgeGrabMaxDuration=0 means infinite)
+				float MaxDur = MS->LedgeGrabMaxDuration;
+				if (MaxDur > 0.f && Mantle->Timer > MaxDur)
+				{
+					Bridge.Entity.remove<FMantleInstance>();
+					bMantling = false;
+					bHanging = false;
+				}
+			}
+			else if (Mantle->Phase <= 3) // GrabTransition, Rise, Pull, Land
+			{
+				float Alpha = FMath::Clamp(Mantle->Timer / FMath::Max(Mantle->PhaseDuration, 0.001f), 0.f, 1.f);
+
+				// Ease curves: Rise=EaseOut, Pull=EaseInOut, GrabTransition=EaseInOut, Land=linear
+				float EasedAlpha;
+				if (Mantle->Phase == 1) // Rise
+					EasedAlpha = 1.f - (1.f - Alpha) * (1.f - Alpha); // EaseOut quadratic
+				else if (Mantle->Phase == 0 || Mantle->Phase == 2) // GrabTransition or Pull
+					EasedAlpha = Alpha * Alpha * (3.f - 2.f * Alpha); // Smoothstep
+				else
+					EasedAlpha = Alpha; // Land: linear
+
+				// Lerp position
+				JPH::Vec3 Start(Mantle->StartX, Mantle->StartY, Mantle->StartZ);
+				JPH::Vec3 End(Mantle->EndX, Mantle->EndY, Mantle->EndZ);
+				JPH::Vec3 LerpedPos = Start + (End - Start) * EasedAlpha;
+				FBChar->mCharacter->SetPosition(LerpedPos);
+				FBChar->mLocomotionUpdate = JPH::Vec3::sZero();
+				// Zero velocity during lerp phases too
+				FBChar->mCharacter->SetLinearVelocity(JPH::Vec3::sZero());
+
+				// Phase completion
+				if (Mantle->Timer >= Mantle->PhaseDuration)
+				{
+					Mantle->Timer = 0.f;
+
+					// GrabTransition → Hanging (skip Rise/Pull/Land for initial LedgeGrab)
+					if (Mantle->Phase == 0 && Mantle->MantleType == 2)
+					{
+						Mantle->Phase = 4; // Jump directly to Hanging
+						bHanging = true;
+					}
+					else
+					{
+						Mantle->Phase++;
+
+						if (Mantle->Phase == 2) // Rise→Pull transition
+						{
+							Mantle->StartX = Mantle->EndX;
+							Mantle->StartY = Mantle->EndY;
+							Mantle->StartZ = Mantle->EndZ;
+							Mantle->EndX = Mantle->PullEndX;
+							Mantle->EndY = Mantle->PullEndY;
+							Mantle->EndZ = Mantle->PullEndZ;
+							Mantle->PhaseDuration = Mantle->PullDuration;
+						}
+						else if (Mantle->Phase == 3) // Pull→Land (hold at pull-end position)
+						{
+							Mantle->StartX = Mantle->PullEndX; Mantle->StartY = Mantle->PullEndY; Mantle->StartZ = Mantle->PullEndZ;
+							Mantle->EndX   = Mantle->PullEndX; Mantle->EndY   = Mantle->PullEndY; Mantle->EndZ   = Mantle->PullEndZ;
+							Mantle->PhaseDuration = Mantle->LandDuration;
+						}
+						else if (Mantle->Phase == 4) // Land→complete or Hanging
+						{
+							if (Mantle->MantleType == 2) // LedgeGrab after pull-up → re-hang
+							{
+								bHanging = true;
+								Mantle->Timer = 0.f;
+							}
+							else // Vault/Mantle complete
+							{
+								Bridge.Entity.remove<FMantleInstance>();
+								bMantling = false;
+							}
+						}
+						else if (Mantle->Phase > 4)
+						{
+							Bridge.Entity.remove<FMantleInstance>();
+							bMantling = false;
+						}
+					}
+				}
+			}
+		}
+		Bridge.MantleActive->store(bMantling, std::memory_order_relaxed);
+		Bridge.Hanging->store(bHanging, std::memory_order_relaxed);
+
+		if (bMantling)
+		{
+			Bridge.SlideActive->store(false, std::memory_order_relaxed);
+			continue; // skip normal locomotion
 		}
 
 		// 3. Slide deceleration (sim-thread owned)

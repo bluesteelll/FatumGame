@@ -109,6 +109,43 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Camera", meta = (ClampMin = "0", ClampMax = "2000"))
 	float LandingMinFallSpeed = 300.f;
 
+	// ── Head Bob ──
+
+	/** Vertical bob amplitude (cm). Vert freq = 2x horiz freq → figure-8 Lissajous. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Camera|HeadBob", meta = (ClampMin = "0", ClampMax = "15"))
+	float BobVerticalAmplitude = 3.f;
+
+	/** Horizontal bob amplitude (cm). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Camera|HeadBob", meta = (ClampMin = "0", ClampMax = "10"))
+	float BobHorizontalAmplitude = 1.5f;
+
+	/** Vertical oscillation frequency (Hz). Horizontal = half this.
+	 *  ~2 Hz = walking pace (~4 steps/sec, half-cycle per step). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Camera|HeadBob", meta = (ClampMin = "0.5", ClampMax = "10"))
+	float BobVerticalFrequency = 2.f;
+
+	/** Amplitude multiplier during sprint. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Camera|HeadBob", meta = (ClampMin = "0.5", ClampMax = "3"))
+	float BobSprintMultiplier = 1.4f;
+
+	/** Amplitude multiplier during crouch walk. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Camera|HeadBob", meta = (ClampMin = "0", ClampMax = "1"))
+	float BobCrouchMultiplier = 0.5f;
+
+	/** FInterpTo speed for bob amplitude fade in/out. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Camera|HeadBob", meta = (ClampMin = "1", ClampMax = "30"))
+	float BobInterpSpeed = 10.f;
+
+	// ── Slide Tilt ──
+
+	/** Max camera roll during slide (degrees). Direction follows lateral velocity. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Camera|SlideTilt", meta = (ClampMin = "0", ClampMax = "15"))
+	float SlideCameraTiltAngle = 5.f;
+
+	/** FInterpTo speed for slide tilt transition. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Camera|SlideTilt", meta = (ClampMin = "1", ClampMax = "30"))
+	float SlideTiltInterpSpeed = 8.f;
+
 	// ═══════════════════════════════════════════════════════════════
 	// POSTURE
 	// ═══════════════════════════════════════════════════════════════
@@ -188,6 +225,80 @@ public:
 	/** Ground friction override during slide (low = slippery). Multiplied by 100 for BrakingDeceleration. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slide", meta = (ClampMin = "0", ClampMax = "1"))
 	float SlideGroundFriction = 0.1f;
+
+	// ═══════════════════════════════════════════════════════════════
+	// MANTLE / VAULT
+	// ═══════════════════════════════════════════════════════════════
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Mantle", meta = (ClampMin = "40", ClampMax = "150"))
+	float MantleForwardReach = 80.f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Mantle", meta = (ClampMin = "20", ClampMax = "100"))
+	float MantleMinHeight = 50.f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Mantle", meta = (ClampMin = "50", ClampMax = "200"))
+	float MantleVaultMaxHeight = 120.f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Mantle", meta = (ClampMin = "100", ClampMax = "350"))
+	float MantleMaxHeight = 220.f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Mantle", meta = (ClampMin = "0.1", ClampMax = "1.0"))
+	float MantleRiseDuration = 0.25f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Mantle", meta = (ClampMin = "0.1", ClampMax = "1.0"))
+	float MantlePullDuration = 0.3f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Mantle", meta = (ClampMin = "0.05", ClampMax = "0.5"))
+	float MantleLandDuration = 0.1f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Mantle", meta = (ClampMin = "0", ClampMax = "1"))
+	float VaultSpeedMultiplier = 0.8f;
+
+	/** Eye height during mantle/vault transition */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Mantle", meta = (ClampMin = "5", ClampMax = "80"))
+	float MantleEyeHeight = 35.f;
+
+	/** FInterpTo speed for mantle eye height */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Mantle", meta = (ClampMin = "1", ClampMax = "30"))
+	float MantleTransitionSpeed = 14.f;
+
+	// ═══════════════════════════════════════════════════════════════
+	// LEDGE GRAB
+	// ═══════════════════════════════════════════════════════════════
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "LedgeGrab", meta = (ClampMin = "100", ClampMax = "300"))
+	float LedgeGrabMaxHeight = 236.f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "LedgeGrab", meta = (ClampMin = "5", ClampMax = "30"))
+	float LedgeGrabDetectionRadius = 12.f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "LedgeGrab", meta = (ClampMin = "5", ClampMax = "50"))
+	float LedgeGrabMinLedgeDepth = 15.f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "LedgeGrab", meta = (ClampMin = "0.05", ClampMax = "0.3"))
+	float LedgeGrabTransitionDuration = 0.13f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "LedgeGrab")
+	bool bUseLedgeHangTimeout = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "LedgeGrab", meta = (ClampMin = "1", ClampMax = "30", EditCondition = "bUseLedgeHangTimeout"))
+	float LedgeHangMaxDuration = 5.f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "LedgeGrab", meta = (ClampMin = "0.1", ClampMax = "1.0"))
+	float LedgeGrabCooldown = 0.3f;
+
+	/** Eye height while hanging (cm below ledge top) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "LedgeGrab", meta = (ClampMin = "10", ClampMax = "40"))
+	float LedgeHangCameraBelowLedge = 20.f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "LedgeGrab", meta = (ClampMin = "100", ClampMax = "800"))
+	float WallJumpHorizontalForce = 400.f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "LedgeGrab", meta = (ClampMin = "100", ClampMax = "800"))
+	float WallJumpVerticalForce = 400.f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "LedgeGrab", meta = (ClampMin = "0.2", ClampMax = "1.0"))
+	float PullUpDuration = 0.45f;
 
 	// ═══════════════════════════════════════════════════════════════
 	// HELPERS
