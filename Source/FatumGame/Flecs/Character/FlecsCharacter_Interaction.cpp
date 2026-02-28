@@ -1,11 +1,12 @@
-// Interaction state machine implementation for AFlecsCharacter.
-// Handles Focus (camera + UI), Hold (progress bar), and Instant (pickup/toggle/destroy) interactions.
+// Interaction implementation for AFlecsCharacter.
+// Detection (10Hz Barrage raycast), state machine (Focus/Hold/Instant), camera transitions.
 
 #include "FlecsCharacter.h"
 #include "FlecsInteractionProfile.h"
 #include "FlecsEntityDefinition.h"
 #include "FlecsArtillerySubsystem.h"
 #include "FlecsStaticComponents.h"
+#include "FlecsGameTags.h"
 #include "FlecsInteractionLibrary.h"
 #include "FlecsMessageSubsystem.h"
 #include "FlecsUIMessages.h"
@@ -653,3 +654,217 @@ void AFlecsCharacter::ForceCancelInteraction()
 
 // Dispatch functions moved to UFlecsInteractionLibrary (FlecsInteractionLibrary.h/cpp).
 // Character now calls Library static methods with FOnContainerOpened callback for UI.
+
+// ═══════════════════════════════════════════════════════════════════════════
+// INIT / CLEANUP (called from BeginPlay / EndPlay)
+// ═══════════════════════════════════════════════════════════════════════════
+
+void AFlecsCharacter::InitInteractionTrace()
+{
+	GetWorld()->GetTimerManager().SetTimer(
+		InteractionTraceTimerHandle,
+		this,
+		&AFlecsCharacter::PerformInteractionTrace,
+		0.1f, // 10 Hz
+		true   // looping
+	);
+}
+
+void AFlecsCharacter::CleanupInteraction()
+{
+	if (InteractionState != EInteractionState::Gameplay)
+	{
+		CloseFocusPanel();
+		RestoreCameraControl();
+		InteractionState = EInteractionState::Gameplay;
+		ActiveInteractionProfile = nullptr;
+		ActiveInteractionTargetKey = FSkeletonKey();
+	}
+
+	GetWorld()->GetTimerManager().ClearTimer(InteractionTraceTimerHandle);
+	CurrentInteractionTarget = FSkeletonKey();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// INTERACTION DETECTION (10 Hz Barrage raycast)
+// ═══════════════════════════════════════════════════════════════════════════
+
+void AFlecsCharacter::PerformInteractionTrace()
+{
+	APlayerController* PC = Cast<APlayerController>(Controller);
+	if (!PC) return;
+
+	UBarrageDispatch* Barrage = GetWorld()->GetSubsystem<UBarrageDispatch>();
+	UFlecsArtillerySubsystem* FlecsSubsystem = GetWorld()->GetSubsystem<UFlecsArtillerySubsystem>();
+	if (!Barrage || !FlecsSubsystem) return;
+
+	// Get camera viewpoint
+	FVector CameraLocation;
+	FRotator CameraRotation;
+	PC->GetPlayerViewPoint(CameraLocation, CameraRotation);
+	FVector Direction = CameraRotation.Vector();
+
+	// Set up filters: detect MOVING layer objects, ignore self
+	auto BroadPhaseFilter = Barrage->GetDefaultBroadPhaseLayerFilter(Layers::MOVING);
+	auto ObjectFilter = Barrage->GetDefaultLayerFilter(Layers::MOVING);
+	FBarrageKey CharBarrageKey = Barrage->GetBarrageKeyFromSkeletonKey(CharacterKey);
+	auto BodyFilter = Barrage->GetFilterToIgnoreSingleBody(CharBarrageKey);
+
+	// Cast ray/sphere
+	TSharedPtr<FHitResult> HitResult = MakeShared<FHitResult>();
+
+	if (bUseSphereTrace)
+	{
+		Barrage->SphereCast(
+			InteractionSphereRadius,
+			MaxInteractionDistance,
+			CameraLocation,
+			Direction,
+			HitResult,
+			BroadPhaseFilter, ObjectFilter, BodyFilter);
+	}
+	else
+	{
+		Barrage->CastRay(
+			CameraLocation,
+			Direction * MaxInteractionDistance,
+			BroadPhaseFilter, ObjectFilter, BodyFilter,
+			HitResult);
+	}
+
+	FSkeletonKey NewTarget;
+
+	if (HitResult->bBlockingHit)
+	{
+		// Convert BodyID → BarrageKey → SkeletonKey → Flecs entity
+		FBarrageKey HitBarrageKey = Barrage->GetBarrageKeyFromFHitResult(HitResult);
+		FBLet Prim = Barrage->GetShapeRef(HitBarrageKey);
+		if (FBarragePrimitive::IsNotNull(Prim))
+		{
+			FSkeletonKey HitKey = Prim->KeyOutOfBarrage;
+			flecs::entity HitEntity = FlecsSubsystem->GetEntityForBarrageKey(HitKey);
+
+			if (HitEntity.is_valid() && HitEntity.has<FTagInteractable>() && !HitEntity.has<FTagDead>())
+			{
+				// Check interaction range from InteractionStatic
+				const FInteractionStatic* InterStatic = HitEntity.try_get<FInteractionStatic>();
+				float MaxRange = InterStatic ? InterStatic->MaxRange : MaxInteractionDistance;
+
+				if (HitResult->Distance <= MaxRange)
+				{
+					// Check angle restriction
+					bool bAngleOk = true;
+
+					// Resolve angle constraint: per-instance override > prefab default
+					bool bHasAngleRestriction = false;
+					float AngleCosine = 0.f;
+					FVector AngleDir = FVector::ForwardVector;
+
+					const FInteractionAngleOverride* AngleOverride = HitEntity.try_get<FInteractionAngleOverride>();
+					if (AngleOverride)
+					{
+						bHasAngleRestriction = true;
+						AngleCosine = AngleOverride->AngleCosine;
+						AngleDir = AngleOverride->Direction;
+					}
+					else if (InterStatic && InterStatic->bRestrictAngle)
+					{
+						bHasAngleRestriction = true;
+						AngleCosine = InterStatic->AngleCosine;
+						AngleDir = InterStatic->AngleDirection;
+					}
+
+					if (bHasAngleRestriction)
+					{
+						// Get entity rotation to transform local direction to world space
+						FQuat EntityRot = FQuat(FBarragePrimitive::OptimisticGetAbsoluteRotation(Prim));
+						FVector WorldAngleDir = EntityRot.RotateVector(AngleDir);
+
+						// Vector from camera to entity (matches FocusCameraPosition convention:
+						// camera sits behind the "front" face and looks toward it)
+						FVector EntityPos = FVector(FBarragePrimitive::GetPosition(Prim));
+						FVector ToEntity = (EntityPos - CameraLocation).GetSafeNormal();
+
+						float Dot = FVector::DotProduct(WorldAngleDir, ToEntity);
+						bAngleOk = (Dot >= AngleCosine);
+
+						UE_LOG(LogTemp, Warning, TEXT("AngleCheck: EntityPos=%s CamPos=%s ToEntity=%s WorldDir=%s Dot=%.3f Cos=%.3f Ok=%d"),
+							*EntityPos.ToString(), *CameraLocation.ToString(), *ToEntity.ToString(),
+							*WorldAngleDir.ToString(), Dot, AngleCosine, bAngleOk);
+					}
+
+					if (bAngleOk)
+					{
+						NewTarget = HitKey;
+					}
+				}
+			}
+		}
+	}
+
+	// Fire event if target changed
+	if (NewTarget != CurrentInteractionTarget)
+	{
+		CurrentInteractionTarget = NewTarget;
+
+		// Cache interaction prompt (avoids cross-thread reads later)
+		if (NewTarget.IsValid())
+		{
+			flecs::entity TargetEntity = FlecsSubsystem->GetEntityForBarrageKey(NewTarget);
+			if (TargetEntity.is_valid())
+			{
+				const FEntityDefinitionRef* DefRef = TargetEntity.try_get<FEntityDefinitionRef>();
+				if (DefRef && DefRef->Definition && DefRef->Definition->InteractionProfile)
+				{
+					CachedInteractionPrompt = DefRef->Definition->InteractionProfile->InteractionPrompt;
+					CachedInteractionType = DefRef->Definition->InteractionProfile->InteractionType;
+					CachedHoldDuration = DefRef->Definition->InteractionProfile->HoldDuration;
+				}
+				else
+				{
+					CachedInteractionPrompt = NSLOCTEXT("Interaction", "Fallback", "Press E");
+					CachedInteractionType = EInteractionType::Instant;
+					CachedHoldDuration = 0.f;
+				}
+			}
+			UE_LOG(LogTemp, Log, TEXT("Interaction: Target acquired Key=%llu"), static_cast<uint64>(NewTarget));
+		}
+		else
+		{
+			CachedInteractionPrompt = FText::GetEmpty();
+			CachedInteractionType = EInteractionType::Instant;
+			CachedHoldDuration = 0.f;
+
+			// Auto-close loot panel when target lost (walked away)
+			if (IsLootOpen())
+			{
+				CloseLootPanel();
+			}
+		}
+
+		OnInteractionTargetChanged(NewTarget.IsValid(), NewTarget);
+
+		// Broadcast to message system (game thread — direct broadcast)
+		if (UFlecsMessageSubsystem* MsgSub = UFlecsMessageSubsystem::Get(this))
+		{
+			FUIInteractionMessage InterMsg;
+			InterMsg.bHasTarget = NewTarget.IsValid();
+			InterMsg.TargetKey = NewTarget;
+			InterMsg.InteractionType = static_cast<uint8>(CachedInteractionType);
+			InterMsg.HoldDuration = CachedHoldDuration;
+			if (NewTarget.IsValid())
+			{
+				flecs::entity E = FlecsSubsystem->GetEntityForBarrageKey(NewTarget);
+				InterMsg.EntityId = E.is_valid() ? static_cast<int64>(E.id()) : 0;
+			}
+			MsgSub->BroadcastMessage(TAG_UI_Interaction, InterMsg);
+		}
+	}
+}
+
+// TryInteract() removed — replaced by HandleInteractionInput() above.
+
+FText AFlecsCharacter::GetInteractionPrompt() const
+{
+	return CachedInteractionPrompt;
+}

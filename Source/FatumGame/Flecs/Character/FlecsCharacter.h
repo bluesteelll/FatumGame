@@ -505,6 +505,18 @@ private:
 	void SyncMovementStateToECS();
 
 	// ─────────────────────────────────────────────────────────
+	// INIT / CLEANUP (called from BeginPlay/EndPlay, implemented in respective .cpp files)
+	// ─────────────────────────────────────────────────────────
+	void InitCamera();
+	void InitECSRegistration();
+	void InitInventoryContainers();  // in FlecsCharacter_UI.cpp
+	void InitInteractionTrace();     // in FlecsCharacter_Interaction.cpp
+	void InitUI();                   // in FlecsCharacter_UI.cpp
+	void CleanupUI();                // in FlecsCharacter_UI.cpp
+	void CleanupInteraction();       // in FlecsCharacter_Interaction.cpp
+	void UnregisterFromECS();
+
+	// ─────────────────────────────────────────────────────────
 	// BARRAGE CHARACTER BRIDGE
 	// InputAtomics: game→sim (written by Move(), read by PrepareCharacterStep)
 	// Position readback: direct Jolt read in Tick() (before CameraManager)
