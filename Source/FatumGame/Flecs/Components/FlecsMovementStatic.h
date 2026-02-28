@@ -5,10 +5,15 @@
 
 #pragma once
 
+class UFlecsMovementProfile;
+
 // PREFAB component: one per character type, populated from UFlecsMovementProfile at entity creation.
 // Read by PrepareCharacterStep on sim thread.
 struct FMovementStatic
 {
+	/** Create from a UFlecsMovementProfile Data Asset (game thread only). */
+	static FMovementStatic FromProfile(const UFlecsMovementProfile* Profile);
+
 	float WalkSpeed = 300.f;
 	float SprintSpeed = 600.f;
 	float CrouchSpeed = 150.f;

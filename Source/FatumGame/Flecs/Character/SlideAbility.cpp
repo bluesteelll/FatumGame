@@ -3,6 +3,7 @@
 // in PrepareCharacterStep. This class handles visuals, capsule, and input routing.
 
 #include "SlideAbility.h"
+#include "AbilityCapsuleHelper.h"
 #include "FatumMovementComponent.h"
 #include "FlecsMovementProfile.h"
 #include "FlecsMovementStatic.h"
@@ -58,27 +59,11 @@ void USlideAbility::OnActivated()
 		}
 	}
 
-	// Visual: shrink capsule to crouch dimensions
-	float OldHH = Char->GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
-	Char->GetCapsuleComponent()->SetCapsuleSize(
-		Profile->CrouchRadius, Profile->CrouchHalfHeight, true);
+	// Shrink capsule to crouch dimensions (shared helper)
+	AbilityCapsuleHelper::ShrinkToCrouch(Char, OwnerCMC, Profile);
 
-	float HeightDelta = Profile->CrouchHalfHeight - OldHH;
-	if (!FMath::IsNearlyZero(HeightDelta))
-	{
-		FVector Loc = Char->GetActorLocation();
-		Loc.Z += HeightDelta;
-		Char->SetActorLocation(Loc);
-
-		OwnerCMC->GetPostureSM().CurrentEyeHeight -= HeightDelta;
-	}
-
-	// Set posture to Crouching so external queries see correct state
-	OwnerCMC->GetPostureSM().CurrentPosture = ECharacterPosture::Crouching;
+	// Override eye height target for slide (helper sets it to crouch default)
 	OwnerCMC->GetPostureSM().TargetEyeHeight = Profile->SlideEyeHeight;
-
-	// Sync Barrage capsule shape
-	OwnerCMC->BroadcastPostureChanged(ECharacterPosture::Crouching);
 }
 
 void USlideAbility::OnTick(float DeltaTime)
@@ -124,51 +109,8 @@ void USlideAbility::OnDeactivated()
 		}
 	}
 
-	// Visual: determine target posture after slide
-	ECharacterPosture TargetPosture;
-	if (bSlideCrouchHeld)
-	{
-		TargetPosture = ECharacterPosture::Crouching;
-	}
-	else if (OwnerCMC->CanExpandToHeight(Profile->StandingHalfHeight))
-	{
-		TargetPosture = ECharacterPosture::Standing;
-	}
-	else
-	{
-		TargetPosture = ECharacterPosture::Crouching;
-	}
-
-	float OldHH = Char->GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
-	float R, HH;
-	Profile->GetCapsuleForPosture(TargetPosture, R, HH);
-	Char->GetCapsuleComponent()->SetCapsuleSize(R, HH, true);
-
-	float HeightDelta = HH - OldHH;
-	if (!FMath::IsNearlyZero(HeightDelta) && OwnerCMC->IsMovingOnGround())
-	{
-		FVector Loc = Char->GetActorLocation();
-		Loc.Z += HeightDelta;
-		Char->SetActorLocation(Loc);
-
-		OwnerCMC->GetPostureSM().CurrentEyeHeight -= HeightDelta;
-	}
-
-	// Sync PostureSM state
-	FPostureStateMachine& SM = OwnerCMC->GetPostureSM();
-	SM.CurrentPosture = TargetPosture;
-	SM.TargetEyeHeight = Profile->GetEyeHeightForPosture(TargetPosture);
-
-	if (TargetPosture == ECharacterPosture::Crouching)
-	{
-		SM.RequestCrouch(true, Profile);
-	}
-	else
-	{
-		SM.ForceClearCrouch();
-	}
-
-	OwnerCMC->BroadcastPostureChanged(TargetPosture);
+	// Restore capsule to best-fit posture (shared helper)
+	AbilityCapsuleHelper::RestoreFromCrouch(Char, OwnerCMC, Profile, !bSlideCrouchHeld);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -197,11 +139,12 @@ bool USlideAbility::HandleJumpRequest()
 	return true;
 }
 
-void USlideAbility::OnCrouchInput(bool bPressed)
+bool USlideAbility::HandleCrouchInput(bool bPressed)
 {
 	bSlideCrouchHeld = bPressed;
 	if (!bPressed)
 	{
 		OwnerCMC->DeactivateAbility();
 	}
+	return true;
 }

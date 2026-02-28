@@ -7,6 +7,7 @@
 
 #include "CoreMinimal.h"
 #include "MovementAbility.h"
+#include "LedgeDetector.h"
 #include "MantleAbility.generated.h"
 
 UENUM()
@@ -15,17 +16,6 @@ enum class EMantleType : uint8
 	Vault,
 	Mantle,
 	LedgeGrab
-};
-
-/** Cached result of the 5-phase ledge detection algorithm. */
-struct FLedgeCandidate
-{
-	FVector LedgeTopPoint = FVector::ZeroVector;   // UE world
-	FVector WallHitPoint = FVector::ZeroVector;    // UE world
-	FVector WallNormal = FVector::ForwardVector;   // UE world, unit
-	float LedgeHeight = 0.f;                       // cm above character feet
-	bool bCanPullUp = false;
-	bool bValid = false;
 };
 
 UCLASS()
@@ -49,6 +39,7 @@ public:
 
 	virtual bool OwnsPosture() const override { return true; }
 	virtual bool HandleJumpRequest() override;
+	virtual bool HandleCrouchInput(bool bPressed) override;
 	virtual ECharacterMoveMode GetMoveMode() const override;
 
 	// =====================================================================

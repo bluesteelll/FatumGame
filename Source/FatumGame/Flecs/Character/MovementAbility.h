@@ -65,6 +65,9 @@ public:
 	/** Return true if this ability consumed the jump request. */
 	virtual bool HandleJumpRequest() { return false; }
 
+	/** Handle crouch input while ability is active. Return true if consumed. */
+	virtual bool HandleCrouchInput(bool bPressed) { return false; }
+
 	// ═══════════════════════════════════════════════════════════════
 	// IDENTITY
 	// ═══════════════════════════════════════════════════════════════

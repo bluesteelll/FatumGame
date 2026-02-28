@@ -2,6 +2,8 @@
 #include "MovementAbility.h"
 #include "SlideAbility.h"
 #include "MantleAbility.h"
+#include "FlecsCharacter.h"
+#include "FlecsArtillerySubsystem.h"
 #include "GameFramework/PlayerController.h"
 #include "FlecsMovementProfile.h"
 #include "GameFramework/Character.h"
@@ -130,6 +132,34 @@ bool UFatumMovementComponent::CanExpandToHeight(float TargetHalfHeight) const
 void UFatumMovementComponent::BroadcastPostureChanged(ECharacterPosture Posture)
 {
 	OnPostureChanged.Broadcast(Posture);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CHARACTER ACCESSORS (delegate to AFlecsCharacter)
+// ═══════════════════════════════════════════════════════════════════════════
+
+void UFatumMovementComponent::SetFeetToActorOffset(float Value)
+{
+	AFlecsCharacter* FC = Cast<AFlecsCharacter>(GetCharacterOwner());
+	if (FC) FC->SetFeetToActorOffset(Value);
+}
+
+FSkeletonKey UFatumMovementComponent::GetCharacterEntityKey() const
+{
+	const AFlecsCharacter* FC = Cast<AFlecsCharacter>(GetCharacterOwner());
+	return FC ? FC->GetEntityKey() : FSkeletonKey();
+}
+
+TSharedPtr<FBarragePrimitive> UFatumMovementComponent::GetCharacterBarrageBody() const
+{
+	const AFlecsCharacter* FC = Cast<AFlecsCharacter>(GetCharacterOwner());
+	return FC ? FC->GetCachedBarrageBody() : nullptr;
+}
+
+UFlecsArtillerySubsystem* UFatumMovementComponent::GetFlecsSubsystem() const
+{
+	UWorld* World = GetWorld();
+	return World ? World->GetSubsystem<UFlecsArtillerySubsystem>() : nullptr;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -486,27 +516,17 @@ void UFatumMovementComponent::RequestJump()
 			float HH = Char->GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
 			FVector FeetPos = Char->GetActorLocation() - FVector(0, 0, HH);
 			float Radius = Char->GetCapsuleComponent()->GetScaledCapsuleRadius();
-
-			UE_LOG(LogTemp, Warning, TEXT("Mantle: RequestJump grounded - FeetPos=(%.1f,%.1f,%.1f) HH=%.1f R=%.1f Cooldown=%.2f"),
-				FeetPos.X, FeetPos.Y, FeetPos.Z, HH, Radius, MantleAbil->GetCooldownRemaining());
-
 			MantleAbil->PerformDetection(FeetPos, LookDir, Radius, HH);
 		}
 		// Airborne: CachedCandidate already populated by 10Hz timer
 
 		if (MantleAbil->CanActivate())
 		{
-			UE_LOG(LogTemp, Warning, TEXT("Mantle: ACTIVATING ability"));
 			ActivateAbility(MantleAbil);
 			CoyoteTimer = 0.f;
 			JumpBufferTimer = 0.f;
 			bJumpedIntentionally = true;
 			return;
-		}
-		else
-		{
-			UE_LOG(LogTemp, Warning, TEXT("Mantle: CanActivate=false (valid=%d cooldown=%.2f)"),
-				MantleAbil->GetCachedCandidate().bValid, MantleAbil->GetCooldownRemaining());
 		}
 	}
 
@@ -552,20 +572,9 @@ void UFatumMovementComponent::RequestCrouch(bool bPressed)
 {
 	check(MovementProfile);
 
-	// Active mantle/hang: crouch = let go / cancel
-	if (auto* MA = Cast<UMantleAbility>(ActiveAbility))
+	// Active ability intercepts crouch input (slide, mantle, etc.)
+	if (ActiveAbility && ActiveAbility->HandleCrouchInput(bPressed))
 	{
-		if (bPressed)
-		{
-			MA->RequestLetGo();
-		}
-		return;
-	}
-
-	// Active slide ability intercepts crouch input
-	if (auto* Slide = Cast<USlideAbility>(ActiveAbility))
-	{
-		Slide->OnCrouchInput(bPressed);
 		return;
 	}
 

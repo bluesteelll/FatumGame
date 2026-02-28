@@ -37,9 +37,7 @@ public:
 	// ═══════════════════════════════════════════════════════════════
 
 	virtual bool HandleJumpRequest() override;
-
-	/** Called by CMC on crouch input while slide is active. */
-	void OnCrouchInput(bool bPressed);
+	virtual bool HandleCrouchInput(bool bPressed) override;
 
 private:
 	bool bSlideCrouchHeld = false;

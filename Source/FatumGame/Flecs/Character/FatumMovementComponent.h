@@ -8,10 +8,12 @@
 #include "GameFramework/CharacterMovementComponent.h"
 #include "FlecsMovementComponents.h"
 #include "FPostureStateMachine.h"
+#include "SkeletonTypes.h"
 #include "FatumMovementComponent.generated.h"
 
 class UFlecsMovementProfile;
 class UMovementAbility;
+class FBarragePrimitive;
 
 DECLARE_MULTICAST_DELEGATE_OneParam(FOnPostureChanged, ECharacterPosture /*NewPosture*/);
 
@@ -132,6 +134,23 @@ public:
 
 	/** Get the currently active ability (nullptr if none). */
 	UMovementAbility* GetActiveAbility() const { return ActiveAbility; }
+
+	// ═══════════════════════════════════════════════════════════════
+	// CHARACTER ACCESSORS (delegate to AFlecsCharacter — abilities
+	// use these instead of casting to AFlecsCharacter directly)
+	// ═══════════════════════════════════════════════════════════════
+
+	/** Set feet-to-actor Z offset (mantle forces this to CrouchHalfHeight). */
+	void SetFeetToActorOffset(float Value);
+
+	/** Get the character's SkeletonKey (invalid if not an AFlecsCharacter). */
+	FSkeletonKey GetCharacterEntityKey() const;
+
+	/** Get the character's cached Barrage body (nullptr if not available). */
+	TSharedPtr<FBarragePrimitive> GetCharacterBarrageBody() const;
+
+	/** Get the Flecs Artillery Subsystem (nullptr if not available). */
+	class UFlecsArtillerySubsystem* GetFlecsSubsystem() const;
 
 	// ═══════════════════════════════════════════════════════════════
 	// DELEGATE

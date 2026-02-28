@@ -23,7 +23,6 @@ class USpringArmComponent;
 class UCameraComponent;
 struct FInputActionValue;
 class FBarragePrimitive;
-class UMantleAbility;
 
 /** Game→sim input direction atomics. Written by AFlecsCharacter::Move every tick (latest-wins).
  *  Read by PrepareCharacterStep on sim thread. Lock-free, no queue buildup. */
@@ -389,6 +388,13 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Flecs")
 	int64 GetCharacterEntityId() const;
 
+	/** Set the feet-to-actor Z offset (used by mantle to force crouch offset). */
+	void SetFeetToActorOffset(float Value) { FeetToActorOffset = Value; }
+	float GetFeetToActorOffset() const { return FeetToActorOffset; }
+
+	/** Get cached Barrage body (read-only). */
+	TSharedPtr<FBarragePrimitive> GetCachedBarrageBody() const { return CachedBarrageBody; }
+
 	// ═══════════════════════════════════════════════════════════════
 	// EVENTS
 	// ═══════════════════════════════════════════════════════════════
@@ -544,7 +550,6 @@ private:
 	void ApplyBarrageSync(const FVector& FeetPos, uint8 GroundState, const FVector& Velocity, bool bSlideActive);
 
 	friend class UFlecsArtillerySubsystem;
-	friend class UMantleAbility;
 
 	/**
 	 * Pending weapon equip data (sim thread → game thread via atomics).

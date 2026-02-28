@@ -164,47 +164,8 @@ void AFlecsCharacter::BeginPlay()
 			FMovementStatic CapturedMS;
 			if (FatumMovement && FatumMovement->MovementProfile)
 			{
-				const UFlecsMovementProfile* MoveProf = FatumMovement->MovementProfile;
-				CapturedGravityScale = MoveProf->GravityScale;
-				CapturedMS.WalkSpeed = MoveProf->WalkSpeed;
-				CapturedMS.SprintSpeed = MoveProf->SprintSpeed;
-				CapturedMS.CrouchSpeed = MoveProf->CrouchSpeed;
-				CapturedMS.ProneSpeed = MoveProf->ProneSpeed;
-				CapturedMS.GroundAcceleration = MoveProf->GroundAcceleration;
-				CapturedMS.GroundDeceleration = MoveProf->GroundDeceleration;
-				CapturedMS.AirAcceleration = MoveProf->AirAcceleration;
-				CapturedMS.SprintAcceleration = MoveProf->SprintAcceleration;
-				CapturedMS.JumpVelocity = MoveProf->JumpVelocity;
-				CapturedMS.CrouchJumpVelocity = MoveProf->CrouchJumpVelocity;
-				CapturedMS.GravityScale = MoveProf->GravityScale;
-				CapturedMS.StandingHalfHeight = MoveProf->StandingHalfHeight;
-				CapturedMS.StandingRadius = MoveProf->StandingRadius;
-				CapturedMS.CrouchHalfHeight = MoveProf->CrouchHalfHeight;
-				CapturedMS.CrouchRadius = MoveProf->CrouchRadius;
-				CapturedMS.ProneHalfHeight = MoveProf->ProneHalfHeight;
-				CapturedMS.ProneRadius = MoveProf->ProneRadius;
-				CapturedMS.SlideMinEntrySpeed = MoveProf->SlideMinEntrySpeed;
-				CapturedMS.SlideDeceleration = MoveProf->SlideDeceleration;
-				CapturedMS.SlideMinExitSpeed = MoveProf->SlideMinExitSpeed;
-				CapturedMS.SlideMaxDuration = MoveProf->SlideMaxDuration;
-				CapturedMS.SlideInitialSpeedBoost = MoveProf->SlideInitialSpeedBoost;
-				CapturedMS.SlideMinAcceleration = MoveProf->SlideMinAcceleration;
-				// Mantle/Vault params
-				CapturedMS.MantleForwardReach = MoveProf->MantleForwardReach;
-				CapturedMS.MantleMinHeight = MoveProf->MantleMinHeight;
-				CapturedMS.MantleVaultMaxHeight = MoveProf->MantleVaultMaxHeight;
-				CapturedMS.MantleMaxHeight = MoveProf->MantleMaxHeight;
-				CapturedMS.MantleRiseDuration = MoveProf->MantleRiseDuration;
-				CapturedMS.MantlePullDuration = MoveProf->MantlePullDuration;
-				CapturedMS.MantleLandDuration = MoveProf->MantleLandDuration;
-				CapturedMS.VaultSpeedMultiplier = MoveProf->VaultSpeedMultiplier;
-				// Ledge Grab params
-				CapturedMS.LedgeGrabMaxHeight = MoveProf->LedgeGrabMaxHeight;
-				CapturedMS.LedgeGrabTransitionDuration = MoveProf->LedgeGrabTransitionDuration;
-				CapturedMS.LedgeGrabMaxDuration = MoveProf->bUseLedgeHangTimeout ? MoveProf->LedgeHangMaxDuration : 0.f;
-				CapturedMS.WallJumpHorizontalForce = MoveProf->WallJumpHorizontalForce;
-				CapturedMS.WallJumpVerticalForce = MoveProf->WallJumpVerticalForce;
-				CapturedMS.LedgeGrabCooldown = MoveProf->LedgeGrabCooldown;
+				CapturedMS = FMovementStatic::FromProfile(FatumMovement->MovementProfile);
+				CapturedGravityScale = CapturedMS.GravityScale;
 			}
 
 			TWeakObjectPtr<AFlecsCharacter> WeakSelf(this);
