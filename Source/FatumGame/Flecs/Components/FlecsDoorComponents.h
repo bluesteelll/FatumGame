@@ -6,6 +6,8 @@
 
 #include "CoreMinimal.h"
 
+class UFlecsDoorProfile;
+
 // ═══════════════════════════════════════════════════════════════
 // DOOR ENUMS
 // ═══════════════════════════════════════════════════════════════
@@ -111,6 +113,8 @@ struct FDoorStatic
 
 	/** Angular damping for the door body */
 	float AngularDamping = 0.5f;
+
+	static FDoorStatic FromProfile(const UFlecsDoorProfile* Profile);
 };
 
 // ═══════════════════════════════════════════════════════════════

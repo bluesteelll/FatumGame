@@ -40,38 +40,10 @@ int64 UFlecsConstraintLibrary::CreateFixedConstraint(
 	int64 KeyValue = ConstraintKey.Key;
 	FlecsSubsystem->EnqueueCommand([FlecsSubsystem, Entity1Key, Entity2Key, KeyValue, BreakForce, BreakTorque]()
 	{
-		flecs::world* FlecsWorld = FlecsSubsystem->GetFlecsWorld();
-		if (!FlecsWorld) return;
-
-		flecs::entity E1 = FlecsSubsystem->GetEntityForBarrageKey(Entity1Key);
-		if (E1.is_valid() && E1.is_alive())
-		{
-			if (!E1.has<FFlecsConstraintData>())
-			{
-				E1.set<FFlecsConstraintData>({});
-			}
-			FFlecsConstraintData* Data = E1.try_get_mut<FFlecsConstraintData>();
-			if (Data)
-			{
-				Data->AddConstraint(KeyValue, Entity2Key, BreakForce, BreakTorque);
-			}
-			E1.add<FTagConstrained>();
-		}
-
-		flecs::entity E2 = FlecsSubsystem->GetEntityForBarrageKey(Entity2Key);
-		if (E2.is_valid() && E2.is_alive())
-		{
-			if (!E2.has<FFlecsConstraintData>())
-			{
-				E2.set<FFlecsConstraintData>({});
-			}
-			FFlecsConstraintData* Data = E2.try_get_mut<FFlecsConstraintData>();
-			if (Data)
-			{
-				Data->AddConstraint(KeyValue, Entity1Key, BreakForce, BreakTorque);
-			}
-			E2.add<FTagConstrained>();
-		}
+		FlecsLibrary::RegisterConstraintOnEntity(
+			FlecsSubsystem->GetEntityForBarrageKey(Entity1Key), KeyValue, Entity2Key, BreakForce, BreakTorque);
+		FlecsLibrary::RegisterConstraintOnEntity(
+			FlecsSubsystem->GetEntityForBarrageKey(Entity2Key), KeyValue, Entity1Key, BreakForce, BreakTorque);
 	});
 
 	UE_LOG(LogTemp, Log, TEXT("CreateFixedConstraint: Created constraint %lld between %llu and %llu"),
@@ -110,28 +82,10 @@ int64 UFlecsConstraintLibrary::CreateHingeConstraint(
 	int64 KeyValue = ConstraintKey.Key;
 	FlecsSubsystem->EnqueueCommand([FlecsSubsystem, Entity1Key, Entity2Key, KeyValue, BreakForce]()
 	{
-		flecs::world* FlecsWorld = FlecsSubsystem->GetFlecsWorld();
-		if (!FlecsWorld) return;
-
-		auto UpdateEntity = [&](flecs::entity E, FSkeletonKey OtherKey)
-		{
-			if (E.is_valid() && E.is_alive())
-			{
-				if (!E.has<FFlecsConstraintData>())
-				{
-					E.set<FFlecsConstraintData>({});
-				}
-				FFlecsConstraintData* Data = E.try_get_mut<FFlecsConstraintData>();
-				if (Data)
-				{
-					Data->AddConstraint(KeyValue, OtherKey, BreakForce, 0.f);
-				}
-				E.add<FTagConstrained>();
-			}
-		};
-
-		UpdateEntity(FlecsSubsystem->GetEntityForBarrageKey(Entity1Key), Entity2Key);
-		UpdateEntity(FlecsSubsystem->GetEntityForBarrageKey(Entity2Key), Entity1Key);
+		FlecsLibrary::RegisterConstraintOnEntity(
+			FlecsSubsystem->GetEntityForBarrageKey(Entity1Key), KeyValue, Entity2Key, BreakForce, 0.f);
+		FlecsLibrary::RegisterConstraintOnEntity(
+			FlecsSubsystem->GetEntityForBarrageKey(Entity2Key), KeyValue, Entity1Key, BreakForce, 0.f);
 	});
 
 	return KeyValue;
@@ -173,28 +127,10 @@ int64 UFlecsConstraintLibrary::CreateDistanceConstraint(
 	int64 KeyValue = ConstraintKey.Key;
 	FlecsSubsystem->EnqueueCommand([FlecsSubsystem, Entity1Key, Entity2Key, KeyValue, BreakForce]()
 	{
-		flecs::world* FlecsWorld = FlecsSubsystem->GetFlecsWorld();
-		if (!FlecsWorld) return;
-
-		auto UpdateEntity = [&](flecs::entity E, FSkeletonKey OtherKey)
-		{
-			if (E.is_valid() && E.is_alive())
-			{
-				if (!E.has<FFlecsConstraintData>())
-				{
-					E.set<FFlecsConstraintData>({});
-				}
-				FFlecsConstraintData* Data = E.try_get_mut<FFlecsConstraintData>();
-				if (Data)
-				{
-					Data->AddConstraint(KeyValue, OtherKey, BreakForce, 0.f);
-				}
-				E.add<FTagConstrained>();
-			}
-		};
-
-		UpdateEntity(FlecsSubsystem->GetEntityForBarrageKey(Entity1Key), Entity2Key);
-		UpdateEntity(FlecsSubsystem->GetEntityForBarrageKey(Entity2Key), Entity1Key);
+		FlecsLibrary::RegisterConstraintOnEntity(
+			FlecsSubsystem->GetEntityForBarrageKey(Entity1Key), KeyValue, Entity2Key, BreakForce, 0.f);
+		FlecsLibrary::RegisterConstraintOnEntity(
+			FlecsSubsystem->GetEntityForBarrageKey(Entity2Key), KeyValue, Entity1Key, BreakForce, 0.f);
 	});
 
 	return KeyValue;
@@ -240,25 +176,10 @@ int64 UFlecsConstraintLibrary::CreatePointConstraint(
 	int64 KeyValue = ConstraintKey.Key;
 	FlecsSubsystem->EnqueueCommand([FlecsSubsystem, Entity1Key, Entity2Key, KeyValue, BreakForce, BreakTorque]()
 	{
-		auto UpdateEntity = [&](flecs::entity E, FSkeletonKey OtherKey)
-		{
-			if (E.is_valid() && E.is_alive())
-			{
-				if (!E.has<FFlecsConstraintData>())
-				{
-					E.set<FFlecsConstraintData>({});
-				}
-				FFlecsConstraintData* Data = E.try_get_mut<FFlecsConstraintData>();
-				if (Data)
-				{
-					Data->AddConstraint(KeyValue, OtherKey, BreakForce, BreakTorque);
-				}
-				E.add<FTagConstrained>();
-			}
-		};
-
-		UpdateEntity(FlecsSubsystem->GetEntityForBarrageKey(Entity1Key), Entity2Key);
-		UpdateEntity(FlecsSubsystem->GetEntityForBarrageKey(Entity2Key), Entity1Key);
+		FlecsLibrary::RegisterConstraintOnEntity(
+			FlecsSubsystem->GetEntityForBarrageKey(Entity1Key), KeyValue, Entity2Key, BreakForce, BreakTorque);
+		FlecsLibrary::RegisterConstraintOnEntity(
+			FlecsSubsystem->GetEntityForBarrageKey(Entity2Key), KeyValue, Entity1Key, BreakForce, BreakTorque);
 	});
 
 	return KeyValue;

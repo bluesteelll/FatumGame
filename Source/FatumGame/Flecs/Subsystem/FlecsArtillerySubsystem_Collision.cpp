@@ -224,14 +224,10 @@ void UFlecsArtillerySubsystem::OnBarrageContact(const BarrageContactEvent& Event
 		if (MaxBounces != 0) return;
 
 		// Don't kill if hitting own owner (projectile should pass through)
-		if (OtherEntityId != 0)
+		const FProjectileInstance* ProjInst = ProjEntity.try_get<FProjectileInstance>();
+		if (ProjInst && ProjInst->IsOwnedBy(OtherEntityId))
 		{
-			const FProjectileInstance* ProjInst = ProjEntity.try_get<FProjectileInstance>();
-			if (ProjInst && ProjInst->OwnerEntityId != 0
-				&& static_cast<uint64>(ProjInst->OwnerEntityId) == OtherEntityId)
-			{
-				return;
-			}
+			return;
 		}
 
 		// Store contact point for death VFX (physics position is post-bounce = wrong)

@@ -6,7 +6,7 @@
 #include "GameFramework/Character.h"
 #include "SkeletonTypes.h"
 #include "FlecsInteractionTypes.h"
-#include <atomic>
+#include "FlecsCharacterTypes.h"
 #include "FlecsCharacter.generated.h"
 
 class UFlecsEntityDefinition;
@@ -23,14 +23,6 @@ class USpringArmComponent;
 class UCameraComponent;
 struct FInputActionValue;
 class FBarragePrimitive;
-
-/** Game→sim input direction atomics. Written by AFlecsCharacter::Move every tick (latest-wins).
- *  Read by PrepareCharacterStep on sim thread. Lock-free, no queue buildup. */
-struct FCharacterInputAtomics
-{
-	std::atomic<float> DirX{0.f};  // world-space horizontal input (UE X = forward)
-	std::atomic<float> DirZ{0.f};  // world-space horizontal input (UE Y = right)
-};
 
 /**
  * Character fully integrated with Flecs ECS.

@@ -47,141 +47,31 @@ flecs::entity UFlecsArtillerySubsystem::GetOrCreateEntityPrefab(UFlecsEntityDefi
 	DefRef.Definition = EntityDefinition;
 	Prefab.set<FEntityDefinitionRef>(DefRef);
 
-	// Add static components based on profiles
-	if (UFlecsHealthProfile* HealthProfile = EntityDefinition->HealthProfile)
-	{
-		FHealthStatic HealthStatic;
-		HealthStatic.MaxHP = HealthProfile->MaxHealth;
-		HealthStatic.Armor = HealthProfile->Armor;
-		HealthStatic.RegenPerSecond = HealthProfile->RegenPerSecond;
-		HealthStatic.bDestroyOnDeath = HealthProfile->bDestroyOnDeath;
-		// Calculate ratio from absolute StartingHealth value
-		HealthStatic.StartingHPRatio = HealthProfile->StartingHealth > 0.f
-			? HealthProfile->StartingHealth / HealthProfile->MaxHealth
-			: 1.f;
-		Prefab.set<FHealthStatic>(HealthStatic);
-	}
+	// Add static components based on profiles (FromProfile factory methods)
+	if (EntityDefinition->HealthProfile)
+		Prefab.set<FHealthStatic>(FHealthStatic::FromProfile(EntityDefinition->HealthProfile));
 
-	if (UFlecsDamageProfile* DamageProfile = EntityDefinition->DamageProfile)
-	{
-		FDamageStatic DamageStatic;
-		DamageStatic.Damage = DamageProfile->Damage;
-		DamageStatic.DamageType = DamageProfile->DamageType;
-		DamageStatic.bAreaDamage = DamageProfile->bAreaDamage;
-		DamageStatic.AreaRadius = DamageProfile->AreaRadius;
-		DamageStatic.bDestroyOnHit = DamageProfile->bDestroyOnHit;
-		DamageStatic.CritChance = DamageProfile->CriticalChance;
-		DamageStatic.CritMultiplier = DamageProfile->CriticalMultiplier;
-		Prefab.set<FDamageStatic>(DamageStatic);
-	}
+	if (EntityDefinition->DamageProfile)
+		Prefab.set<FDamageStatic>(FDamageStatic::FromProfile(EntityDefinition->DamageProfile));
 
-	if (UFlecsProjectileProfile* ProjProfile = EntityDefinition->ProjectileProfile)
-	{
-		FProjectileStatic ProjStatic;
-		ProjStatic.MaxLifetime = ProjProfile->Lifetime;
-		ProjStatic.MaxBounces = ProjProfile->MaxBounces;
-		ProjStatic.GracePeriodFrames = ProjProfile->GetGraceFrames();
-		ProjStatic.MinVelocity = ProjProfile->MinVelocity;
-		ProjStatic.bMaintainSpeed = ProjProfile->bMaintainSpeed;
-		ProjStatic.TargetSpeed = ProjProfile->DefaultSpeed;
-		Prefab.set<FProjectileStatic>(ProjStatic);
-	}
+	if (EntityDefinition->ProjectileProfile)
+		Prefab.set<FProjectileStatic>(FProjectileStatic::FromProfile(EntityDefinition->ProjectileProfile));
 
-	if (UFlecsContainerProfile* ContainerProfile = EntityDefinition->ContainerProfile)
-	{
-		FContainerStatic ContainerStatic;
-		ContainerStatic.Type = ContainerProfile->ContainerType;
-		ContainerStatic.GridWidth = ContainerProfile->GridWidth;
-		ContainerStatic.GridHeight = ContainerProfile->GridHeight;
-		ContainerStatic.MaxItems = ContainerProfile->MaxListItems;
-		ContainerStatic.MaxWeight = ContainerProfile->MaxWeight;
-		ContainerStatic.bAllowNesting = ContainerProfile->bAllowNestedContainers;
-		ContainerStatic.bAutoStack = ContainerProfile->bAutoStackOnAdd;
-		Prefab.set<FContainerStatic>(ContainerStatic);
-	}
+	if (EntityDefinition->ContainerProfile)
+		Prefab.set<FContainerStatic>(FContainerStatic::FromProfile(EntityDefinition->ContainerProfile));
 
 	if (UFlecsItemDefinition* ItemDef = EntityDefinition->ItemDefinition)
 	{
-		FItemStaticData ItemStatic;
-		ItemStatic.TypeId = ItemDef->ItemTypeId != 0 ? ItemDef->ItemTypeId : GetTypeHash(ItemDef->ItemName);
-		ItemStatic.MaxStack = ItemDef->MaxStackSize;
-		ItemStatic.Weight = ItemDef->Weight;
-		ItemStatic.GridSize = ItemDef->GridSize;
-		ItemStatic.ItemName = ItemDef->ItemName;
-		ItemStatic.EntityDefinition = EntityDefinition;
-		ItemStatic.ItemDefinition = ItemDef;
+		FItemStaticData ItemStatic = FItemStaticData::FromProfile(ItemDef, EntityDefinition);
 		Prefab.set<FItemStaticData>(ItemStatic);
-
-		// Also register in ItemPrefabs for TypeId lookup
 		ItemPrefabs.Add(ItemStatic.TypeId, Prefab);
 	}
 
-	if (UFlecsWeaponProfile* WeaponProfile = EntityDefinition->WeaponProfile)
-	{
-		FWeaponStatic WeaponStatic;
+	if (EntityDefinition->WeaponProfile)
+		Prefab.set<FWeaponStatic>(FWeaponStatic::FromProfile(EntityDefinition->WeaponProfile));
 
-		// Firing
-		WeaponStatic.ProjectileDefinition = WeaponProfile->ProjectileDefinition;
-		WeaponStatic.FireInterval = WeaponProfile->GetFireInterval();
-		WeaponStatic.BurstCount = WeaponProfile->BurstCount;
-		WeaponStatic.BurstDelay = WeaponProfile->GetFireInterval() * 2.f; // Default: 2x fire interval
-		WeaponStatic.ProjectileSpeedMultiplier = WeaponProfile->ProjectileSpeedMultiplier;
-		WeaponStatic.DamageMultiplier = WeaponProfile->DamageMultiplier;
-		WeaponStatic.ProjectilesPerShot = WeaponProfile->ProjectilesPerShot;
-		WeaponStatic.bIsAutomatic = WeaponProfile->IsAutomatic();
-		WeaponStatic.bIsBurst = WeaponProfile->IsBurst();
-
-		// Ammo
-		WeaponStatic.MagazineSize = WeaponProfile->MagazineSize;
-		WeaponStatic.ReloadTime = WeaponProfile->ReloadTime;
-		WeaponStatic.MaxReserveAmmo = WeaponProfile->MaxReserveAmmo;
-		WeaponStatic.AmmoPerShot = WeaponProfile->AmmoPerShot;
-		WeaponStatic.bUnlimitedAmmo = WeaponProfile->HasUnlimitedAmmo();
-
-		// Muzzle
-		WeaponStatic.MuzzleOffset = WeaponProfile->MuzzleOffset;
-		WeaponStatic.MuzzleSocketName = WeaponProfile->MuzzleSocketName;
-
-		// Visuals
-		WeaponStatic.EquippedMesh = WeaponProfile->EquippedMesh;
-		WeaponStatic.DroppedMesh = WeaponProfile->DroppedMesh;
-		WeaponStatic.AttachSocket = WeaponProfile->AttachSocket;
-		WeaponStatic.AttachOffset = WeaponProfile->AttachOffset;
-		WeaponStatic.DroppedScale = WeaponProfile->DroppedScale;
-
-		// Animations
-		WeaponStatic.FireMontage = WeaponProfile->FireMontage;
-		WeaponStatic.ReloadMontage = WeaponProfile->ReloadMontage;
-		WeaponStatic.EquipMontage = WeaponProfile->EquipMontage;
-
-		Prefab.set<FWeaponStatic>(WeaponStatic);
-	}
-
-	if (UFlecsInteractionProfile* InteractionProf = EntityDefinition->InteractionProfile)
-	{
-		FInteractionStatic InteractionStatic;
-		InteractionStatic.MaxRange = InteractionProf->InteractionRange;
-		InteractionStatic.bSingleUse = InteractionProf->bSingleUse;
-		InteractionStatic.InteractionType = static_cast<uint8>(InteractionProf->InteractionType);
-		InteractionStatic.InstantAction = static_cast<uint8>(InteractionProf->InstantAction);
-		InteractionStatic.bRestrictAngle = InteractionProf->bRestrictAngle;
-		if (InteractionProf->bRestrictAngle)
-		{
-			InteractionStatic.AngleCosine = FMath::Cos(FMath::DegreesToRadians(InteractionProf->InteractionAngle));
-			FVector Dir = InteractionProf->InteractionDirection.GetSafeNormal();
-			if (ensureMsgf(!Dir.IsNearlyZero(),
-				TEXT("InteractionDirection is zero for '%s', falling back to ForwardVector"),
-				*EntityDefinition->GetName()))
-			{
-				InteractionStatic.AngleDirection = Dir;
-			}
-			else
-			{
-				InteractionStatic.AngleDirection = FVector::ForwardVector;
-			}
-		}
-		Prefab.set<FInteractionStatic>(InteractionStatic);
-	}
+	if (EntityDefinition->InteractionProfile)
+		Prefab.set<FInteractionStatic>(FInteractionStatic::FromProfile(EntityDefinition->InteractionProfile));
 
 	if (UFlecsDestructibleProfile* DestrProf = EntityDefinition->DestructibleProfile)
 	{
@@ -190,62 +80,11 @@ flecs::entity UFlecsArtillerySubsystem::GetOrCreateEntityPrefab(UFlecsEntityDefi
 		Prefab.set<FDestructibleStatic>(DestrStatic);
 	}
 
-	if (UFlecsDoorProfile* DoorProf = EntityDefinition->DoorProfile)
-	{
-		FDoorStatic DoorStatic;
-		DoorStatic.DoorType = DoorProf->IsHinged() ? EDoorType::Hinged : EDoorType::Sliding;
-		DoorStatic.MaxOpenAngle = DoorProf->GetMaxOpenAngleRadians();
-		DoorStatic.HingeAxis = DoorProf->HingeAxis.GetSafeNormal();
-		DoorStatic.HingeOffset = DoorProf->HingeOffset;
-		DoorStatic.bBidirectional = DoorProf->bBidirectional;
-		DoorStatic.SlideDirection = DoorProf->SlideDirection.GetSafeNormal();
-		DoorStatic.SlideDistance = DoorProf->SlideDistanceCm;
-		DoorStatic.bMotorDriven = DoorProf->bMotorDriven;
-		DoorStatic.MotorFrequency = DoorProf->MotorFrequency;
-		DoorStatic.MotorDamping = DoorProf->MotorDamping;
-		DoorStatic.MotorMaxTorque = DoorProf->MotorMaxForce;
-		DoorStatic.FrictionTorque = DoorProf->FrictionForce;
-		DoorStatic.bAutoClose = DoorProf->bAutoClose;
-		DoorStatic.AutoCloseDelay = DoorProf->AutoCloseDelay;
-		DoorStatic.bStartsLocked = DoorProf->bStartsLocked;
-		DoorStatic.bUnlockOnInteraction = DoorProf->bUnlockOnInteraction;
-		DoorStatic.bLockAtEndPosition = DoorProf->bLockAtEndPosition;
-		DoorStatic.LockMass = DoorProf->LockMass;
-		DoorStatic.ConstraintBreakForce = DoorProf->ConstraintBreakForce;
-		DoorStatic.ConstraintBreakTorque = DoorProf->ConstraintBreakTorque;
-		DoorStatic.Mass = DoorProf->Mass;
-		DoorStatic.AngularDamping = DoorProf->AngularDamping;
-		Prefab.set<FDoorStatic>(DoorStatic);
-	}
+	if (EntityDefinition->DoorProfile)
+		Prefab.set<FDoorStatic>(FDoorStatic::FromProfile(EntityDefinition->DoorProfile));
 
-	if (UFlecsMovementProfile* MoveProf = EntityDefinition->MovementProfile)
-	{
-		FMovementStatic MS;
-		MS.WalkSpeed = MoveProf->WalkSpeed;
-		MS.SprintSpeed = MoveProf->SprintSpeed;
-		MS.CrouchSpeed = MoveProf->CrouchSpeed;
-		MS.ProneSpeed = MoveProf->ProneSpeed;
-		MS.GroundAcceleration = MoveProf->GroundAcceleration;
-		MS.GroundDeceleration = MoveProf->GroundDeceleration;
-		MS.AirAcceleration = MoveProf->AirAcceleration;
-		MS.SprintAcceleration = MoveProf->SprintAcceleration;
-		MS.JumpVelocity = MoveProf->JumpVelocity;
-		MS.CrouchJumpVelocity = MoveProf->CrouchJumpVelocity;
-		MS.GravityScale = MoveProf->GravityScale;
-		MS.StandingHalfHeight = MoveProf->StandingHalfHeight;
-		MS.StandingRadius = MoveProf->StandingRadius;
-		MS.CrouchHalfHeight = MoveProf->CrouchHalfHeight;
-		MS.CrouchRadius = MoveProf->CrouchRadius;
-		MS.ProneHalfHeight = MoveProf->ProneHalfHeight;
-		MS.ProneRadius = MoveProf->ProneRadius;
-		MS.SlideMinEntrySpeed = MoveProf->SlideMinEntrySpeed;
-		MS.SlideDeceleration = MoveProf->SlideDeceleration;
-		MS.SlideMinExitSpeed = MoveProf->SlideMinExitSpeed;
-		MS.SlideMaxDuration = MoveProf->SlideMaxDuration;
-		MS.SlideInitialSpeedBoost = MoveProf->SlideInitialSpeedBoost;
-		MS.SlideMinAcceleration = MoveProf->SlideMinAcceleration;
-		Prefab.set<FMovementStatic>(MS);
-	}
+	if (EntityDefinition->MovementProfile)
+		Prefab.set<FMovementStatic>(FMovementStatic::FromProfile(EntityDefinition->MovementProfile));
 
 	// TODO: Add FLootStatic if needed
 
@@ -309,15 +148,7 @@ flecs::entity UFlecsArtillerySubsystem::GetOrCreateItemPrefab(UFlecsEntityDefini
 	flecs::entity Prefab = FlecsWorld->prefab(TCHAR_TO_ANSI(*PrefabName));
 
 	// Set static data on prefab - inherited by all instances via is_a()
-	FItemStaticData StaticData;
-	StaticData.TypeId = TypeId;
-	StaticData.MaxStack = ItemDef->MaxStackSize;
-	StaticData.Weight = ItemDef->Weight;
-	StaticData.GridSize = ItemDef->GridSize;
-	StaticData.ItemName = ItemDef->ItemName;
-	StaticData.EntityDefinition = EntityDefinition;
-	StaticData.ItemDefinition = ItemDef;
-	Prefab.set<FItemStaticData>(StaticData);
+	Prefab.set<FItemStaticData>(FItemStaticData::FromProfile(ItemDef, EntityDefinition));
 
 	// Store in registry
 	ItemPrefabs.Add(TypeId, Prefab);

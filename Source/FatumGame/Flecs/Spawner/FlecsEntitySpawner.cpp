@@ -378,7 +378,9 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 	// Uses NEW prefab architecture: Static components on prefab, Instance on entity.
 	// ─────────────────────────────────────────────────────────────
 
-	// Capture data for lambda
+	// Capture data for lambda.
+	// Static component data (Health, Damage, Projectile, Container, Door) is NOT captured here —
+	// it's inherited from the prefab via is_a() and read via Entity.try_get<T>() on sim thread.
 	struct FSpawnData
 	{
 		FSkeletonKey Key;
@@ -393,16 +395,6 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 		// Instance-specific data (not in prefab)
 		int32 ItemCount;
 		float DespawnTime;
-		float StartingHealth;  // Calculated from profile
-		float Lifetime;        // Calculated from profile
-		int32 GraceFrames;     // Calculated from profile
-
-		// Container instance data
-		bool bHasContainer;
-		EContainerType ContainerType;
-		int32 GridWidth;
-		int32 GridHeight;
-		int32 MaxListItems;
 
 		// Tags
 		bool bPickupable;
@@ -414,12 +406,6 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 		// Owner
 		FSkeletonKey OwnerKey;
 		int64 OwnerEntityId;  // For projectiles (friendly fire check)
-
-		// Profile flags (for entities without EntityDefinition)
-		bool bHasHealth;
-		bool bHasDamage;
-		bool bHasProjectile;
-		bool bHasItem;
 
 		// Focus camera override (per-instance)
 		bool bOverrideFocusCamera;
@@ -435,10 +421,6 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 		bool bHasDeathEffect;
 		UNiagaraSystem* DeathEffect;
 		float DeathEffectScale;
-
-		// Door data (captured from DoorProfile for sim thread constraint creation)
-		bool bHasDoor;
-		FDoorStatic DoorStaticData;
 	};
 
 	FSpawnData Data;
@@ -454,28 +436,9 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 	Data.Mesh = Data.bHasRender ? EffectiveRender->Mesh : nullptr;
 	Data.Scale = Data.bHasRender ? EffectiveRender->Scale : FVector::OneVector;
 
-	// Profile flags
-	Data.bHasItem = EffectiveItem != nullptr;
-	Data.bHasHealth = EffectiveHealth != nullptr;
-	Data.bHasDamage = EffectiveDamage != nullptr;
-	Data.bHasProjectile = EffectiveProjectile != nullptr;
-
 	// Instance data
 	Data.ItemCount = ItemCount;
 	Data.DespawnTime = DespawnTime;
-	Data.StartingHealth = Data.bHasHealth ? EffectiveHealth->GetStartingHealth() : 100.f;
-	Data.Lifetime = Data.bHasProjectile ? EffectiveProjectile->Lifetime : 10.f;
-	Data.GraceFrames = Data.bHasProjectile ? EffectiveProjectile->GetGraceFrames() : 30;
-
-	// Container
-	Data.bHasContainer = EffectiveContainer != nullptr;
-	if (Data.bHasContainer)
-	{
-		Data.ContainerType = EffectiveContainer->ContainerType;
-		Data.GridWidth = EffectiveContainer->GridWidth;
-		Data.GridHeight = EffectiveContainer->GridHeight;
-		Data.MaxListItems = EffectiveContainer->MaxListItems;
-	}
 
 	// Tags
 	Data.bPickupable = bPickupable;
@@ -509,35 +472,6 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 	Data.bHasDeathEffect = EffectiveNiagara && EffectiveNiagara->HasDeathEffect();
 	Data.DeathEffect = Data.bHasDeathEffect ? EffectiveNiagara->DeathEffect.Get() : nullptr;
 	Data.DeathEffectScale = Data.bHasDeathEffect ? EffectiveNiagara->DeathEffectScale : 1.0f;
-
-	// Door
-	Data.bHasDoor = EffectiveDoor != nullptr;
-	if (Data.bHasDoor)
-	{
-		FDoorStatic& DS = Data.DoorStaticData;
-		DS.DoorType = EffectiveDoor->IsHinged() ? EDoorType::Hinged : EDoorType::Sliding;
-		DS.MaxOpenAngle = EffectiveDoor->GetMaxOpenAngleRadians();
-		DS.HingeAxis = EffectiveDoor->HingeAxis.GetSafeNormal();
-		DS.HingeOffset = EffectiveDoor->HingeOffset;
-		DS.bBidirectional = EffectiveDoor->bBidirectional;
-		DS.SlideDirection = EffectiveDoor->SlideDirection.GetSafeNormal();
-		DS.SlideDistance = EffectiveDoor->SlideDistanceCm;
-		DS.bMotorDriven = EffectiveDoor->bMotorDriven;
-		DS.MotorFrequency = EffectiveDoor->MotorFrequency;
-		DS.MotorDamping = EffectiveDoor->MotorDamping;
-		DS.MotorMaxTorque = EffectiveDoor->MotorMaxForce;
-		DS.FrictionTorque = EffectiveDoor->FrictionForce;
-		DS.bAutoClose = EffectiveDoor->bAutoClose;
-		DS.AutoCloseDelay = EffectiveDoor->AutoCloseDelay;
-		DS.bStartsLocked = EffectiveDoor->bStartsLocked;
-		DS.bUnlockOnInteraction = EffectiveDoor->bUnlockOnInteraction;
-		DS.bLockAtEndPosition = EffectiveDoor->bLockAtEndPosition;
-		DS.LockMass = EffectiveDoor->LockMass;
-		DS.ConstraintBreakForce = EffectiveDoor->ConstraintBreakForce;
-		DS.ConstraintBreakTorque = EffectiveDoor->ConstraintBreakTorque;
-		DS.Mass = EffectiveDoor->Mass;
-		DS.AngularDamping = EffectiveDoor->AngularDamping;
-	}
 
 	// Enqueue Flecs entity creation
 	FlecsSubsystem->EnqueueCommand([FlecsSubsystem, Data]()
@@ -605,32 +539,36 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 
 		// ─────────────────────────────────────────────────────────
 		// INSTANCE COMPONENTS (mutable per-entity data)
-		// Static data comes from prefab via is_a() inheritance
+		// Static data comes from prefab via is_a() inheritance.
+		// Read static components via try_get<T>() — works for prefab
+		// entities (inherits via IsA) and standalone entities (returns nullptr).
 		// ─────────────────────────────────────────────────────────
 
-		// Health instance
-		if (Data.bHasHealth)
+		// Health instance (read MaxHP from prefab's FHealthStatic)
+		const FHealthStatic* HS = Entity.try_get<FHealthStatic>();
+		if (HS)
 		{
 			FHealthInstance HealthInst;
-			HealthInst.CurrentHP = Data.StartingHealth;
+			HealthInst.CurrentHP = HS->GetStartingHP();
 			HealthInst.RegenAccumulator = 0.f;
 			Entity.set<FHealthInstance>(HealthInst);
 		}
 
-		// Projectile instance
-		if (Data.bHasProjectile)
+		// Projectile instance (read lifetime/grace from prefab's FProjectileStatic)
+		const FProjectileStatic* PS = Entity.try_get<FProjectileStatic>();
+		if (PS)
 		{
 			FProjectileInstance ProjInst;
-			ProjInst.LifetimeRemaining = Data.Lifetime;
+			ProjInst.LifetimeRemaining = PS->MaxLifetime;
 			ProjInst.BounceCount = 0;
-			ProjInst.GraceFramesRemaining = Data.GraceFrames;
+			ProjInst.GraceFramesRemaining = PS->GracePeriodFrames;
 			ProjInst.OwnerEntityId = Data.OwnerEntityId;
 			Entity.set<FProjectileInstance>(ProjInst);
 			Entity.add<FTagProjectile>();
 		}
 
-		// Item instance
-		if (Data.bHasItem)
+		// Item instance (check prefab's FItemStaticData)
+		if (Entity.has<FItemStaticData>())
 		{
 			FItemInstance ItemInst;
 			ItemInst.Count = Data.ItemCount;
@@ -648,8 +586,9 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 			}
 		}
 
-		// Container instance
-		if (Data.bHasContainer)
+		// Container instance (read type/dimensions from prefab's FContainerStatic)
+		const FContainerStatic* CS = Entity.try_get<FContainerStatic>();
+		if (CS)
 		{
 			int64 OwnerEntityId = 0;
 			if (Data.OwnerKey.IsValid())
@@ -669,12 +608,12 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 			Entity.add<FTagContainer>();
 
 			// Type-specific instance components
-			switch (Data.ContainerType)
+			switch (CS->Type)
 			{
 			case EContainerType::Grid:
 				{
 					FContainerGridInstance GridInst;
-					GridInst.Initialize(Data.GridWidth, Data.GridHeight);
+					GridInst.Initialize(CS->GridWidth, CS->GridHeight);
 					Entity.set<FContainerGridInstance>(GridInst);
 				}
 				break;
@@ -743,11 +682,12 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 		}
 
 		// ─────────────────────────────────────────────────────────
-		// DOOR: set components, create constraint, switch Static -> Dynamic
+		// DOOR: set components, create constraint (reads FDoorStatic from prefab)
 		// ─────────────────────────────────────────────────────────
-		if (Data.bHasDoor && Data.bHasPhysics)
+		const FDoorStatic* DSPtr = Entity.try_get<FDoorStatic>();
+		if (DSPtr && Data.bHasPhysics)
 		{
-			const FDoorStatic& DS = Data.DoorStaticData;
+			const FDoorStatic& DS = *DSPtr;
 			Entity.add<FTagDoor>();
 
 			FDoorInstance DoorInst;
@@ -920,7 +860,7 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 
 		UE_LOG(LogFlecsEntity, Verbose, TEXT("Spawned entity: Key=%llu FlecsId=%llu Item=%d Health=%d Projectile=%d Container=%d Door=%d Prefab=%d"),
 			static_cast<uint64>(Data.Key), Entity.id(),
-			Data.bHasItem, Data.bHasHealth, Data.bHasProjectile, Data.bHasContainer, Data.bHasDoor,
+			Entity.has<FItemStaticData>(), HS != nullptr, PS != nullptr, CS != nullptr, DSPtr != nullptr,
 			Data.EntityDefinition != nullptr);
 	});
 

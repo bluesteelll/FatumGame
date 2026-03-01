@@ -11,6 +11,7 @@
 #include "FSimulationWorker.h"
 #include "FLateSyncBridge.h"
 #include <atomic>
+#include "FlecsCharacterTypes.h"
 #include "FlecsArtillerySubsystem.generated.h"
 
 class UBarrageDispatch;
@@ -24,8 +25,6 @@ struct FItemStaticData;
 class FDebrisPool;
 class AFlecsCharacter;
 class FBarragePrimitive;
-
-struct FCharacterInputAtomics;
 class FBCharacterBase;
 
 /** Lightweight bridge for character physics (sim-thread-only after registration).
@@ -397,6 +396,21 @@ public:
 private:
 	/** Set up Flecs systems that run on the simulation thread. */
 	void SetupFlecsSystems();
+
+	/** Register all Flecs components (called first by SetupFlecsSystems). */
+	void RegisterFlecsComponents();
+
+	/** Collision pair pipeline: Damage, Bounce, Pickup, Destructible. */
+	void SetupCollisionSystems();
+
+	/** Constraint break detection + fragmentation spawning. */
+	void SetupFragmentationSystems();
+
+	/** Weapon tick, reload, and fire systems. */
+	void SetupWeaponSystems();
+
+	/** Door trigger unlock + door state machine. */
+	void SetupDoorSystems();
 
 	/** Subscribe to Barrage collision events. */
 	void SubscribeToBarrageEvents();

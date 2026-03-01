@@ -4,6 +4,7 @@
 
 #include "FlecsArtillerySubsystem.h"
 #include "BarrageDispatch.h"
+#include "FlecsBarrageComponents.h"
 
 namespace FlecsLibrary
 {
@@ -27,5 +28,17 @@ namespace FlecsLibrary
 		UWorld* World = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::ReturnNull);
 		if (!World) return nullptr;
 		return World->GetSubsystem<UBarrageDispatch>();
+	}
+
+	/** Register a constraint on a Flecs entity. Called inside EnqueueCommand (sim thread, non-deferred).
+	 *  Uses obtain<>() -- creates FFlecsConstraintData if absent, returns ref if present. */
+	inline void RegisterConstraintOnEntity(
+		flecs::entity E, int64 ConstraintKey, FSkeletonKey OtherKey,
+		float BreakForce, float BreakTorque)
+	{
+		if (!E.is_valid() || !E.is_alive()) return;
+		FFlecsConstraintData& Data = E.obtain<FFlecsConstraintData>();
+		Data.AddConstraint(ConstraintKey, OtherKey, BreakForce, BreakTorque);
+		E.add<FTagConstrained>();
 	}
 }

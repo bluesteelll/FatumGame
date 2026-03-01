@@ -10,6 +10,11 @@
 
 class UFlecsItemDefinition;
 class UFlecsEntityDefinition;
+class UFlecsHealthProfile;
+class UFlecsDamageProfile;
+class UFlecsProjectileProfile;
+class UFlecsContainerProfile;
+class UFlecsInteractionProfile;
 
 // ═══════════════════════════════════════════════════════════════
 // PREFAB ARCHITECTURE
@@ -40,7 +45,7 @@ class UFlecsEntityDefinition;
  * Static health data - lives in PREFAB, shared by all entities of this type.
  * Contains immutable health rules.
  *
- * Instance data (CurrentHP) is in FHealthInц stance.
+ * Instance data (CurrentHP) is in FHealthInstance.
  */
 struct FHealthStatic
 {
@@ -60,6 +65,8 @@ struct FHealthStatic
 	float StartingHPRatio = 1.f;
 
 	float GetStartingHP() const { return MaxHP * StartingHPRatio; }
+
+	static FHealthStatic FromProfile(const UFlecsHealthProfile* Profile);
 };
 
 // ═══════════════════════════════════════════════════════════════
@@ -92,6 +99,8 @@ struct FDamageStatic
 
 	/** Critical hit damage multiplier */
 	float CritMultiplier = 2.f;
+
+	static FDamageStatic FromProfile(const UFlecsDamageProfile* Profile);
 };
 
 // ═══════════════════════════════════════════════════════════════
@@ -123,6 +132,8 @@ struct FProjectileStatic
 
 	/** Target speed if bMaintainSpeed (units/sec) */
 	float TargetSpeed = 0.f;
+
+	static FProjectileStatic FromProfile(const UFlecsProjectileProfile* Profile);
 };
 
 // ═══════════════════════════════════════════════════════════════
@@ -193,6 +204,8 @@ struct FItemStaticData
 
 	bool IsStackable() const { return MaxStack > 1; }
 	bool IsUnique() const { return MaxStack == 0; }
+
+	static FItemStaticData FromProfile(UFlecsItemDefinition* ItemDef, UFlecsEntityDefinition* EntityDef = nullptr);
 };
 
 // ═══════════════════════════════════════════════════════════════
@@ -228,6 +241,8 @@ struct FContainerStatic
 	bool bAutoStack = true;
 
 	int32 GetTotalCells() const { return GridWidth * GridHeight; }
+
+	static FContainerStatic FromProfile(const UFlecsContainerProfile* Profile);
 };
 
 // ═══════════════════════════════════════════════════════════════
@@ -265,6 +280,8 @@ struct FInteractionStatic
 
 	/** Direction the cone faces in entity local space (normalized) */
 	FVector AngleDirection = FVector::ForwardVector;
+
+	static FInteractionStatic FromProfile(const UFlecsInteractionProfile* Profile);
 };
 
 // ═══════════════════════════════════════════════════════════════

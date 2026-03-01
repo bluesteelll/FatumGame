@@ -11,7 +11,6 @@
 
 class UPrimaryDataAsset;
 class UStaticMesh;
-class UFlecsProjectileDefinition;
 class UFlecsEntityDefinition;
 class UFlecsConstrainedGroupDefinition;
 
@@ -25,7 +24,8 @@ public:
 	// SPAWN (game-thread safe)
 	// ═══════════════════════════════════════════════════════════════
 
-	UFUNCTION(BlueprintCallable, Category = "Flecs|Spawn", meta = (WorldContext = "WorldContextObject"))
+	UE_DEPRECATED(5.7, "Use UFlecsEntityLibrary::SpawnEntity with UFlecsEntityDefinition instead")
+	UFUNCTION(BlueprintCallable, Category = "Flecs|Spawn", meta = (WorldContext = "WorldContextObject", DeprecatedFunction, DeprecationMessage = "Use UFlecsEntityLibrary::SpawnEntity with UFlecsEntityDefinition"))
 	static void SpawnWorldItem(
 		UObject* WorldContextObject,
 		UPrimaryDataAsset* ItemDefinition,
@@ -36,7 +36,8 @@ public:
 		EPhysicsLayer PhysicsLayer = EPhysicsLayer::MOVING
 	);
 
-	UFUNCTION(BlueprintCallable, Category = "Flecs|Spawn", meta = (WorldContext = "WorldContextObject"))
+	UE_DEPRECATED(5.7, "Use UFlecsEntityLibrary::SpawnEntity with UFlecsEntityDefinition instead")
+	UFUNCTION(BlueprintCallable, Category = "Flecs|Spawn", meta = (WorldContext = "WorldContextObject", DeprecatedFunction, DeprecationMessage = "Use UFlecsEntityLibrary::SpawnEntity with UFlecsEntityDefinition"))
 	static void SpawnDestructible(
 		UObject* WorldContextObject,
 		UStaticMesh* Mesh,
@@ -45,7 +46,8 @@ public:
 		EPhysicsLayer PhysicsLayer = EPhysicsLayer::MOVING
 	);
 
-	UFUNCTION(BlueprintCallable, Category = "Flecs|Spawn", meta = (WorldContext = "WorldContextObject"))
+	UE_DEPRECATED(5.7, "Use UFlecsEntityLibrary::SpawnEntity with UFlecsEntityDefinition instead")
+	UFUNCTION(BlueprintCallable, Category = "Flecs|Spawn", meta = (WorldContext = "WorldContextObject", DeprecatedFunction, DeprecationMessage = "Use UFlecsEntityLibrary::SpawnEntity with UFlecsEntityDefinition"))
 	static void SpawnLootableDestructible(
 		UObject* WorldContextObject,
 		UStaticMesh* Mesh,
@@ -66,16 +68,6 @@ public:
 		int64 OwnerEntityId = 0
 	);
 
-	UE_DEPRECATED(5.7, "Use SpawnProjectileFromEntityDef with UFlecsEntityDefinition instead")
-	UFUNCTION(BlueprintCallable, Category = "Flecs|Projectile", meta = (WorldContext = "WorldContextObject", DeprecatedFunction, DeprecationMessage = "Use SpawnProjectileFromEntityDef"))
-	static FSkeletonKey SpawnProjectileFromDefinition(
-		UObject* WorldContextObject,
-		UFlecsProjectileDefinition* Definition,
-		FVector Location,
-		FVector Direction,
-		float SpeedOverride = 0.f
-	);
-
 	UFUNCTION(BlueprintCallable, Category = "Flecs|Spawn", meta = (WorldContext = "WorldContextObject"))
 	static FFlecsGroupSpawnResult SpawnConstrainedGroup(
 		UObject* WorldContextObject,
@@ -94,23 +86,5 @@ public:
 		float Spacing = 100.f,
 		float BreakForce = 0.f,
 		float MaxHealth = 0.f
-	);
-
-	UFUNCTION(BlueprintCallable, Category = "Flecs|Projectile", meta = (WorldContext = "WorldContextObject"))
-	static FSkeletonKey SpawnProjectile(
-		UObject* WorldContextObject,
-		UStaticMesh* Mesh,
-		FVector Location,
-		FVector Direction,
-		float Speed = 5000.f,
-		float Damage = 25.f,
-		float GravityFactor = 0.3f,
-		float LifetimeSeconds = 10.f,
-		float CollisionRadius = 5.f,
-		float VisualScale = 1.f,
-		bool bIsBouncing = true,
-		float Restitution = 0.8f,
-		float Friction = 0.2f,
-		int32 MaxBounces = -1
 	);
 };

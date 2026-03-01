@@ -7,6 +7,7 @@
 #include "FlecsWeaponComponents.generated.h"
 
 class UFlecsEntityDefinition;
+class UFlecsWeaponProfile;
 class USkeletalMesh;
 class UStaticMesh;
 class UAnimMontage;
@@ -150,6 +151,8 @@ struct FWeaponStatic
 
 	/** Equip animation montage */
 	UAnimMontage* EquipMontage = nullptr;
+
+	static FWeaponStatic FromProfile(const UFlecsWeaponProfile* Profile);
 };
 
 // ═══════════════════════════════════════════════════════════════

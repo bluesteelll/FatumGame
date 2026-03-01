@@ -7,25 +7,19 @@
 #include "FlecsStaticComponents.h"
 #include "FlecsInstanceComponents.h"
 #include "FlecsBarrageComponents.h"
-#include "FlecsProjectileDefinition.h"
 #include "FlecsEntityDefinition.h"
-#include "FlecsPhysicsProfile.h"
 #include "FlecsRenderProfile.h"
-#include "FlecsDamageProfile.h"
 #include "FlecsProjectileProfile.h"
 #include "FlecsConstrainedGroupDefinition.h"
 #include "BarrageSpawnUtils.h"
 #include "BarrageConstraintSystem.h"
 #include "FlecsRenderManager.h"
-#include "FBarragePrimitive.h"
-#include "FBShapeParams.h"
 #include "Skeletonize.h"
 #include "Engine/StaticMesh.h"
 #include <atomic>
 
 namespace
 {
-	std::atomic<uint32> GProjectileCounter{0};
 	std::atomic<uint32> GGroupElementCounter{0};
 }
 
@@ -198,43 +192,6 @@ void UFlecsSpawnLibrary::SpawnLootableDestructible(
 	});
 }
 
-// ═══════════════════════════════════════════════════════════════
-// PROJECTILE SPAWNING
-// ═══════════════════════════════════════════════════════════════
-
-FSkeletonKey UFlecsSpawnLibrary::SpawnProjectileFromDefinition(
-	UObject* WorldContextObject,
-	UFlecsProjectileDefinition* Definition,
-	FVector Location,
-	FVector Direction,
-	float SpeedOverride)
-{
-	if (!Definition || !Definition->Mesh)
-	{
-		UE_LOG(LogTemp, Warning, TEXT("SpawnProjectileFromDefinition: Invalid definition or no mesh!"));
-		return FSkeletonKey();
-	}
-
-	float Speed = SpeedOverride > 0.f ? SpeedOverride : Definition->DefaultSpeed;
-
-	return SpawnProjectile(
-		WorldContextObject,
-		Definition->Mesh,
-		Location,
-		Direction,
-		Speed,
-		Definition->Damage,
-		Definition->GravityFactor,
-		Definition->LifetimeSeconds,
-		Definition->CollisionRadius,
-		Definition->VisualScale,
-		Definition->bIsBouncing,
-		Definition->Restitution,
-		Definition->Friction,
-		Definition->MaxBounces
-	);
-}
-
 FSkeletonKey UFlecsSpawnLibrary::SpawnProjectileFromEntityDef(
 	UObject* WorldContextObject,
 	UFlecsEntityDefinition* Definition,
@@ -270,160 +227,6 @@ FSkeletonKey UFlecsSpawnLibrary::SpawnProjectileFromEntityDef(
 		.WithOwnerEntity(OwnerEntityId);
 
 	return UFlecsEntityLibrary::SpawnEntity(WorldContextObject, Request);
-}
-
-FSkeletonKey UFlecsSpawnLibrary::SpawnProjectile(
-	UObject* WorldContextObject,
-	UStaticMesh* Mesh,
-	FVector Location,
-	FVector Direction,
-	float Speed,
-	float Damage,
-	float GravityFactor,
-	float LifetimeSeconds,
-	float CollisionRadius,
-	float VisualScale,
-	bool bIsBouncing,
-	float Restitution,
-	float Friction,
-	int32 MaxBounces)
-{
-	if (!WorldContextObject || !Mesh)
-	{
-		UE_LOG(LogTemp, Warning, TEXT("PROJ_DEBUG SpawnProjectile: Invalid parameters! Mesh=%p"), Mesh);
-		return FSkeletonKey();
-	}
-
-	UWorld* World = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::ReturnNull);
-	if (!World)
-	{
-		UE_LOG(LogTemp, Error, TEXT("PROJ_DEBUG SpawnProjectile: No World!"));
-		return FSkeletonKey();
-	}
-
-	UBarrageDispatch* Barrage = World->GetSubsystem<UBarrageDispatch>();
-	UFlecsRenderManager* Renderer = UFlecsRenderManager::Get(World);
-	UFlecsArtillerySubsystem* Subsystem = World->GetSubsystem<UFlecsArtillerySubsystem>();
-
-	if (!Barrage)
-	{
-		UE_LOG(LogTemp, Error, TEXT("PROJ_DEBUG SpawnProjectile: No UBarrageDispatch!"));
-		return FSkeletonKey();
-	}
-
-	const uint32 Id = ++GProjectileCounter;
-	FSkeletonKey EntityKey = FSkeletonKey(FORGE_SKELETON_KEY(Id, SKELLY::SFIX_GUN_SHOT));
-
-	const bool bNeedsDynamicBody = bIsBouncing || GravityFactor > 0.f;
-
-	UE_LOG(LogTemp, Log, TEXT("PROJ_DEBUG SpawnProjectile START: Key=%llu Counter=%u Loc=%s Bouncing=%d Gravity=%.2f Dynamic=%d"),
-		static_cast<uint64>(EntityKey), Id, *Location.ToString(), bIsBouncing, GravityFactor, bNeedsDynamicBody);
-
-	Direction.Normalize();
-	FVector Velocity = Direction * Speed;
-
-	FBSphereParams SphereParams = FBarrageBounder::GenerateSphereBounds(Location, CollisionRadius);
-
-	FBLet Body;
-	if (bNeedsDynamicBody)
-	{
-		Body = Barrage->CreateBouncingSphere(
-			SphereParams,
-			EntityKey,
-			static_cast<uint16>(EPhysicsLayer::PROJECTILE),
-			bIsBouncing ? Restitution : 0.f,
-			Friction
-		);
-		UE_LOG(LogTemp, Log, TEXT("PROJ_DEBUG CreateBouncingSphere: Key=%llu Body=%p"),
-			static_cast<uint64>(EntityKey), Body.Get());
-	}
-	else
-	{
-		Body = Barrage->CreatePrimitive(
-			SphereParams,
-			EntityKey,
-			static_cast<uint16>(EPhysicsLayer::PROJECTILE),
-			true
-		);
-		UE_LOG(LogTemp, Log, TEXT("PROJ_DEBUG CreatePrimitive (sensor): Key=%llu Body=%p"),
-			static_cast<uint64>(EntityKey), Body.Get());
-	}
-
-	if (!FBarragePrimitive::IsNotNull(Body))
-	{
-		UE_LOG(LogTemp, Error, TEXT("PROJ_DEBUG SpawnProjectile: FAILED to create physics body! Key=%llu"),
-			static_cast<uint64>(EntityKey));
-		return FSkeletonKey();
-	}
-
-	FBarragePrimitive::SetVelocity(Velocity, Body);
-	FBarragePrimitive::SetGravityFactor(GravityFactor, Body);
-
-	if (Renderer)
-	{
-		FTransform RenderTransform;
-		RenderTransform.SetLocation(Location);
-		RenderTransform.SetScale3D(FVector(VisualScale));
-		int32 ISMIndex = Renderer->AddInstance(Mesh, nullptr, RenderTransform, EntityKey);
-		UE_LOG(LogTemp, Log, TEXT("PROJ_DEBUG AddInstance: Key=%llu ISMIndex=%d"),
-			static_cast<uint64>(EntityKey), ISMIndex);
-	}
-	else
-	{
-		UE_LOG(LogTemp, Warning, TEXT("PROJ_DEBUG SpawnProjectile: No Renderer! Key=%llu"),
-			static_cast<uint64>(EntityKey));
-	}
-
-	if (Subsystem)
-	{
-		Subsystem->EnqueueCommand([Subsystem, EntityKey, Mesh, Damage, LifetimeSeconds, VisualScale, MaxBounces]()
-		{
-			flecs::world* FlecsWorld = Subsystem->GetFlecsWorld();
-			if (!FlecsWorld)
-			{
-				UE_LOG(LogTemp, Error, TEXT("PROJ_DEBUG FlecsEntity: No FlecsWorld! Key=%llu"),
-					static_cast<uint64>(EntityKey));
-				return;
-			}
-
-			FDamageStatic DamageStatic;
-			DamageStatic.Damage = Damage;
-			DamageStatic.bAreaDamage = false;
-			DamageStatic.bDestroyOnHit = (MaxBounces != -1);
-
-			FProjectileStatic ProjStatic;
-			ProjStatic.MaxLifetime = LifetimeSeconds;
-			ProjStatic.MaxBounces = MaxBounces;
-			ProjStatic.GracePeriodFrames = 30;
-			ProjStatic.MinVelocity = 50.f;
-
-			FProjectileInstance ProjInstance;
-			ProjInstance.LifetimeRemaining = LifetimeSeconds;
-			ProjInstance.BounceCount = 0;
-			ProjInstance.GraceFramesRemaining = 30;
-
-			flecs::entity Entity = FlecsWorld->entity()
-				.set<FDamageStatic>(DamageStatic)
-				.set<FProjectileStatic>(ProjStatic)
-				.set<FProjectileInstance>(ProjInstance)
-				.set<FISMRender>({ Mesh, FVector(VisualScale) })
-				.add<FTagProjectile>();
-
-			Subsystem->BindEntityToBarrage(Entity, EntityKey);
-			UE_LOG(LogTemp, Log, TEXT("PROJ_DEBUG FlecsEntity CREATED: Key=%llu FlecsId=%llu"),
-				static_cast<uint64>(EntityKey), Entity.id());
-		});
-	}
-	else
-	{
-		UE_LOG(LogTemp, Warning, TEXT("PROJ_DEBUG SpawnProjectile: No FlecsSubsystem! Key=%llu"),
-			static_cast<uint64>(EntityKey));
-	}
-
-	UE_LOG(LogTemp, Log, TEXT("PROJ_DEBUG SpawnProjectile DONE: Key=%llu Vel=%s"),
-		static_cast<uint64>(EntityKey), *Velocity.ToString());
-
-	return EntityKey;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -616,25 +419,10 @@ FFlecsGroupSpawnResult UFlecsSpawnLibrary::SpawnConstrainedGroup(
 
 			FlecsSubsystem->EnqueueCommand([FlecsSubsystem, Key1, Key2, KeyValue, BreakF, BreakT]()
 			{
-				auto UpdateEntity = [&](flecs::entity E, FSkeletonKey OtherKey)
-				{
-					if (E.is_valid() && E.is_alive())
-					{
-						if (!E.has<FFlecsConstraintData>())
-						{
-							E.set<FFlecsConstraintData>({});
-						}
-						FFlecsConstraintData* Data = E.try_get_mut<FFlecsConstraintData>();
-						if (Data)
-						{
-							Data->AddConstraint(KeyValue, OtherKey, BreakF, BreakT);
-						}
-						E.add<FTagConstrained>();
-					}
-				};
-
-				UpdateEntity(FlecsSubsystem->GetEntityForBarrageKey(Key1), Key2);
-				UpdateEntity(FlecsSubsystem->GetEntityForBarrageKey(Key2), Key1);
+				FlecsLibrary::RegisterConstraintOnEntity(
+					FlecsSubsystem->GetEntityForBarrageKey(Key1), KeyValue, Key2, BreakF, BreakT);
+				FlecsLibrary::RegisterConstraintOnEntity(
+					FlecsSubsystem->GetEntityForBarrageKey(Key2), KeyValue, Key1, BreakF, BreakT);
 			});
 		}
 	}

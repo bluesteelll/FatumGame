@@ -172,6 +172,12 @@ struct FProjectileInstance
 	/** Entity that spawned this projectile (for friendly fire, damage attribution) */
 	UPROPERTY(BlueprintReadWrite, Category = "Projectile")
 	int64 OwnerEntityId = 0;
+
+	/** Returns true if this projectile was fired by the given entity (self-damage prevention). */
+	bool IsOwnedBy(uint64 EntityId) const
+	{
+		return OwnerEntityId != 0 && static_cast<uint64>(OwnerEntityId) == EntityId;
+	}
 };
 
 // ═══════════════════════════════════════════════════════════════
