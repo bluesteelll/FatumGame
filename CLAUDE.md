@@ -30,10 +30,12 @@ Extract to functions/templates. Use auto, range-based for, structured bindings.
 
 ```
 FSimulationWorker -> Simulation thread (60Hz)
-  DrainCommandQueue -> StackUp -> StepWorld -> BroadcastContactEvents -> progress()
+  DrainCommandQueue -> PrepareCharacterStep(RealDT,DilatedDT)
+    -> StackUp -> StepWorld(DilatedDT) -> BroadcastContactEvents -> progress(DilatedDT)
 Barrage     -> Jolt Physics
 Flecs       -> Gameplay data (health, damage, items)
 Game Thread -> Cosmetics, rendering, ISM spawns
+Time Dilation -> FTimeDilationStack (game thread) -> atomics -> FSimulationWorker DT splitting
 ```
 
 ---
@@ -56,7 +58,8 @@ Game Thread -> Cosmetics, rendering, ISM spawns
 | `FlecsSpawnLibrary.h/cpp` | Blueprint API: spawn (projectiles, items, destructibles, groups) |
 | `FlecsLibraryHelpers.h` | Shared inline helpers for library classes |
 | `FlecsArtillerySubsystem.h/cpp` | Simulation subsystem: sim thread, collisions, binding |
-| `FSimulationWorker.h/cpp` | Simulation thread (~60Hz, lock-free) |
+| `FSimulationWorker.h/cpp` | Simulation thread (~60Hz, lock-free, time dilation atomics) |
+| `FTimeDilationStack.h` | Time dilation priority stack (min-wins, per-source config) |
 | `BarrageSpawnUtils.h/cpp` | Barrage spawn utilities |
 | `FlecsRenderManager.h/cpp` | ISM component manager |
 | **Plugin:** `FlecsBarrageComponents.h/cpp` | Bridge: FBarrageBody, FISMRender, FCollisionPair |
@@ -265,6 +268,39 @@ void UMySubsystem::OnWorldBeginPlay(UWorld& InWorld) {
 
 ### Thread Safety
 Game thread → `EnqueueCommand()` → Simulation thread executes before `progress()`
+
+### Time Dilation System
+
+Reusable multi-source time dilation. Scales DeltaTime in both sim thread (physics/ECS) and game thread (animations/VFX).
+
+```text
+FTimeDilationStack (game thread, AFlecsCharacter::DilationStack)
+  ├─ Push({Tag, DesiredScale, Duration, bPlayerFullSpeed, EntrySpeed, ExitSpeed})
+  ├─ Remove(Tag)  // auto-captures ExitSpeed
+  └─ Min-wins resolution: lowest DesiredScale among active entries wins
+
+Game thread → atomics → Sim thread:
+  DesiredTimeScale, bPlayerFullSpeed, TransitionSpeed
+Sim thread → atomic → Game thread:
+  ActiveTimeScalePublished (smoothed via FInterpTo)
+
+FSimulationWorker::Run():
+  RealDT (wall-clock) → × ActiveTimeScale → DilatedDT
+  PrepareCharacterStep(RealDT, DilatedDT, TimeScale, bPlayerFullSpeed)
+  StepWorld(DilatedDT), ProgressWorld(DilatedDT)
+```
+
+**Player compensation** (`bPlayerFullSpeed=true`): `VelocityScale = 1/TimeScale` on locomotion, jump, gravity. Jolt integrates `V×VelocityScale` with `DilatedDT` → net displacement = `V×RealDT`.
+
+**CRITICAL:** `GetLinearVelocity()` returns SCALED velocity from previous frame. MUST undo scaling before locomotion smoothing: `CurH *= (1/VelocityScale)`. Otherwise VelocityScale compounds each frame → runaway acceleration.
+
+```cpp
+// Usage: push from any game-thread code
+Character->DilationStack.Push({
+    .Tag = "FreezeFrame", .DesiredScale = 0.03f,
+    .Duration = 0.1f, .bPlayerFullSpeed = false
+});
+```
 
 ---
 
