@@ -5,21 +5,69 @@
 
 #include <atomic>
 
-/** Game→sim input atomics. Written by AFlecsCharacter input handlers every tick (latest-wins).
- *  Read by PrepareCharacterStep on sim thread. Lock-free, no queue buildup. */
+// ═══════════════════════════════════════════════════════════════════════════
+// ATOMIC WRAPPER TYPES
+// Encode read/write semantics into the type. Zero overhead (same relaxed atomics).
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Latest-wins atomic. Producer calls Write(), consumer calls Read().
+ *  Used for continuous values (movement axes, camera) and held buttons (crouch, sprint). */
+template<typename T>
+struct TAtomicLatestWins
+{
+	void Write(T v) { Value.store(v, std::memory_order_relaxed); }
+	T Read() const { return Value.load(std::memory_order_relaxed); }
+private:
+	std::atomic<T> Value{};
+};
+
+using FAtomicAxis  = TAtomicLatestWins<float>;  // Continuous float (DirX, CamLocX...)
+using FAtomicHeld  = TAtomicLatestWins<bool>;   // Held button (game→sim)
+using FAtomicState = TAtomicLatestWins<bool>;   // State flag (sim→game)
+
+/** Fire-and-consume atomic. Producer calls Fire(), consumer calls Consume().
+ *  Consume() uses atomic exchange — reads AND clears in one operation.
+ *  Used for one-shot events (JumpPressed, Teleported). */
+struct FAtomicOneShot
+{
+	void Fire() { Value.store(true, std::memory_order_relaxed); }
+	bool Consume() const { return Value.exchange(false, std::memory_order_relaxed); }
+private:
+	mutable std::atomic<bool> Value{false};
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GAME → SIM INPUT
+// Written by AFlecsCharacter input handlers. Read by PrepareCharacterStep.
+// ═══════════════════════════════════════════════════════════════════════════
+
 struct FCharacterInputAtomics
 {
-	// Movement direction (world-space, written by Move())
-	std::atomic<float> DirX{0.f};
-	std::atomic<float> DirZ{0.f};
+	// Movement direction (world-space, written by Move() every frame)
+	FAtomicAxis DirX, DirZ;
 
 	// Camera position/direction (written every Tick for blink targeting + mantle hang exit)
-	std::atomic<float> CamLocX{0.f}, CamLocY{0.f}, CamLocZ{0.f};
-	std::atomic<float> CamDirX{0.f}, CamDirY{0.f}, CamDirZ{0.f};
+	FAtomicAxis CamLocX, CamLocY, CamLocZ;
+	FAtomicAxis CamDirX, CamDirY, CamDirZ;
 
-	// Button state (game thread writes, sim thread reads)
-	std::atomic<bool> bBlinkHeld{false};
-	std::atomic<bool> bCrouchHeld{false};
-	mutable std::atomic<bool> bJumpPressed{false};   // one-shot, consumed (set false) by sim thread
-	std::atomic<bool> bSprinting{false};
+	// Buttons
+	FAtomicOneShot JumpPressed;    // one-shot: sim consumes after processing
+	FAtomicHeld    CrouchHeld;     // held: game writes true on press, false on release
+	FAtomicHeld    BlinkHeld;      // held: game writes true on press, false on release
+	FAtomicHeld    Sprinting;      // held: game writes true on press, false on release
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SIM → GAME STATE
+// Written by PrepareCharacterStep. Read by AFlecsCharacter::Tick for cosmetics.
+// ═══════════════════════════════════════════════════════════════════════════
+
+struct FCharacterStateAtomics
+{
+	FAtomicState                SlideActive;
+	FAtomicState                MantleActive;
+	FAtomicState                Hanging;
+	FAtomicState                BlinkAiming;
+	FAtomicOneShot              Teleported;    // sim fires, game consumes → position snap
+	TAtomicLatestWins<uint8>    MantleType;    // 0=Vault, 1=Mantle, 2=LedgeGrab
 };

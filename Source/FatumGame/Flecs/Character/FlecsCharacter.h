@@ -519,20 +519,8 @@ private:
 	// InputAtomics: game→sim (written by Move(), read by PrepareCharacterStep)
 	// Position readback: direct Jolt read in Tick() (before CameraManager)
 	// ─────────────────────────────────────────────────────────
-	TSharedPtr<FCharacterInputAtomics, ESPMode::ThreadSafe> InputAtomics; // game→sim direction
-
-	// Slide state: written by PrepareCharacterStep (sim thread), read by Tick (game thread).
-	// Shared with FCharacterPhysBridge — allocated here, copied to bridge on registration.
-	TSharedPtr<std::atomic<bool>> SlideActiveAtomic;
-
-	// Mantle/hang state: same pattern as slide.
-	TSharedPtr<std::atomic<bool>> MantleActiveAtomic;
-	TSharedPtr<std::atomic<bool>> HangingAtomic;
-
-	// Blink state: sim→game for time dilation and teleport snap.
-	TSharedPtr<std::atomic<bool>> BlinkAimingAtomic;
-	TSharedPtr<std::atomic<bool>> TeleportedAtomic;
-	TSharedPtr<std::atomic<uint8>> MantleTypeAtomic; // 0=Vault, 1=Mantle, 2=LedgeGrab
+	TSharedPtr<FCharacterInputAtomics, ESPMode::ThreadSafe> InputAtomics;  // game→sim
+	TSharedPtr<FCharacterStateAtomics, ESPMode::ThreadSafe> StateAtomics; // sim→game
 	bool bPrevBlinkAiming = false;
 
 	// Feet-to-actor offset: Z distance from Barrage feet to UE capsule center.

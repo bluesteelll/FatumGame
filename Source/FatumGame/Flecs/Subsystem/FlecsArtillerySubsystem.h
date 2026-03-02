@@ -29,7 +29,7 @@ class FBarragePrimitive;
 class FBCharacterBase;
 
 /** Lightweight bridge for character physics (sim-thread-only after registration).
- *  PrepareCharacterStep reads InputAtomics, writes mLocomotionUpdate + SlideActive.
+ *  PrepareCharacterStep reads InputAtomics, writes StateAtomics.
  *  Position readback is in AFlecsCharacter::Tick (game thread, direct Jolt read). */
 struct FCharacterPhysBridge
 {
@@ -38,20 +38,10 @@ struct FCharacterPhysBridge
 	FSkeletonKey CharacterKey;
 
 	// ── Sim thread (PrepareCharacterStep) ──
-	TSharedPtr<FCharacterInputAtomics, ESPMode::ThreadSafe> InputAtomics; // game→sim
-	flecs::entity Entity;                                                  // for reading FMovementStatic + FCharacterMoveState
-	TSharedPtr<FBCharacterBase> CachedFBChar;                              // direct pointer to FBCharacter
-
-	// Shared with AFlecsCharacter for cross-thread state.
-	// Written by PrepareCharacterStep (sim thread), read by AFlecsCharacter::Tick (game thread).
-	TSharedPtr<std::atomic<bool>> SlideActive;
-	TSharedPtr<std::atomic<bool>> MantleActive;
-	TSharedPtr<std::atomic<bool>> Hanging;
-
-	// Blink (sim→game)
-	TSharedPtr<std::atomic<bool>> BlinkAiming;   // game thread reads → time dilation
-	TSharedPtr<std::atomic<bool>> Teleported;    // game thread reads → position snap
-	TSharedPtr<std::atomic<uint8>> MantleType;   // 0=Vault, 1=Mantle, 2=LedgeGrab
+	TSharedPtr<FCharacterInputAtomics, ESPMode::ThreadSafe> InputAtomics;  // game→sim
+	TSharedPtr<FCharacterStateAtomics, ESPMode::ThreadSafe> StateAtomics;  // sim→game
+	flecs::entity Entity;
+	TSharedPtr<FBCharacterBase> CachedFBChar;
 };
 
 /**

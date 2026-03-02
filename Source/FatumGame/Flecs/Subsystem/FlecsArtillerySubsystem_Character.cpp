@@ -27,17 +27,13 @@ void UFlecsArtillerySubsystem::RegisterCharacterBridge(AFlecsCharacter* Characte
 	check(Character);
 	check(Character->CachedBarrageBody.IsValid());
 	check(Character->InputAtomics.IsValid());
+	check(Character->StateAtomics.IsValid());
 
 	FCharacterPhysBridge Bridge;
 	Bridge.CachedBody = Character->CachedBarrageBody;
 	Bridge.InputAtomics = Character->InputAtomics;
 	Bridge.CharacterKey = Character->CharacterKey;
-	Bridge.SlideActive = Character->SlideActiveAtomic;
-	Bridge.MantleActive = Character->MantleActiveAtomic;
-	Bridge.Hanging = Character->HangingAtomic;
-	Bridge.BlinkAiming = Character->BlinkAimingAtomic;
-	Bridge.Teleported = Character->TeleportedAtomic;
-	Bridge.MantleType = Character->MantleTypeAtomic;
+	Bridge.StateAtomics = Character->StateAtomics;
 
 	// Resolve Flecs entity for this character (bidirectional binding already set)
 	Bridge.Entity = GetEntityForBarrageKey(Character->CharacterKey);
@@ -257,13 +253,13 @@ static bool ComputeBlinkTarget(const FMovementStatic* MS, UBarrageDispatch* Barr
 {
 	// Read camera from atomics
 	FVector CamLoc(
-		Input->CamLocX.load(std::memory_order_relaxed),
-		Input->CamLocY.load(std::memory_order_relaxed),
-		Input->CamLocZ.load(std::memory_order_relaxed));
+		Input->CamLocX.Read(),
+		Input->CamLocY.Read(),
+		Input->CamLocZ.Read());
 	FVector CamDir(
-		Input->CamDirX.load(std::memory_order_relaxed),
-		Input->CamDirY.load(std::memory_order_relaxed),
-		Input->CamDirZ.load(std::memory_order_relaxed));
+		Input->CamDirX.Read(),
+		Input->CamDirY.Read(),
+		Input->CamDirZ.Read());
 
 	if (CamDir.IsNearlyZero()) return false;
 	CamDir.Normalize();
@@ -405,7 +401,7 @@ static bool StepBlinkInstance(flecs::entity Entity, FBCharacterBase* FBChar,
 	}
 
 	// Edge-detect blink button
-	bool bHeld = Input->bBlinkHeld.load(std::memory_order_relaxed);
+	bool bHeld = Input->BlinkHeld.Read();
 	bool bPressed = bHeld && !SimState->bPrevBlinkHeld;
 	bool bReleased = !bHeld && SimState->bPrevBlinkHeld;
 	SimState->bPrevBlinkHeld = bHeld;
@@ -440,7 +436,7 @@ static bool StepBlinkInstance(flecs::entity Entity, FBCharacterBase* FBChar,
 				Blink->Charges--;
 				if (Blink->Charges < MS->BlinkMaxCharges && Blink->RechargeTimer <= 0.f)
 					Blink->RechargeTimer = 0.f; // start recharge
-				Bridge.Teleported->store(true, std::memory_order_relaxed);
+				Bridge.StateAtomics->Teleported.Fire();
 				// Cancel slide if active
 				if (Entity.has<FSlideInstance>()) Entity.remove<FSlideInstance>();
 				bTeleported = true;
@@ -485,7 +481,7 @@ static bool StepBlinkInstance(flecs::entity Entity, FBCharacterBase* FBChar,
 				Blink->Charges--;
 				if (Blink->Charges < MS->BlinkMaxCharges && Blink->RechargeTimer <= 0.f)
 					Blink->RechargeTimer = 0.f;
-				Bridge.Teleported->store(true, std::memory_order_relaxed);
+				Bridge.StateAtomics->Teleported.Fire();
 				if (Entity.has<FSlideInstance>()) Entity.remove<FSlideInstance>();
 				bTeleported = true;
 			}
@@ -525,9 +521,9 @@ static bool TryActivateMantle(flecs::entity Entity, FBCharacterBase* FBChar,
 
 	// Camera look direction for detection
 	FVector LookDir(
-		Input->CamDirX.load(std::memory_order_relaxed),
-		Input->CamDirY.load(std::memory_order_relaxed),
-		Input->CamDirZ.load(std::memory_order_relaxed));
+		Input->CamDirX.Read(),
+		Input->CamDirY.Read(),
+		Input->CamDirZ.Read());
 	if (LookDir.IsNearlyZero()) return false;
 	LookDir.Normalize();
 
@@ -604,15 +600,15 @@ static bool TryActivateMantle(flecs::entity Entity, FBCharacterBase* FBChar,
 static void HandleHangExit(flecs::entity Entity, FBCharacterBase* FBChar,
                             FMantleInstance* Mantle, const FMovementStatic* MS,
                             const FCharacterInputAtomics* Input,
-                            bool bJumpEdge, bool bCrouchEdge)
+                            bool bJumpPressed, bool bCrouchEdge)
 {
-	if (bJumpEdge)
+	if (bJumpPressed)
 	{
 		// Read camera direction from atomics
 		FVector CamDir(
-			Input->CamDirX.load(std::memory_order_relaxed),
-			Input->CamDirY.load(std::memory_order_relaxed),
-			Input->CamDirZ.load(std::memory_order_relaxed));
+			Input->CamDirX.Read(),
+			Input->CamDirY.Read(),
+			Input->CamDirZ.Read());
 		FVector HorizFwd = FVector(CamDir.X, CamDir.Y, 0.f).GetSafeNormal();
 		if (HorizFwd.IsNearlyZero())
 		{
@@ -696,14 +692,11 @@ void UFlecsArtillerySubsystem::PrepareCharacterStep(float DeltaTime)
 		const FCharacterInputAtomics* Input = Bridge.InputAtomics.Get();
 
 		// ── 1. Read ALL input atomics ──
-		float DirX = Input->DirX.load(std::memory_order_relaxed);
-		float DirZ = Input->DirZ.load(std::memory_order_relaxed);
-		bool bJumpPressed = Input->bJumpPressed.load(std::memory_order_relaxed);
-		bool bCrouchHeld = Input->bCrouchHeld.load(std::memory_order_relaxed);
-		bool bSprinting = Input->bSprinting.load(std::memory_order_relaxed);
-
-		// Consume one-shot jump press
-		if (bJumpPressed) Input->bJumpPressed.store(false, std::memory_order_relaxed);
+		float DirX = Input->DirX.Read();
+		float DirZ = Input->DirZ.Read();
+		bool bJumpPressed = Input->JumpPressed.Consume();
+		bool bCrouchHeld = Input->CrouchHeld.Read();
+		bool bSprinting = Input->Sprinting.Read();
 
 		// ── 2. Read Flecs components ──
 		if (!Bridge.Entity.is_valid())
@@ -721,13 +714,12 @@ void UFlecsArtillerySubsystem::PrepareCharacterStep(float DeltaTime)
 			continue;
 		}
 
-		// Edge-detect buttons (using SimState prev values)
-		bool bJumpEdge = false, bCrouchEdge = false;
+		// Edge-detect crouch (using SimState prev values)
+		// Jump is already one-shot (Consume() returns true once) — no edge detect needed
+		bool bCrouchEdge = false;
 		if (SimState)
 		{
-			bJumpEdge = bJumpPressed && !SimState->bPrevJumpPressed;
 			bCrouchEdge = bCrouchHeld && !SimState->bPrevCrouchHeld;
-			SimState->bPrevJumpPressed = bJumpPressed;
 			SimState->bPrevCrouchHeld = bCrouchHeld;
 		}
 
@@ -744,7 +736,7 @@ void UFlecsArtillerySubsystem::PrepareCharacterStep(float DeltaTime)
 			// Handle hang exit input BEFORE stepping (so pull-up transitions take effect)
 			if (Mantle->Phase == 4 && SimState)
 			{
-				HandleHangExit(Bridge.Entity, FBChar, Mantle, MS, Input, bJumpEdge, bCrouchEdge);
+				HandleHangExit(Bridge.Entity, FBChar, Mantle, MS, Input, bJumpPressed, bCrouchEdge);
 				// Re-read Mantle — may have been removed by wall-jump/let-go
 				Mantle = Bridge.Entity.try_get_mut<FMantleInstance>();
 			}
@@ -754,17 +746,17 @@ void UFlecsArtillerySubsystem::PrepareCharacterStep(float DeltaTime)
 				StepMantleInstance(Bridge.Entity, FBChar, Mantle, MS, DeltaTime, bMantling, bHanging);
 			}
 		}
-		Bridge.MantleActive->store(bMantling, std::memory_order_relaxed);
-		Bridge.Hanging->store(bHanging, std::memory_order_relaxed);
+		Bridge.StateAtomics->MantleActive.Write(bMantling);
+		Bridge.StateAtomics->Hanging.Write(bHanging);
 		if (bMantling && Mantle)
 		{
-			Bridge.MantleType->store(Mantle->MantleType, std::memory_order_relaxed);
+			Bridge.StateAtomics->MantleType.Write(Mantle->MantleType);
 		}
 
 		if (bMantling)
 		{
-			Bridge.SlideActive->store(false, std::memory_order_relaxed);
-			Bridge.BlinkAiming->store(false, std::memory_order_relaxed);
+			Bridge.StateAtomics->SlideActive.Write(false);
+			Bridge.StateAtomics->BlinkAiming.Write(false);
 			goto TickTimers;
 		}
 
@@ -775,14 +767,14 @@ void UFlecsArtillerySubsystem::PrepareCharacterStep(float DeltaTime)
 			if (Slide)
 			{
 				// Jump during slide → slide-cancel jump
-				if (bJumpEdge)
+				if (bJumpPressed)
 				{
 					Bridge.Entity.remove<FSlideInstance>();
 					// Apply jump force directly (cm/s → Jolt via OtherForce)
 					FBarragePrimitive::ApplyForce(
 						FVector3d(0, 0, MS->SlideJumpVelocity),
 						Bridge.CachedBody, PhysicsInputType::OtherForce);
-					bJumpEdge = false; // consumed
+					bJumpPressed = false; // consumed
 				}
 				// Crouch released during slide → end slide
 				else if (!bCrouchHeld)
@@ -794,7 +786,7 @@ void UFlecsArtillerySubsystem::PrepareCharacterStep(float DeltaTime)
 					bSliding = StepSlideInstance(Bridge.Entity, FBChar, Slide, MS, DirX, DirZ, DeltaTime);
 				}
 			}
-			Bridge.SlideActive->store(bSliding, std::memory_order_relaxed);
+			Bridge.StateAtomics->SlideActive.Write(bSliding);
 
 			// ── 5. Blink FSM (Tier 2 — coexists with slide) ──
 			FBlinkInstance* Blink = Bridge.Entity.try_get_mut<FBlinkInstance>();
@@ -808,17 +800,17 @@ void UFlecsArtillerySubsystem::PrepareCharacterStep(float DeltaTime)
 				if (bBlinkTeleported)
 				{
 					bSliding = false;
-					Bridge.SlideActive->store(false, std::memory_order_relaxed);
+					Bridge.StateAtomics->SlideActive.Write(false);
 				}
 			}
-			Bridge.BlinkAiming->store(bBlinkAiming, std::memory_order_relaxed);
+			Bridge.StateAtomics->BlinkAiming.Write(bBlinkAiming);
 
 			if (bSliding || bBlinkTeleported) goto TickTimers;
 
 			// ── 6. No movement ability active — check activations ──
 
 			// 6a. Jump → try mantle detection → if found → create FMantleInstance
-			if (bJumpEdge)
+			if (bJumpPressed)
 			{
 				bool bMantleCreated = false;
 				if (SimState && CachedBarrageDispatch)
@@ -830,9 +822,9 @@ void UFlecsArtillerySubsystem::PrepareCharacterStep(float DeltaTime)
 
 				if (bMantleCreated)
 				{
-					Bridge.MantleActive->store(true, std::memory_order_relaxed);
+					Bridge.StateAtomics->MantleActive.Write(true);
 					const FMantleInstance* NewMantle = Bridge.Entity.try_get<FMantleInstance>();
-					if (NewMantle) Bridge.MantleType->store(NewMantle->MantleType, std::memory_order_relaxed);
+					if (NewMantle) Bridge.StateAtomics->MantleType.Write(NewMantle->MantleType);
 					goto TickTimers;
 				}
 
@@ -864,7 +856,7 @@ void UFlecsArtillerySubsystem::PrepareCharacterStep(float DeltaTime)
 					SI.CurrentSpeed = HorizSpeedCm + MS->SlideInitialSpeedBoost;
 					SI.Timer = MS->SlideMaxDuration;
 					Bridge.Entity.set<FSlideInstance>(SI);
-					Bridge.SlideActive->store(true, std::memory_order_relaxed);
+					Bridge.StateAtomics->SlideActive.Write(true);
 					goto TickTimers;
 				}
 			}
@@ -972,9 +964,9 @@ void UFlecsArtillerySubsystem::PrepareCharacterStep(float DeltaTime)
 					FVector3d FeetPosD = CoordinateUtils::FromJoltCoordinatesD(JoltPos);
 					FVector FeetPos(FeetPosD);
 					FVector LookDir(
-						Input->CamDirX.load(std::memory_order_relaxed),
-						Input->CamDirY.load(std::memory_order_relaxed),
-						Input->CamDirZ.load(std::memory_order_relaxed));
+						Input->CamDirX.Read(),
+						Input->CamDirY.Read(),
+						Input->CamDirZ.Read());
 					if (!LookDir.IsNearlyZero())
 					{
 						LookDir.Normalize();

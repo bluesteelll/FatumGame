@@ -104,7 +104,6 @@ struct FCharacterSimState
 	float CoyoteTimer = 0.f;
 	float JumpBufferTimer = 0.f;
 	bool bWasGrounded = true;
-	bool bPrevJumpPressed = false;
 	bool bPrevCrouchHeld = false;
 	bool bPrevBlinkHeld = false;
 	// Mantle
