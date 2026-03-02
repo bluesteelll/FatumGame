@@ -134,6 +134,16 @@ void FLedgeDetector::Detect(const FVector& CharFeetPos, const FVector& LookDir,
 	float LedgeHeight = LedgeTopPoint.Z - CharFeetPos.Z;
 	if (LedgeHeight < Profile->MantleMinHeight || LedgeHeight > MaxReachHeight) return;
 
+	// ── Look angle gate (relative to ledge top) ──
+	// Reject if the angle between LookDir and the direction from eye to ledge top
+	// exceeds the configured threshold. Prevents activation when looking at the floor.
+	FVector EyePos = CharFeetPos;
+	EyePos.Z += Profile->StandingEyeHeight;
+	FVector ToLedge = (LedgeTopPoint - EyePos).GetSafeNormal();
+	float LookToLedgeDot = FVector::DotProduct(LookDir, ToLedge);
+	float MinDot = FMath::Cos(FMath::DegreesToRadians(Profile->LedgeDetectMaxLookDownAngle));
+	if (LookToLedgeDot < MinDot) return;
+
 	// ═══════════════════════════════════════════════════════════════
 	// PHASE 4: DEPTH CHECK (CastRay)
 	// Ensure the ledge has enough depth to stand on

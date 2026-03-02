@@ -233,6 +233,11 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Mantle", meta = (ClampMin = "40", ClampMax = "150"))
 	float MantleForwardReach = 80.f;
 
+	/** Max angle (degrees) between look direction and direction to wall hit point
+	 *  for ledge detection to activate. 0 = must look exactly at wall. 90 = no restriction. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Mantle", meta = (ClampMin = "0", ClampMax = "90"))
+	float LedgeDetectMaxLookDownAngle = 45.f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Mantle", meta = (ClampMin = "20", ClampMax = "100"))
 	float MantleMinHeight = 50.f;
 
