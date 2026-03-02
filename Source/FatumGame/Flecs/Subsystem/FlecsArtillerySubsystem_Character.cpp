@@ -683,13 +683,32 @@ static void HandleHangExit(flecs::entity Entity, FBCharacterBase* FBChar,
 // PREPARE CHARACTER STEP (sim thread, before StackUp)
 // ═══════════════════════════════════════════════════════════════
 
-void UFlecsArtillerySubsystem::PrepareCharacterStep(float DeltaTime)
+void UFlecsArtillerySubsystem::PrepareCharacterStep(float RealDT, float DilatedDT, float TimeScale, bool bPlayerFullSpeed)
 {
+	// Player compensation: when bPlayerFullSpeed, velocities/forces must be scaled
+	// so that Jolt integration with DilatedDT produces RealDT-equivalent displacement.
+	const float VelocityScale = (bPlayerFullSpeed && TimeScale > 0.02f) ? (1.f / TimeScale) : 1.f;
+	const float DeltaTime = bPlayerFullSpeed ? RealDT : DilatedDT;
+
 	for (FCharacterPhysBridge& Bridge : CharacterBridges)
 	{
 		if (!Bridge.CachedFBChar || !Bridge.InputAtomics) continue;
 		FBCharacterBase* FBChar = Bridge.CachedFBChar.Get();
 		const FCharacterInputAtomics* Input = Bridge.InputAtomics.Get();
+
+		// Lazy-capture base gravity (first tick after character registers)
+		if (!Bridge.bBaseGravityCaptured && FBChar->mGravity.GetY() != 0.f)
+		{
+			Bridge.BaseGravityJoltY = FBChar->mGravity.GetY();
+			Bridge.bBaseGravityCaptured = true;
+		}
+
+		// Compensate player gravity during time dilation (preserve X/Z for gravity zones)
+		if (Bridge.bBaseGravityCaptured)
+		{
+			float TargetGravY = Bridge.BaseGravityJoltY * VelocityScale;
+			FBChar->mGravity = JPH::Vec3(FBChar->mGravity.GetX(), TargetGravY, FBChar->mGravity.GetZ());
+		}
 
 		// ── 1. Read ALL input atomics ──
 		float DirX = Input->DirX.Read();
@@ -772,7 +791,7 @@ void UFlecsArtillerySubsystem::PrepareCharacterStep(float DeltaTime)
 					Bridge.Entity.remove<FSlideInstance>();
 					// Apply jump force directly (cm/s → Jolt via OtherForce)
 					FBarragePrimitive::ApplyForce(
-						FVector3d(0, 0, MS->SlideJumpVelocity),
+						FVector3d(0, 0, MS->SlideJumpVelocity * VelocityScale),
 						Bridge.CachedBody, PhysicsInputType::OtherForce);
 					bJumpPressed = false; // consumed
 				}
@@ -784,6 +803,7 @@ void UFlecsArtillerySubsystem::PrepareCharacterStep(float DeltaTime)
 				else
 				{
 					bSliding = StepSlideInstance(Bridge.Entity, FBChar, Slide, MS, DirX, DirZ, DeltaTime);
+					if (bSliding) FBChar->mLocomotionUpdate *= VelocityScale;
 				}
 			}
 			Bridge.StateAtomics->SlideActive.Write(bSliding);
@@ -833,7 +853,7 @@ void UFlecsArtillerySubsystem::PrepareCharacterStep(float DeltaTime)
 				{
 					float JumpVel = (State && State->Posture == 1) ? MS->CrouchJumpVelocity : MS->JumpVelocity;
 					FBarragePrimitive::ApplyForce(
-						FVector3d(0, 0, JumpVel),
+						FVector3d(0, 0, JumpVel * VelocityScale),
 						Bridge.CachedBody, PhysicsInputType::OtherForce);
 					SimState->CoyoteTimer = 0.f;
 					SimState->JumpBufferTimer = 0.f;
@@ -849,7 +869,9 @@ void UFlecsArtillerySubsystem::PrepareCharacterStep(float DeltaTime)
 			if (bCrouchEdge && bSprinting && bOnGround)
 			{
 				JPH::Vec3 CurVel = FBChar->mCharacter->GetLinearVelocity();
-				float HorizSpeedCm = FMath::Sqrt(CurVel.GetX() * CurVel.GetX() + CurVel.GetZ() * CurVel.GetZ()) * 100.f;
+				// Undo VelocityScale for speed check (Jolt velocity is scaled during dilation)
+				float SpeedScale = (VelocityScale > 1.001f) ? (1.f / VelocityScale) : 1.f;
+				float HorizSpeedCm = FMath::Sqrt(CurVel.GetX() * CurVel.GetX() + CurVel.GetZ() * CurVel.GetZ()) * 100.f * SpeedScale;
 				if (HorizSpeedCm >= MS->SlideMinEntrySpeed)
 				{
 					FSlideInstance SI;
@@ -898,6 +920,14 @@ void UFlecsArtillerySubsystem::PrepareCharacterStep(float DeltaTime)
 			JPH::Vec3 CurVelo = FBChar->mCharacter->GetLinearVelocity();
 			JPH::Vec3 CurH(CurVelo.GetX(), 0, CurVelo.GetZ());
 
+			// Jolt velocity includes VelocityScale from previous frame's mLocomotionUpdate.
+			// Undo scaling to work in logical (unscaled) velocity space for smoothing.
+			// Without this, VelocityScale compounds each frame → runaway acceleration.
+			if (VelocityScale > 1.001f)
+			{
+				CurH *= (1.f / VelocityScale);
+			}
+
 			float AccelRate;
 			if (bOnGround)
 				AccelRate = TargetH.IsNearZero() ? (DecelCm / 100.f) : (AccelCm / 100.f);
@@ -913,7 +943,7 @@ void UFlecsArtillerySubsystem::PrepareCharacterStep(float DeltaTime)
 			else
 				SmoothedH = CurH + (Diff / DiffLen) * MoveStep;
 
-			FBChar->mLocomotionUpdate = SmoothedH;
+			FBChar->mLocomotionUpdate = SmoothedH * VelocityScale;
 		}
 
 	TickTimers:
@@ -933,7 +963,7 @@ void UFlecsArtillerySubsystem::PrepareCharacterStep(float DeltaTime)
 				// Buffered jump on landing
 				float JumpVel = (State && State->Posture == 1) ? MS->CrouchJumpVelocity : MS->JumpVelocity;
 				FBarragePrimitive::ApplyForce(
-					FVector3d(0, 0, JumpVel),
+					FVector3d(0, 0, JumpVel * VelocityScale),
 					Bridge.CachedBody, PhysicsInputType::OtherForce);
 				SimState->JumpBufferTimer = 0.f;
 			}

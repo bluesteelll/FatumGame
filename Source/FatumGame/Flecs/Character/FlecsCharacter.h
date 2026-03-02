@@ -7,6 +7,7 @@
 #include "SkeletonTypes.h"
 #include "FlecsInteractionTypes.h"
 #include "FlecsCharacterTypes.h"
+#include "FTimeDilationStack.h"
 #include "FlecsCharacter.generated.h"
 
 class UFlecsEntityDefinition;
@@ -522,6 +523,10 @@ private:
 	TSharedPtr<FCharacterInputAtomics, ESPMode::ThreadSafe> InputAtomics;  // game→sim
 	TSharedPtr<FCharacterStateAtomics, ESPMode::ThreadSafe> StateAtomics; // sim→game
 	bool bPrevBlinkAiming = false;
+
+	// ── Time dilation (game thread → sim thread atomic) ──
+	FTimeDilationStack DilationStack;
+	double LastRealTickTime = 0.0; // wall-clock time for undilated DT in dilation stack
 
 	// Feet-to-actor offset: Z distance from Barrage feet to UE capsule center.
 	// On ground: = CapsuleHalfHeight (standard).

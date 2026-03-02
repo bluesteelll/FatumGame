@@ -42,6 +42,10 @@ struct FCharacterPhysBridge
 	TSharedPtr<FCharacterStateAtomics, ESPMode::ThreadSafe> StateAtomics;  // sim→game
 	flecs::entity Entity;
 	TSharedPtr<FBCharacterBase> CachedFBChar;
+
+	// ── Time dilation: base gravity for player compensation (Jolt Y, lazy-captured) ──
+	float BaseGravityJoltY = 0.f;
+	bool bBaseGravityCaptured = false;
 };
 
 /**
@@ -128,8 +132,12 @@ public:
 
 	/** Compute acceleration-smoothed locomotion for all characters. Called by FSimulationWorker before StackUp.
 	 *  Reads InputAtomics (direction), FCharacterMoveState (sprint/posture), FMovementStatic (speeds/accel),
-	 *  CharacterVirtual (ground state, velocity). Writes mLocomotionUpdate on FBCharacter. */
-	void PrepareCharacterStep(float DeltaTime);
+	 *  CharacterVirtual (ground state, velocity). Writes mLocomotionUpdate on FBCharacter.
+	 *  @param RealDT     Wall-clock delta (undilated)
+	 *  @param DilatedDT  RealDT * TimeScale (for physics)
+	 *  @param TimeScale  Active time dilation [0.02, 1.0]
+	 *  @param bPlayerFullSpeed  Player exempted from dilation? */
+	void PrepareCharacterStep(float RealDT, float DilatedDT, float TimeScale, bool bPlayerFullSpeed);
 
 	// ═══════════════════════════════════════════════════════════════
 	// LOCAL PLAYER REGISTRATION (local player cache)
@@ -392,6 +400,9 @@ public:
 	 *  Unlike GetCurrentAlpha() (cached, stale for actors), this reads wall-clock time for a fresh value.
 	 *  Used by AFlecsCharacter::Tick() which runs before subsystem Tick. */
 	float ComputeFreshAlpha(uint64& OutSimTick) const;
+
+	/** Access SimWorker for time dilation atomics (game thread writes, sim thread reads). */
+	FSimulationWorker& GetSimWorker() { return SimWorker; }
 
 private:
 	/** Set up Flecs systems that run on the simulation thread. */

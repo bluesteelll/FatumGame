@@ -37,7 +37,22 @@ uint32 FSimulationWorker::Run()
 		LastTime = TickStart;
 
 		// Clamp delta to prevent spiral of death
-		DeltaTime = FMath::Clamp(DeltaTime, 0.0001f, 0.05f);
+		const float RealDT = FMath::Clamp(DeltaTime, 0.0001f, 0.05f);
+
+		// ── Time dilation: smooth toward desired scale ──
+		{
+			float TargetScale = FMath::Clamp(
+				DesiredTimeScale.load(std::memory_order_relaxed), 0.02f, 1.0f);
+			float InterpSpeed = TransitionSpeed.load(std::memory_order_relaxed);
+			ActiveTimeScale = FMath::FInterpTo(ActiveTimeScale, TargetScale, RealDT, InterpSpeed);
+			if (FMath::Abs(ActiveTimeScale - TargetScale) < 0.001f)
+				ActiveTimeScale = TargetScale;
+		}
+		const float DilatedDT = RealDT * ActiveTimeScale;
+		const bool bPlayerFull = bPlayerFullSpeed.load(std::memory_order_relaxed);
+
+		// Publish smoothed scale for game thread (UE GlobalTimeDilation mirrors this)
+		ActiveTimeScalePublished.store(ActiveTimeScale, std::memory_order_relaxed);
 
 		// Drain game thread commands (lock-free MPSC queue)
 		if (FlecsSubsystem)
@@ -52,7 +67,7 @@ uint32 FSimulationWorker::Run()
 		// (which processes mLocomotionUpdate via IngestUpdate).
 		if (FlecsSubsystem)
 		{
-			FlecsSubsystem->PrepareCharacterStep(DeltaTime);
+			FlecsSubsystem->PrepareCharacterStep(RealDT, DilatedDT, ActiveTimeScale, bPlayerFull);
 		}
 
 		if (!bRunning.load(std::memory_order_acquire)) break;
@@ -63,7 +78,7 @@ uint32 FSimulationWorker::Run()
 
 			if (!bRunning.load(std::memory_order_acquire)) break;
 
-			BarrageDispatch->StepWorld(DeltaTime, TickCount);
+			BarrageDispatch->StepWorld(DilatedDT, TickCount);
 
 			if (!bRunning.load(std::memory_order_acquire)) break;
 
@@ -73,15 +88,16 @@ uint32 FSimulationWorker::Run()
 		if (FlecsSubsystem)
 		{
 			FlecsSubsystem->ApplyLateSyncBuffers();
-			FlecsSubsystem->ProgressWorld(DeltaTime);
+			FlecsSubsystem->ProgressWorld(DilatedDT);
 		}
 
 		++TickCount;
 
 		// Publish timing for game thread interpolation.
+		// Use RealDT — ticks still happen at ~60Hz real, positions just change less per tick.
 		// Order matters: SimTickCount is the "version guard" — store it LAST
 		// so game thread sees consistent DeltaTime + TimeSeconds when it reads the new tick count.
-		LastSimDeltaTime.store(DeltaTime, std::memory_order_release);
+		LastSimDeltaTime.store(RealDT, std::memory_order_release);
 		LastSimTickTimeSeconds.store(FPlatformTime::Seconds(), std::memory_order_release);
 		SimTickCount.store(TickCount, std::memory_order_release);
 

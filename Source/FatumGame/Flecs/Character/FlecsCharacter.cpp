@@ -39,6 +39,7 @@
 #include "FlecsItemDefinition.h"
 #include "Engine/Engine.h"
 #include "Kismet/GameplayStatics.h"
+#include "HAL/PlatformTime.h"
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONSTRUCTOR
@@ -341,20 +342,55 @@ void AFlecsCharacter::Tick(float DeltaTime)
 		bBarrageJustSpawned = true; // Next ReadAndApplyBarragePosition will snap Prev=Curr=Smoothed
 	}
 
-	// 1.7. Blink aiming time dilation (sim thread writes BlinkAiming, game thread applies).
+	// 1.7. Time dilation: push/remove blink aim source based on BlinkAiming state.
+	static const FName BlinkAimTag("BlinkAim");
 	if (StateAtomics)
 	{
 		bool bAiming = StateAtomics->BlinkAiming.Read();
-		if (bAiming != bPrevBlinkAiming)
+		if (bAiming && !bPrevBlinkAiming)
 		{
-			float TimeDilation = 1.0f;
-			if (bAiming && FatumMovement && FatumMovement->MovementProfile)
-				TimeDilation = FatumMovement->MovementProfile->BlinkAimTimeDilation;
-			if (UWorld* W = GetWorld())
-			{
-				UGameplayStatics::SetGlobalTimeDilation(W, TimeDilation);
-			}
-			bPrevBlinkAiming = bAiming;
+			FDilationEntry Entry;
+			Entry.Tag = BlinkAimTag;
+			Entry.DesiredScale = (FatumMovement && FatumMovement->MovementProfile)
+				? FatumMovement->MovementProfile->BlinkAimTimeDilation : 0.3f;
+			Entry.bPlayerFullSpeed = true;
+			Entry.EntrySpeed = 20.f;
+			Entry.ExitSpeed = 10.f;
+			DilationStack.Push(Entry);
+		}
+		else if (!bAiming && bPrevBlinkAiming)
+		{
+			DilationStack.Remove(BlinkAimTag); // auto-captures ExitSpeed
+		}
+		bPrevBlinkAiming = bAiming;
+	}
+
+	// Tick dilation stack → write to sim thread + UE GlobalTimeDilation.
+	{
+		// Use undilated wall-clock DT for stack tick (durations count in real time).
+		// FApp::GetDeltaTime() and Tick DeltaTime are both dilated by GlobalTimeDilation.
+		double Now = FPlatformTime::Seconds();
+		float RealDT = (LastRealTickTime > 0.0) ? FMath::Clamp(static_cast<float>(Now - LastRealTickTime), 0.0001f, 0.1f) : DeltaTime;
+		LastRealTickTime = Now;
+		DilationStack.Tick(RealDT);
+
+		float TargetScale = DilationStack.GetTargetScale();
+		float InterpSpeed = DilationStack.GetTransitionSpeed();
+
+		if (auto* Sub = GetWorld() ? GetWorld()->GetSubsystem<UFlecsArtillerySubsystem>() : nullptr)
+		{
+			Sub->GetSimWorker().DesiredTimeScale.store(TargetScale, std::memory_order_relaxed);
+			Sub->GetSimWorker().bPlayerFullSpeed.store(
+				DilationStack.IsPlayerFullSpeed(), std::memory_order_relaxed);
+			Sub->GetSimWorker().TransitionSpeed.store(InterpSpeed, std::memory_order_relaxed);
+
+			// Mirror sim thread's smoothed scale for UE GlobalTimeDilation (prevents snap vs smooth desync)
+			float PublishedScale = Sub->GetSimWorker().ActiveTimeScalePublished.load(std::memory_order_relaxed);
+			UGameplayStatics::SetGlobalTimeDilation(GetWorld(), PublishedScale);
+		}
+		else if (UWorld* W = GetWorld())
+		{
+			UGameplayStatics::SetGlobalTimeDilation(W, TargetScale);
 		}
 	}
 

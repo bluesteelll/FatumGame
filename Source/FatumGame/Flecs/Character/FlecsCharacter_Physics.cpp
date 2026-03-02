@@ -60,7 +60,18 @@ void AFlecsCharacter::ReadAndApplyBarragePosition(float DeltaTime)
 	else
 	{
 		FVector LerpTarget = FMath::Lerp(PrevBarragePos, CurrBarragePos, Alpha);
-		SmoothedBarragePos = FMath::VInterpTo(SmoothedBarragePos, LerpTarget, DeltaTime, 30.f);
+
+		// When player moves at full speed but UE DeltaTime is dilated,
+		// VInterpTo needs undilated DT to keep up with full-speed position changes.
+		float SmoothDT = DeltaTime;
+		float PublishedScale = Sub->GetSimWorker().ActiveTimeScalePublished.load(std::memory_order_relaxed);
+		bool bPlayerFull = Sub->GetSimWorker().bPlayerFullSpeed.load(std::memory_order_relaxed);
+		if (bPlayerFull && PublishedScale > 0.02f && PublishedScale < 0.99f)
+		{
+			SmoothDT = DeltaTime / PublishedScale;
+		}
+
+		SmoothedBarragePos = FMath::VInterpTo(SmoothedBarragePos, LerpTarget, SmoothDT, 30.f);
 		FeetPos = SmoothedBarragePos;
 	}
 
