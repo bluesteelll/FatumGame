@@ -2,6 +2,7 @@
 #include "FlecsWeaponLibrary.h"
 #include "FlecsLibraryHelpers.h"
 #include "FlecsWeaponComponents.h"
+#include "FSimStateCache.h"
 
 // ═══════════════════════════════════════════════════════════════
 // WEAPON CONTROL
@@ -99,19 +100,13 @@ void UFlecsWeaponLibrary::SetAimDirection(UObject* WorldContextObject, int64 Cha
 
 int32 UFlecsWeaponLibrary::GetWeaponAmmo(UObject* WorldContextObject, int64 WeaponEntityId)
 {
-	UFlecsArtillerySubsystem* Subsystem = FlecsLibrary::GetSubsystem(WorldContextObject);
-	if (!Subsystem || WeaponEntityId == 0) return -1;
+	UFlecsArtillerySubsystem* Sub = FlecsLibrary::GetSubsystem(WorldContextObject);
+	if (!Sub || WeaponEntityId == 0) return -1;
 
-	flecs::world* FlecsWorld = Subsystem->GetFlecsWorld();
-	if (!FlecsWorld) return -1;
-
-	flecs::entity WeaponEntity = FlecsWorld->entity(static_cast<flecs::entity_t>(WeaponEntityId));
-	if (!WeaponEntity.is_valid() || !WeaponEntity.is_alive()) return -1;
-
-	const FWeaponInstance* Weapon = WeaponEntity.try_get<FWeaponInstance>();
-	if (!Weapon) return -1;
-
-	return Weapon->CurrentAmmo;
+	FWeaponSnapshot Snap;
+	if (Sub->GetSimStateCache().ReadWeapon(WeaponEntityId, Snap))
+		return Snap.CurrentAmmo;
+	return -1;
 }
 
 bool UFlecsWeaponLibrary::GetWeaponAmmoInfo(UObject* WorldContextObject, int64 WeaponEntityId,
@@ -121,39 +116,26 @@ bool UFlecsWeaponLibrary::GetWeaponAmmoInfo(UObject* WorldContextObject, int64 W
 	OutMagazineSize = 0;
 	OutReserveAmmo = 0;
 
-	UFlecsArtillerySubsystem* Subsystem = FlecsLibrary::GetSubsystem(WorldContextObject);
-	if (!Subsystem || WeaponEntityId == 0) return false;
+	UFlecsArtillerySubsystem* Sub = FlecsLibrary::GetSubsystem(WorldContextObject);
+	if (!Sub || WeaponEntityId == 0) return false;
 
-	flecs::world* FlecsWorld = Subsystem->GetFlecsWorld();
-	if (!FlecsWorld) return false;
+	FWeaponSnapshot Snap;
+	if (!Sub->GetSimStateCache().ReadWeapon(WeaponEntityId, Snap))
+		return false;
 
-	flecs::entity WeaponEntity = FlecsWorld->entity(static_cast<flecs::entity_t>(WeaponEntityId));
-	if (!WeaponEntity.is_valid() || !WeaponEntity.is_alive()) return false;
-
-	const FWeaponInstance* Instance = WeaponEntity.try_get<FWeaponInstance>();
-	const FWeaponStatic* Static = WeaponEntity.try_get<FWeaponStatic>();
-	if (!Instance) return false;
-
-	OutCurrentAmmo = Instance->CurrentAmmo;
-	OutReserveAmmo = Instance->ReserveAmmo;
-	OutMagazineSize = Static ? Static->MagazineSize : 0;
-
+	OutCurrentAmmo = Snap.CurrentAmmo;
+	OutMagazineSize = Snap.MagazineSize;
+	OutReserveAmmo = Snap.ReserveAmmo;
 	return true;
 }
 
 bool UFlecsWeaponLibrary::IsWeaponReloading(UObject* WorldContextObject, int64 WeaponEntityId)
 {
-	UFlecsArtillerySubsystem* Subsystem = FlecsLibrary::GetSubsystem(WorldContextObject);
-	if (!Subsystem || WeaponEntityId == 0) return false;
+	UFlecsArtillerySubsystem* Sub = FlecsLibrary::GetSubsystem(WorldContextObject);
+	if (!Sub || WeaponEntityId == 0) return false;
 
-	flecs::world* FlecsWorld = Subsystem->GetFlecsWorld();
-	if (!FlecsWorld) return false;
-
-	flecs::entity WeaponEntity = FlecsWorld->entity(static_cast<flecs::entity_t>(WeaponEntityId));
-	if (!WeaponEntity.is_valid() || !WeaponEntity.is_alive()) return false;
-
-	const FWeaponInstance* Weapon = WeaponEntity.try_get<FWeaponInstance>();
-	if (!Weapon) return false;
-
-	return Weapon->bIsReloading;
+	FWeaponSnapshot Snap;
+	if (Sub->GetSimStateCache().ReadWeapon(WeaponEntityId, Snap))
+		return Snap.bIsReloading;
+	return false;
 }

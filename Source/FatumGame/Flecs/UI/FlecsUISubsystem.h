@@ -36,46 +36,8 @@ struct FContainerSharedState
 	TQueue<FOpResult, EQueueMode::Mpsc> OpResults;
 };
 
-/** Per-entity value shared state. Sim thread writes packed atomics, game thread reads. */
-struct FValueSharedState
-{
-	/** Health: upper 32 = HP bits, lower 32 = MaxHP bits. */
-	alignas(64) std::atomic<uint64> HealthPacked{0};
-
-	/** Ammo: upper 16 = CurrentAmmo, next 16 = MagSize, lower 32 = Reserve. */
-	alignas(64) std::atomic<uint64> AmmoPacked{0};
-
-	static uint64 PackHealth(float HP, float MaxHP)
-	{
-		uint32 HPBits, MaxBits;
-		FMemory::Memcpy(&HPBits, &HP, sizeof(float));
-		FMemory::Memcpy(&MaxBits, &MaxHP, sizeof(float));
-		return (static_cast<uint64>(HPBits) << 32) | MaxBits;
-	}
-
-	static void UnpackHealth(uint64 Packed, float& HP, float& MaxHP)
-	{
-		uint32 HPBits = static_cast<uint32>(Packed >> 32);
-		uint32 MaxBits = static_cast<uint32>(Packed);
-		FMemory::Memcpy(&HP, &HPBits, sizeof(float));
-		FMemory::Memcpy(&MaxHP, &MaxBits, sizeof(float));
-	}
-
-	static uint64 PackAmmo(int32 Current, int32 MagSize, int32 Reserve)
-	{
-		uint64 C = static_cast<uint16>(Current);
-		uint64 M = static_cast<uint16>(MagSize);
-		uint64 R = static_cast<uint32>(Reserve);
-		return (C << 48) | (M << 32) | R;
-	}
-
-	static void UnpackAmmo(uint64 Packed, int32& Current, int32& MagSize, int32& Reserve)
-	{
-		Current = static_cast<int32>(static_cast<uint16>(Packed >> 48));
-		MagSize = static_cast<int32>(static_cast<uint16>(Packed >> 32));
-		Reserve = static_cast<int32>(static_cast<uint32>(Packed));
-	}
-};
+// FValueSharedState removed — packing utilities moved to FSimStateCache.h (SimStatePacking namespace).
+// Value models now read from FSimStateCache via UFlecsArtillerySubsystem.
 
 // ═══════════════════════════════════════════════════════════════
 // SUBSYSTEM
@@ -135,7 +97,6 @@ private:
 	struct FValueEntry
 	{
 		TObjectPtr<UFlecsValueModel> Model;
-		TUniquePtr<FValueSharedState> SharedState;
 		int32 RefCount = 0;
 	};
 	TMap<int64, FValueEntry> Values;

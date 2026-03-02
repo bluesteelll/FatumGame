@@ -243,6 +243,11 @@ void AFlecsCharacter::InitECSRegistration()
 		// Movement parameters for PrepareCharacterStep (speeds, accel, capsule)
 		Entity.set<FMovementStatic>(CapturedMS);
 
+		// Register in sim→game state cache with initial health
+		FlecsSubsystem->GetSimStateCache().Register(static_cast<int64>(Entity.id()));
+		FlecsSubsystem->GetSimStateCache().WriteHealth(
+			static_cast<int64>(Entity.id()), CapturedInitialHealth, CapturedMaxHealth);
+
 		// Register for sim-thread position readback
 		if (WeakSelf.IsValid())
 		{

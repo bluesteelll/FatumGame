@@ -64,7 +64,7 @@ void UFlecsArtillerySubsystem::SetupWeaponSystems()
 	World.system<FWeaponInstance>("WeaponReloadSystem")
 		.with<FTagWeapon>()
 		.without<FTagDead>()
-		.each([](flecs::entity Entity, FWeaponInstance& Weapon)
+		.each([this](flecs::entity Entity, FWeaponInstance& Weapon)
 		{
 			const float DeltaTime = Entity.world().get_info()->delta_time;
 
@@ -88,6 +88,10 @@ void UFlecsArtillerySubsystem::SetupWeaponSystems()
 						ReloadMsg.MagazineSize = Static->MagazineSize;
 						MsgSub->EnqueueMessage(TAG_UI_Reload, ReloadMsg);
 					}
+
+					// Update sim→game state cache (reload started)
+					SimStateCache.WriteWeapon(static_cast<int64>(Entity.id()),
+						Weapon.CurrentAmmo, Static->MagazineSize, Weapon.ReserveAmmo, true);
 				}
 				Weapon.bReloadRequested = false;
 			}
@@ -126,6 +130,10 @@ void UFlecsArtillerySubsystem::SetupWeaponSystems()
 						ReloadMsg.MagazineSize = Static->MagazineSize;
 						MsgSub->EnqueueMessage(TAG_UI_Reload, ReloadMsg);
 					}
+
+					// Update sim→game state cache (reload complete)
+					SimStateCache.WriteWeapon(static_cast<int64>(Entity.id()),
+						Weapon.CurrentAmmo, Static->MagazineSize, Weapon.ReserveAmmo, false);
 				}
 			}
 		});
@@ -415,6 +423,10 @@ void UFlecsArtillerySubsystem::SetupWeaponSystems()
 				AmmoMsg.ReserveAmmo = Weapon.ReserveAmmo;
 				MsgSub->EnqueueMessage(TAG_UI_Ammo, AmmoMsg);
 			}
+
+			// Update sim→game state cache
+			SimStateCache.WriteWeapon(static_cast<int64>(WeaponEntity.id()),
+				Weapon.CurrentAmmo, Static->MagazineSize, Weapon.ReserveAmmo, Weapon.bIsReloading);
 
 			// Carry-over overshoot for consistent average fire rate.
 			// If cooldown was -0.003 when we fire, += FireInterval gives 0.097

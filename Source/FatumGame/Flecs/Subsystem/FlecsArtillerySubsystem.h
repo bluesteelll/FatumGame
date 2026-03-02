@@ -10,6 +10,7 @@
 #include "flecs.h"
 #include "FSimulationWorker.h"
 #include "FLateSyncBridge.h"
+#include "FSimStateCache.h"
 #include <atomic>
 #include "FlecsCharacterTypes.h"
 #include "FlecsArtillerySubsystem.generated.h"
@@ -175,6 +176,10 @@ public:
 
 	/** Lock-free bridge for latest-value-wins data (aim, etc). Game thread writes, sim thread reads. */
 	FLateSyncBridge* GetLateSyncBridge() const { return LateSyncBridge.Get(); }
+
+	/** Lock-free sim→game state cache for scalar ECS values (health, weapon). */
+	FSimStateCache& GetSimStateCache() { return SimStateCache; }
+	const FSimStateCache& GetSimStateCache() const { return SimStateCache; }
 
 	// ═══════════════════════════════════════════════════════════════
 	// BIDIRECTIONAL BINDING API (simulation thread only)
@@ -480,6 +485,9 @@ private:
 
 	/** Bridge for lock-free game→sim "latest wins" data. */
 	TUniquePtr<FLateSyncBridge> LateSyncBridge;
+
+	/** Lock-free sim→game state cache (health, weapon snapshots). */
+	FSimStateCache SimStateCache;
 
 	// ═══════════════════════════════════════════════════════════════
 	// CHARACTER PHYSICS BRIDGE (sim thread only)

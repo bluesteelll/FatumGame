@@ -4,6 +4,7 @@
 #include "FlecsStaticComponents.h"
 #include "FlecsInstanceComponents.h"
 #include "FlecsGameTags.h"
+#include "FSimStateCache.h"
 
 // ═══════════════════════════════════════════════════════════════
 // ENTITY LIFECYCLE
@@ -91,6 +92,9 @@ void UFlecsDamageLibrary::Heal_ArtilleryThread(UFlecsArtillerySubsystem* Subsyst
 	float MaxHP = HealthStatic ? HealthStatic->MaxHP : 100.f;
 
 	HealthInst->CurrentHP = FMath::Min(HealthInst->CurrentHP + Amount, MaxHP);
+
+	// Update sim→game state cache
+	Subsystem->GetSimStateCache().WriteHealth(static_cast<int64>(Entity.id()), HealthInst->CurrentHP, MaxHP);
 }
 
 bool UFlecsDamageLibrary::IsAlive_ArtilleryThread(UFlecsArtillerySubsystem* Subsystem, FSkeletonKey BarrageKey)
@@ -119,42 +123,47 @@ bool UFlecsDamageLibrary::GetHealth_ArtilleryThread(UFlecsArtillerySubsystem* Su
 }
 
 // ═══════════════════════════════════════════════════════════════
-// QUERY (game-thread) - CROSS-THREAD READ
+// QUERY (game-thread) — reads from lock-free FSimStateCache
 // ═══════════════════════════════════════════════════════════════
 
 float UFlecsDamageLibrary::GetEntityHealth(UObject* WorldContextObject, FSkeletonKey BarrageKey)
 {
-	UFlecsArtillerySubsystem* Subsystem = FlecsLibrary::GetSubsystem(WorldContextObject);
-	if (!Subsystem || !BarrageKey.IsValid()) return -1.f;
-	if (!Subsystem->GetFlecsWorld()) return -1.f;
+	UFlecsArtillerySubsystem* Sub = FlecsLibrary::GetSubsystem(WorldContextObject);
+	if (!Sub || !BarrageKey.IsValid()) return -1.f;
 
-	float CurrentHP, MaxHP;
-	if (GetHealth_ArtilleryThread(Subsystem, BarrageKey, CurrentHP, MaxHP))
-	{
-		return CurrentHP;
-	}
+	flecs::entity Entity = Sub->GetEntityForBarrageKey(BarrageKey);
+	if (Entity.id() == 0) return -1.f;
+
+	FHealthSnapshot Snap;
+	if (Sub->GetSimStateCache().ReadHealth(static_cast<int64>(Entity.id()), Snap))
+		return Snap.CurrentHP;
 	return -1.f;
 }
 
 float UFlecsDamageLibrary::GetEntityMaxHealth(UObject* WorldContextObject, FSkeletonKey BarrageKey)
 {
-	UFlecsArtillerySubsystem* Subsystem = FlecsLibrary::GetSubsystem(WorldContextObject);
-	if (!Subsystem || !BarrageKey.IsValid()) return -1.f;
-	if (!Subsystem->GetFlecsWorld()) return -1.f;
+	UFlecsArtillerySubsystem* Sub = FlecsLibrary::GetSubsystem(WorldContextObject);
+	if (!Sub || !BarrageKey.IsValid()) return -1.f;
 
-	float CurrentHP, MaxHP;
-	if (GetHealth_ArtilleryThread(Subsystem, BarrageKey, CurrentHP, MaxHP))
-	{
-		return MaxHP;
-	}
+	flecs::entity Entity = Sub->GetEntityForBarrageKey(BarrageKey);
+	if (Entity.id() == 0) return -1.f;
+
+	FHealthSnapshot Snap;
+	if (Sub->GetSimStateCache().ReadHealth(static_cast<int64>(Entity.id()), Snap))
+		return Snap.MaxHP;
 	return -1.f;
 }
 
 bool UFlecsDamageLibrary::IsEntityAlive(UObject* WorldContextObject, FSkeletonKey BarrageKey)
 {
-	UFlecsArtillerySubsystem* Subsystem = FlecsLibrary::GetSubsystem(WorldContextObject);
-	if (!Subsystem || !BarrageKey.IsValid()) return false;
-	if (!Subsystem->GetFlecsWorld()) return false;
+	UFlecsArtillerySubsystem* Sub = FlecsLibrary::GetSubsystem(WorldContextObject);
+	if (!Sub || !BarrageKey.IsValid()) return false;
 
-	return IsAlive_ArtilleryThread(Subsystem, BarrageKey);
+	flecs::entity Entity = Sub->GetEntityForBarrageKey(BarrageKey);
+	if (Entity.id() == 0) return false;
+
+	FHealthSnapshot Snap;
+	if (Sub->GetSimStateCache().ReadHealth(static_cast<int64>(Entity.id()), Snap))
+		return Snap.CurrentHP > 0.f;
+	return false;
 }

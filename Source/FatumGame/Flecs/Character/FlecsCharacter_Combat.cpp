@@ -32,11 +32,9 @@ float AFlecsCharacter::GetCurrentHealth() const
 	UFlecsArtillerySubsystem* FlecsSubsystem = GetWorld()->GetSubsystem<UFlecsArtillerySubsystem>();
 	if (!FlecsSubsystem) return CachedHealth;
 
-	float CurrentHP, MaxHP;
-	if (UFlecsDamageLibrary::GetHealth_ArtilleryThread(FlecsSubsystem, GetEntityKey(), CurrentHP, MaxHP))
-	{
-		return CurrentHP;
-	}
+	FHealthSnapshot Snap;
+	if (FlecsSubsystem->GetSimStateCache().ReadHealth(GetCharacterEntityId(), Snap))
+		return Snap.CurrentHP;
 	return CachedHealth;
 }
 
@@ -341,6 +339,14 @@ void AFlecsCharacter::SpawnAndEquipTestWeapon()
 
 		// Store weapon entity ID (thread-safe assignment via main thread later)
 		int64 WeaponId = static_cast<int64>(WeaponEntity.id());
+
+		// Register weapon in sim→game state cache with initial values
+		if (Static)
+		{
+			FlecsSubsystem->GetSimStateCache().Register(WeaponId);
+			FlecsSubsystem->GetSimStateCache().WriteWeapon(
+				WeaponId, Static->MagazineSize, Static->MagazineSize, Static->MaxReserveAmmo, false);
+		}
 
 		// Send initial ammo state to HUD (we're on sim thread, use EnqueueMessage)
 		if (Static && UFlecsMessageSubsystem::SelfPtr)

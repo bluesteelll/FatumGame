@@ -294,7 +294,7 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 	// ─────────────────────────────────────────────────────────
 	World.observer<FPendingDamage, FHealthInstance>("DamageObserver")
 		.event(flecs::OnSet)
-		.each([&World](flecs::entity Entity, FPendingDamage& Pending, FHealthInstance& Health)
+		.each([this](flecs::entity Entity, FPendingDamage& Pending, FHealthInstance& Health)
 		{
 			if (!Pending.HasPendingDamage())
 			{
@@ -354,13 +354,9 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 					HealthMsg.MaxHP = MaxHP;
 					MsgSub->EnqueueMessage(TAG_UI_Health, HealthMsg);
 				}
-			}
 
-			// Log total if multiple hits
-			if (TotalDamageApplied > 0.f && Pending.Hits.Num() > 1)
-			{
-				UE_LOG(LogTemp, Log, TEXT("DAMAGE: Entity %llu total damage this tick: %.1f"),
-					Entity.id(), TotalDamageApplied);
+				// Update sim→game state cache
+				SimStateCache.WriteHealth(static_cast<int64>(Entity.id()), Health.CurrentHP, MaxHP);
 			}
 		});
 
@@ -517,7 +513,7 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 	// ─────────────────────────────────────────────────────────
 	World.system<const FHealthInstance>("DeathCheckSystem")
 		.without<FTagDead>()
-		.each([](flecs::entity Entity, const FHealthInstance& Health)
+		.each([this](flecs::entity Entity, const FHealthInstance& Health)
 		{
 			if (!Health.IsAlive())
 			{
@@ -529,6 +525,10 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 					DeathMsg.EntityId = static_cast<int64>(Entity.id());
 					MsgSub->EnqueueMessage(TAG_UI_Death, DeathMsg);
 				}
+
+				// Update sim→game state cache (HP=0)
+				const FHealthStatic* HS = Entity.try_get<FHealthStatic>();
+				SimStateCache.WriteHealth(static_cast<int64>(Entity.id()), 0.f, HS ? HS->MaxHP : 100.f);
 			}
 		});
 
@@ -546,6 +546,10 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 		.each([this](flecs::entity Entity)
 		{
 			EnsureBarrageAccess();
+
+			// Free cache slot before destruction
+			SimStateCache.Unregister(static_cast<int64>(Entity.id()));
+
 			CleanupConstraints(Entity, CachedBarrageDispatch);
 
 			const FBarrageBody* Body = Entity.try_get<FBarrageBody>();

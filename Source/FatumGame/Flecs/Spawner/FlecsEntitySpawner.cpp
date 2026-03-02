@@ -552,6 +552,11 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 			HealthInst.CurrentHP = HS->GetStartingHP();
 			HealthInst.RegenAccumulator = 0.f;
 			Entity.set<FHealthInstance>(HealthInst);
+
+			// Register in sim→game state cache with initial health
+			FlecsSubsystem->GetSimStateCache().Register(static_cast<int64>(Entity.id()));
+			FlecsSubsystem->GetSimStateCache().WriteHealth(
+				static_cast<int64>(Entity.id()), HealthInst.CurrentHP, HS->MaxHP);
 		}
 
 		// Projectile instance (read lifetime/grace from prefab's FProjectileStatic)

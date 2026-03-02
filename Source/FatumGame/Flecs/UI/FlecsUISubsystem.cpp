@@ -8,6 +8,7 @@
 #include "FlecsInstanceComponents.h"
 #include "FlecsItemDefinition.h"
 #include "FlecsGameTags.h"
+#include "FSimStateCache.h"
 #include "flecs.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogFlecsUI, Log, All);
@@ -96,7 +97,6 @@ UFlecsValueModel* UFlecsUISubsystem::AcquireValueModel(int64 EntityId)
 
 	FValueEntry& Entry = Values.Add(EntityId);
 	Entry.Model = NewObject<UFlecsValueModel>(this);
-	Entry.SharedState = MakeUnique<FValueSharedState>();
 	Entry.RefCount = 1;
 	GCRoots.Add(Entry.Model);
 
@@ -167,23 +167,35 @@ void UFlecsUISubsystem::Tick(float DeltaTime)
 		}
 	}
 
-	// ═══ Value models: unpack atomics ═══
-	for (auto& [Id, Entry] : Values)
+	// ═══ Value models: read from FSimStateCache ═══
+	if (Artillery)
 	{
-		auto& S = *Entry.SharedState;
+		static const FName NAME_CurrentHP("CurrentHP");
+		static const FName NAME_MaxHP("MaxHP");
+		static const FName NAME_CurrentAmmo("CurrentAmmo");
+		static const FName NAME_MagazineSize("MagazineSize");
+		static const FName NAME_ReserveAmmo("ReserveAmmo");
 
-		// Health
-		float HP, MaxHP;
-		FValueSharedState::UnpackHealth(S.HealthPacked.load(std::memory_order_acquire), HP, MaxHP);
-		Entry.Model->UpdateFloat(FName("CurrentHP"), HP);
-		Entry.Model->UpdateFloat(FName("MaxHP"), MaxHP);
+		const FSimStateCache& Cache = Artillery->GetSimStateCache();
+		for (auto& [Id, Entry] : Values)
+		{
+			// Health
+			FHealthSnapshot HealthSnap;
+			if (Cache.ReadHealth(Id, HealthSnap))
+			{
+				Entry.Model->UpdateFloat(NAME_CurrentHP, HealthSnap.CurrentHP);
+				Entry.Model->UpdateFloat(NAME_MaxHP, HealthSnap.MaxHP);
+			}
 
-		// Ammo
-		int32 Current, MagSize, Reserve;
-		FValueSharedState::UnpackAmmo(S.AmmoPacked.load(std::memory_order_acquire), Current, MagSize, Reserve);
-		Entry.Model->UpdateInt(FName("CurrentAmmo"), Current);
-		Entry.Model->UpdateInt(FName("MagazineSize"), MagSize);
-		Entry.Model->UpdateInt(FName("ReserveAmmo"), Reserve);
+			// Weapon
+			FWeaponSnapshot WeaponSnap;
+			if (Cache.ReadWeapon(Id, WeaponSnap))
+			{
+				Entry.Model->UpdateInt(NAME_CurrentAmmo, WeaponSnap.CurrentAmmo);
+				Entry.Model->UpdateInt(NAME_MagazineSize, WeaponSnap.MagazineSize);
+				Entry.Model->UpdateInt(NAME_ReserveAmmo, WeaponSnap.ReserveAmmo);
+			}
+		}
 	}
 }
 
