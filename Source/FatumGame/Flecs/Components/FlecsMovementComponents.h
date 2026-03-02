@@ -25,7 +25,8 @@ enum class ECharacterMoveMode : uint8
 	Mantle = 6,
 	Vault = 7,
 	Lean = 8,
-	LedgeHang = 9
+	LedgeHang = 9,
+	Blink = 10
 };
 
 UENUM(BlueprintType)

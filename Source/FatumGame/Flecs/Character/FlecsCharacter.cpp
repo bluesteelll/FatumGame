@@ -38,6 +38,7 @@
 #include "FlecsHUDWidget.h"
 #include "FlecsItemDefinition.h"
 #include "Engine/Engine.h"
+#include "Kismet/GameplayStatics.h"
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONSTRUCTOR
@@ -164,6 +165,9 @@ void AFlecsCharacter::InitECSRegistration()
 	SlideActiveAtomic = MakeShared<std::atomic<bool>>(false);
 	MantleActiveAtomic = MakeShared<std::atomic<bool>>(false);
 	HangingAtomic = MakeShared<std::atomic<bool>>(false);
+	BlinkAimingAtomic = MakeShared<std::atomic<bool>>(false);
+	TeleportedAtomic = MakeShared<std::atomic<bool>>(false);
+	MantleTypeAtomic = MakeShared<std::atomic<uint8>>(0);
 	FeetToActorOffset = CapsuleHalfHeight; // init offset = standing HH
 
 	// Capture movement profile values for sim thread (can't access UObjects there).
@@ -243,6 +247,13 @@ void AFlecsCharacter::InitECSRegistration()
 		// Movement parameters for PrepareCharacterStep (speeds, accel, capsule)
 		Entity.set<FMovementStatic>(CapturedMS);
 
+		// Sim-thread state for ability FSMs (blink charges, jump buffer, coyote, etc.)
+		FCharacterSimState SimState;
+		Entity.set<FCharacterSimState>(SimState);
+
+		FBlinkInstance BlinkInst;
+		Entity.set<FBlinkInstance>(BlinkInst);
+
 		// Register in sim→game state cache with initial health
 		FlecsSubsystem->GetSimStateCache().Register(static_cast<int64>(Entity.id()));
 		FlecsSubsystem->GetSimStateCache().WriteHealth(
@@ -316,11 +327,53 @@ void AFlecsCharacter::Tick(float DeltaTime)
 	//    Must happen in TG_PrePhysics — BEFORE CameraManager (TG_PostPhysics).
 	ReadAndApplyBarragePosition(DeltaTime);
 
+	// 1.5. Write camera pos/dir atomics for sim thread (blink targeting + mantle hang exit).
+	if (InputAtomics.IsValid() && FollowCamera)
+	{
+		FVector CamLoc = FollowCamera->GetComponentLocation();
+		FVector CamDir = FollowCamera->GetForwardVector();
+		InputAtomics->CamLocX.store(static_cast<float>(CamLoc.X), std::memory_order_relaxed);
+		InputAtomics->CamLocY.store(static_cast<float>(CamLoc.Y), std::memory_order_relaxed);
+		InputAtomics->CamLocZ.store(static_cast<float>(CamLoc.Z), std::memory_order_relaxed);
+		InputAtomics->CamDirX.store(static_cast<float>(CamDir.X), std::memory_order_relaxed);
+		InputAtomics->CamDirY.store(static_cast<float>(CamDir.Y), std::memory_order_relaxed);
+		InputAtomics->CamDirZ.store(static_cast<float>(CamDir.Z), std::memory_order_relaxed);
+	}
+
+	// 1.6. Teleport snap: sim thread teleported character → snap interpolation buffers.
+	if (TeleportedAtomic && TeleportedAtomic->load(std::memory_order_relaxed))
+	{
+		TeleportedAtomic->store(false, std::memory_order_relaxed);
+		bBarrageJustSpawned = true; // Next ReadAndApplyBarragePosition will snap Prev=Curr=Smoothed
+	}
+
+	// 1.7. Blink aiming time dilation (sim thread writes BlinkAiming, game thread applies).
+	if (BlinkAimingAtomic)
+	{
+		bool bAiming = BlinkAimingAtomic->load(std::memory_order_relaxed);
+		if (bAiming != bPrevBlinkAiming)
+		{
+			float TimeDilation = 1.0f;
+			if (bAiming && FatumMovement && FatumMovement->MovementProfile)
+				TimeDilation = FatumMovement->MovementProfile->BlinkAimTimeDilation;
+			if (UWorld* W = GetWorld())
+			{
+				UGameplayStatics::SetGlobalTimeDilation(W, TimeDilation);
+			}
+			bPrevBlinkAiming = bAiming;
+		}
+	}
+
 	// 2. Posture/abilities/camera effects — uses CURRENT velocity/GS from step 1.
 	//    Must run BEFORE camera update so eye height is fresh (not 1 frame stale).
 	if (FatumMovement)
 	{
-		FatumMovement->TickPostureAndEffects(DeltaTime);
+		// Read ability state from sim-thread atomics
+		bool bSlideActive = SlideActiveAtomic ? SlideActiveAtomic->load(std::memory_order_relaxed) : false;
+		bool bMantleActive = MantleActiveAtomic ? MantleActiveAtomic->load(std::memory_order_relaxed) : false;
+		bool bHanging = HangingAtomic ? HangingAtomic->load(std::memory_order_relaxed) : false;
+		uint8 MantleType = MantleTypeAtomic ? MantleTypeAtomic->load(std::memory_order_relaxed) : 0;
+		FatumMovement->TickPostureAndEffects(DeltaTime, bSlideActive, bMantleActive, bHanging, MantleType);
 
 		// If posture changed capsule while grounded, re-snap FeetToActorOffset
 		// and re-set actor location (step 1 used pre-posture capsule HH).
@@ -471,6 +524,8 @@ void AFlecsCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 	FatumInput->BindNativeAction(InputConfig, TAG_Input_Crouch,    ETriggerEvent::Completed, this, &AFlecsCharacter::OnCrouchCompleted);
 	FatumInput->BindNativeAction(InputConfig, TAG_Input_Prone,     ETriggerEvent::Started,   this, &AFlecsCharacter::OnProneStarted);
 	FatumInput->BindNativeAction(InputConfig, TAG_Input_Prone,     ETriggerEvent::Completed, this, &AFlecsCharacter::OnProneCompleted);
+	FatumInput->BindNativeAction(InputConfig, TAG_Input_Ability1,  ETriggerEvent::Started,   this, &AFlecsCharacter::OnAbility1Started);
+	FatumInput->BindNativeAction(InputConfig, TAG_Input_Ability1,  ETriggerEvent::Completed, this, &AFlecsCharacter::OnAbility1Completed);
 }
 
 UInputComponent* AFlecsCharacter::CreatePlayerInputComponent()
@@ -519,31 +574,36 @@ void AFlecsCharacter::Look(const FInputActionValue& Value)
 
 void AFlecsCharacter::OnSprintStarted(const FInputActionValue& Value)
 {
-	if (FatumMovement) FatumMovement->RequestSprint(true);
+	if (InputAtomics) InputAtomics->bSprinting.store(true, std::memory_order_relaxed);
+	if (FatumMovement) FatumMovement->RequestSprint(true); // game-thread cosmetics (FOV, move mode)
 }
 
 void AFlecsCharacter::OnSprintCompleted(const FInputActionValue& Value)
 {
+	if (InputAtomics) InputAtomics->bSprinting.store(false, std::memory_order_relaxed);
 	if (FatumMovement) FatumMovement->RequestSprint(false);
 }
 
 void AFlecsCharacter::OnJumpStarted(const FInputActionValue& Value)
 {
-	if (FatumMovement) FatumMovement->RequestJump();
+	// One-shot: sim thread reads + clears in PrepareCharacterStep
+	if (InputAtomics) InputAtomics->bJumpPressed.store(true, std::memory_order_relaxed);
 }
 
 void AFlecsCharacter::OnJumpCompleted(const FInputActionValue& Value)
 {
-	if (FatumMovement) FatumMovement->ReleaseJump();
+	// Jump is one-shot (consumed by sim thread), no release needed
 }
 
 void AFlecsCharacter::OnCrouchStarted(const FInputActionValue& Value)
 {
-	if (FatumMovement) FatumMovement->RequestCrouch(true);
+	if (InputAtomics) InputAtomics->bCrouchHeld.store(true, std::memory_order_relaxed);
+	if (FatumMovement) FatumMovement->RequestCrouch(true); // game-thread PostureSM (non-slide crouch)
 }
 
 void AFlecsCharacter::OnCrouchCompleted(const FInputActionValue& Value)
 {
+	if (InputAtomics) InputAtomics->bCrouchHeld.store(false, std::memory_order_relaxed);
 	if (FatumMovement) FatumMovement->RequestCrouch(false);
 }
 
@@ -555,6 +615,16 @@ void AFlecsCharacter::OnProneStarted(const FInputActionValue& Value)
 void AFlecsCharacter::OnProneCompleted(const FInputActionValue& Value)
 {
 	if (FatumMovement) FatumMovement->RequestProne(false);
+}
+
+void AFlecsCharacter::OnAbility1Started(const FInputActionValue& Value)
+{
+	if (InputAtomics) InputAtomics->bBlinkHeld.store(true, std::memory_order_relaxed);
+}
+
+void AFlecsCharacter::OnAbility1Completed(const FInputActionValue& Value)
+{
+	if (InputAtomics) InputAtomics->bBlinkHeld.store(false, std::memory_order_relaxed);
 }
 
 void AFlecsCharacter::StartFire(const FInputActionValue& Value)

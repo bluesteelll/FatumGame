@@ -306,6 +306,54 @@ public:
 	float PullUpDuration = 0.45f;
 
 	// ═══════════════════════════════════════════════════════════════
+	// BLINK
+	// ═══════════════════════════════════════════════════════════════
+
+	/** Maximum blink teleport distance (cm) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Blink", meta = (ClampMin = "100", ClampMax = "5000"))
+	float BlinkMaxRange = 1500.f;
+
+	/** Number of blink charges */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Blink", meta = (ClampMin = "1", ClampMax = "5"))
+	int32 BlinkMaxCharges = 3;
+
+	/** Time to recharge one blink charge (seconds, sequential) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Blink", meta = (ClampMin = "0.5", ClampMax = "30"))
+	float BlinkRechargeTime = 4.f;
+
+	/** Hold time threshold for aim mode vs quick-tap (seconds) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Blink", meta = (ClampMin = "0.05", ClampMax = "0.5"))
+	float BlinkAimHoldThreshold = 0.15f;
+
+	/** Time dilation during blink aim mode (0.1 = very slow, 1.0 = normal) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Blink", meta = (ClampMin = "0.05", ClampMax = "1.0"))
+	float BlinkAimTimeDilation = 0.3f;
+
+	/** Sphere cast radius for blink targeting (cm) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Blink", meta = (ClampMin = "5", ClampMax = "50"))
+	float BlinkTargetingSphereRadius = 20.f;
+
+	/** Maximum floor snap distance below target point (cm) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Blink", meta = (ClampMin = "50", ClampMax = "500"))
+	float BlinkFloorSnapDistance = 200.f;
+
+	/** FOV offset during blink aim mode (negative = zoom in) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Blink", meta = (ClampMin = "-30", ClampMax = "0"))
+	float BlinkAimFOVOffset = -10.f;
+
+	/** Height above wall hit to probe for ledge top during blink (cm) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Blink", meta = (ClampMin = "100", ClampMax = "500"))
+	float BlinkLedgeSearchHeight = 350.f;
+
+	/** Minimum ledge depth for wall-snap blink target (cm) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Blink", meta = (ClampMin = "5", ClampMax = "50"))
+	float BlinkMinLedgeDepth = 15.f;
+
+	/** Allow blink into air (no floor below target) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Blink")
+	bool bBlinkAllowAirTarget = true;
+
+	// ═══════════════════════════════════════════════════════════════
 	// HELPERS
 	// ═══════════════════════════════════════════════════════════════
 

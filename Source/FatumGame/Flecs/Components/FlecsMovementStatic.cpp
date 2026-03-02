@@ -52,5 +52,27 @@ FMovementStatic FMovementStatic::FromProfile(const UFlecsMovementProfile* Profil
 	MS.WallJumpHorizontalForce = Profile->WallJumpHorizontalForce;
 	MS.WallJumpVerticalForce = Profile->WallJumpVerticalForce;
 	MS.LedgeGrabCooldown = Profile->LedgeGrabCooldown;
+	MS.PullUpDuration = Profile->PullUpDuration;
+	// Ledge detection (for sim-thread LedgeDetector)
+	MS.LedgeGrabDetectionRadius = Profile->LedgeGrabDetectionRadius;
+	MS.LedgeDetectMaxLookDownAngle = Profile->LedgeDetectMaxLookDownAngle;
+	MS.LedgeGrabMinLedgeDepth = Profile->LedgeGrabMinLedgeDepth;
+	MS.StandingEyeHeight = Profile->StandingEyeHeight;
+	// Slide→Jump
+	MS.SlideJumpVelocity = Profile->SlideJumpVelocity;
+	// Jump (convert frames to seconds at 60Hz)
+	MS.CoyoteTimeSeconds = Profile->CoyoteTimeFrames / 60.f;
+	MS.JumpBufferSeconds = Profile->JumpBufferFrames / 60.f;
+	// Blink
+	MS.BlinkMaxRange = Profile->BlinkMaxRange;
+	MS.BlinkMaxCharges = Profile->BlinkMaxCharges;
+	MS.BlinkRechargeTime = Profile->BlinkRechargeTime;
+	MS.BlinkAimHoldThreshold = Profile->BlinkAimHoldThreshold;
+	MS.BlinkTargetingSphereRadius = Profile->BlinkTargetingSphereRadius;
+	MS.BlinkFloorSnapDistance = Profile->BlinkFloorSnapDistance;
+	MS.BlinkLedgeSearchHeight = Profile->BlinkLedgeSearchHeight;
+	MS.BlinkMinLedgeDepth = Profile->BlinkMinLedgeDepth;
+	MS.bBlinkAllowAirTarget = Profile->bBlinkAllowAirTarget;
+	MS.BlinkAimTimeDilation = Profile->BlinkAimTimeDilation;
 	return MS;
 }

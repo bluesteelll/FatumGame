@@ -1,6 +1,6 @@
-// Custom CharacterMovementComponent with hierarchical state machine.
-// Handles sprint, posture, jump buffering, coyote time.
-// Movement abilities (Slide, Dash, etc.) are modular UMovementAbility subclasses.
+// Custom CharacterMovementComponent — posture, camera effects, capsule management.
+// Ability logic (slide, mantle, blink, jump) runs on sim thread.
+// This component reads sim-thread state via atomics and manages game-thread visuals.
 
 #pragma once
 
@@ -12,7 +12,6 @@
 #include "FatumMovementComponent.generated.h"
 
 class UFlecsMovementProfile;
-class UMovementAbility;
 class FBarragePrimitive;
 
 DECLARE_MULTICAST_DELEGATE_OneParam(FOnPostureChanged, ECharacterPosture /*NewPosture*/);
@@ -43,10 +42,6 @@ public:
 	void SetBarrageGroundState(uint8 GS) { BarrageGroundState = GS; }
 	const FVector& GetBarrageVelocity() const { return BarrageVelocity; }
 
-	/** Set pending jump impulse in cm/s (consumed by FlecsCharacter → OtherForce). */
-	void SetPendingJumpImpulse(float V) { PendingJumpImpulse = V; }
-	float ConsumePendingJumpImpulse() { float V = PendingJumpImpulse; PendingJumpImpulse = 0.f; return V; }
-
 	// ═══════════════════════════════════════════════════════════════
 	// QUERIES
 	// ═══════════════════════════════════════════════════════════════
@@ -61,10 +56,13 @@ public:
 	bool IsSprinting() const { return CurrentMoveMode == ECharacterMoveMode::Sprint; }
 
 	UFUNCTION(BlueprintPure, Category = "Fatum|Movement")
-	bool IsSliding() const;
+	bool IsSliding() const { return bSimSliding; }
 
 	UFUNCTION(BlueprintPure, Category = "Fatum|Movement")
-	bool IsMantling() const;
+	bool IsMantling() const { return bSimMantling; }
+
+	UFUNCTION(BlueprintPure, Category = "Fatum|Movement")
+	bool IsBlinking() const { return false; } // Blink has no game-thread visual state
 
 	UFUNCTION(BlueprintPure, Category = "Fatum|Movement")
 	float GetCurrentFOVOffset() const { return CurrentFOVOffset; }
@@ -85,59 +83,34 @@ public:
 	float GetSlideTiltAngle() const { return SlideTiltCurrent; }
 
 	// ═══════════════════════════════════════════════════════════════
-	// COMMANDS (called by AFlecsCharacter input handlers or AI)
+	// COMMANDS (called by AFlecsCharacter input handlers)
 	// ═══════════════════════════════════════════════════════════════
 
 	void RequestSprint(bool bSprint);
-	void RequestJump();
-	void ReleaseJump();
 	void RequestCrouch(bool bPressed);
 	void RequestProne(bool bPressed);
 
 	// ═══════════════════════════════════════════════════════════════
-	// ABILITY SYSTEM
+	// POSTURE / CAMERA / CAPSULE MANAGEMENT
 	// ═══════════════════════════════════════════════════════════════
 
-	/** Tick posture, abilities, and camera effects. Called from AFlecsCharacter::Tick()
-	 *  AFTER velocity/GS are fed, BEFORE camera update. Ensures fresh eye height for camera. */
-	void TickPostureAndEffects(float DeltaTime);
+	/** Tick posture, capsule management, and camera effects.
+	 *  Called from AFlecsCharacter::Tick() AFTER velocity/GS are fed, BEFORE camera update.
+	 *  Ability state bools come from sim-thread atomics (read by AFlecsCharacter). */
+	void TickPostureAndEffects(float DeltaTime, bool bSliding, bool bMantling, bool bHanging, uint8 MantleType);
 
-	/** Access PostureSM for abilities that own posture. */
+	/** Access PostureSM for external posture queries. */
 	FPostureStateMachine& GetPostureSM() { return PostureSM; }
 	const FPostureStateMachine& GetPostureSM() const { return PostureSM; }
 
-	/** Public ceiling check for abilities. */
+	/** Public ceiling check (used by posture + capsule restore). */
 	bool CanExpandToHeight(float TargetHalfHeight) const;
 
-	/** Broadcast posture changed delegate (for abilities that change capsule). */
+	/** Broadcast posture changed delegate (for Barrage capsule shape sync). */
 	void BroadcastPostureChanged(ECharacterPosture Posture);
 
-	/** Find a registered ability by type. Returns nullptr if not found. */
-	template<typename T>
-	T* FindAbility() const
-	{
-		for (UMovementAbility* Ability : Abilities)
-		{
-			if (T* Typed = Cast<T>(Ability))
-			{
-				return Typed;
-			}
-		}
-		return nullptr;
-	}
-
-	/** Activate an ability (deactivates current if any). */
-	void ActivateAbility(UMovementAbility* Ability);
-
-	/** Deactivate the current active ability. */
-	void DeactivateAbility();
-
-	/** Get the currently active ability (nullptr if none). */
-	UMovementAbility* GetActiveAbility() const { return ActiveAbility; }
-
 	// ═══════════════════════════════════════════════════════════════
-	// CHARACTER ACCESSORS (delegate to AFlecsCharacter — abilities
-	// use these instead of casting to AFlecsCharacter directly)
+	// CHARACTER ACCESSORS (delegate to AFlecsCharacter)
 	// ═══════════════════════════════════════════════════════════════
 
 	/** Set feet-to-actor Z offset (mantle forces this to CrouchHalfHeight). */
@@ -160,7 +133,7 @@ public:
 	FOnPostureChanged OnPostureChanged;
 
 	// ═══════════════════════════════════════════════════════════════
-	// GROUND STATE (public — used by FlecsCharacter, SlideAbility, etc.)
+	// GROUND STATE
 	// ═══════════════════════════════════════════════════════════════
 
 	virtual bool IsMovingOnGround() const override { return BarrageGroundState == 0; }
@@ -172,29 +145,27 @@ protected:
 	// ═══════════════════════════════════════════════════════════════
 
 	virtual void InitializeComponent() override;
+	virtual void UninitializeComponent() override;
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 	virtual void PerformMovement(float DeltaTime) override {}
 
 private:
-	// ═══════════════════════════════════════════════════════════════
-	// ABILITY REGISTRY
-	// ═══════════════════════════════════════════════════════════════
-
-	UPROPERTY()
-	TArray<TObjectPtr<UMovementAbility>> Abilities;
-
-	UPROPERTY()
-	TObjectPtr<UMovementAbility> ActiveAbility;
-
-	void RegisterAbility(TSubclassOf<UMovementAbility> AbilityClass);
-
 	// ═══════════════════════════════════════════════════════════════
 	// BARRAGE STATE (game thread only)
 	// ═══════════════════════════════════════════════════════════════
 
 	FVector BarrageVelocity = FVector::ZeroVector;
 	uint8 BarrageGroundState = 3; // FBGroundState: 0=OnGround, 1=SteepGround, 2=NotSupported, 3=InAir
-	float PendingJumpImpulse = 0.f;
+
+	// ═══════════════════════════════════════════════════════════════
+	// SIM-THREAD ABILITY STATE (set each tick from atomics)
+	// ═══════════════════════════════════════════════════════════════
+
+	bool bSimSliding = false;
+	bool bSimMantling = false;
+	bool bSimHanging = false;
+	bool bPrevSliding = false;
+	bool bPrevMantling = false;
 
 	// ═══════════════════════════════════════════════════════════════
 	// HSM STATE
@@ -204,11 +175,9 @@ private:
 	ECharacterMoveMode CurrentMoveMode = ECharacterMoveMode::Idle;
 	bool bWantsToSprint = false;
 
-	// Jump buffering
-	float CoyoteTimer = 0.f;
-	float JumpBufferTimer = 0.f;
+	// Landing detection (for camera compress)
 	bool bWasGroundedLastFrame = true;
-	bool bJumpedIntentionally = false;
+	float LandingFallSpeed = 0.f;
 
 	// Camera effects
 	float CurrentFOVOffset = 0.f;
@@ -216,7 +185,6 @@ private:
 	float LandingCompressTimer = 0.f;
 	float LandingCompressOffset = 0.f;
 	float LandingCompressInitial = 0.f;
-	float LandingFallSpeed = 0.f;
 
 	// Head bob
 	float HeadBobTimer = 0.f;
@@ -227,20 +195,14 @@ private:
 	// Slide tilt
 	float SlideTiltCurrent = 0.f;
 
-	// Airborne ledge detection timer (~10Hz)
-	float AirborneDetectionTimer = 0.f;
-
 	// ═══════════════════════════════════════════════════════════════
 	// HSM LOGIC
 	// ═══════════════════════════════════════════════════════════════
 
-	void TickHSM(float DeltaTime);
 	void UpdatePosture(float DeltaTime);
 	void UpdateMovementLayer(float DeltaTime);
 	void UpdateCameraEffects(float DeltaTime);
 	void UpdateHeadBob(float DeltaTime);
 	void UpdateSlideTilt(float DeltaTime);
 	void TransitionMoveMode(ECharacterMoveMode NewMode);
-
-	static constexpr float SimFrameTime = 1.f / 60.f;
 };

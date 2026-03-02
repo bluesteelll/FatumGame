@@ -1,21 +1,21 @@
 // Stateless 5-phase ledge detection algorithm using Barrage (Jolt) raycasts.
-// Extracted from UMantleAbility::PerformDetection for reuse and testability.
+// Extracted from mantle detection for reuse and testability.
 
 #include "LedgeDetector.h"
-#include "FlecsMovementProfile.h"
+#include "FlecsMovementStatic.h"
 #include "BarrageDispatch.h"
 #include "PhysicsFilters/FastObjectLayerFilters.h"
 #include "EPhysicsLayer.h"
 
 void FLedgeDetector::Detect(const FVector& CharFeetPos, const FVector& LookDir,
                              float CapsuleRadius, float CapsuleHalfHeight,
-                             float MaxReachHeight, const UFlecsMovementProfile* Profile,
+                             float MaxReachHeight, const FMovementStatic* MS,
                              UBarrageDispatch* Barrage, FSkeletonKey CharBarrageKey,
                              FLedgeCandidate& OutCandidate)
 {
 	OutCandidate.bValid = false;
 
-	if (!Profile || !Barrage) return;
+	if (!MS || !Barrage) return;
 
 	// ── Set up filters ──
 	// Include static geometry + dynamic objects (active debris is MOVING layer).
@@ -36,7 +36,7 @@ void FLedgeDetector::Detect(const FVector& CharFeetPos, const FVector& LookDir,
 	TSharedPtr<FHitResult> HitResult = MakeShared<FHitResult>();
 
 	// CRITICAL: SphereCast Radius is in Jolt meters, NOT UE cm
-	double JoltDetectionRadius = Profile->LedgeGrabDetectionRadius / 100.0;
+	double JoltDetectionRadius = MS->LedgeGrabDetectionRadius / 100.0;
 
 	// ═══════════════════════════════════════════════════════════════
 	// PHASE 1: FORWARD WALL CHECK (SphereCast)
@@ -45,11 +45,11 @@ void FLedgeDetector::Detect(const FVector& CharFeetPos, const FVector& LookDir,
 	// ═══════════════════════════════════════════════════════════════
 
 	FVector ChestOrigin = CharFeetPos;
-	ChestOrigin.Z += Profile->StandingEyeHeight * 0.5f;
+	ChestOrigin.Z += MS->StandingEyeHeight * 0.5f;
 
 	Barrage->SphereCast(
 		JoltDetectionRadius,
-		Profile->MantleForwardReach,
+		MS->MantleForwardReach,
 		ChestOrigin,
 		HorizLook,
 		HitResult,
@@ -90,7 +90,7 @@ void FLedgeDetector::Detect(const FVector& CharFeetPos, const FVector& LookDir,
 
 	Barrage->SphereCast(
 		JoltDetectionRadius,
-		Profile->MantleForwardReach,
+		MS->MantleForwardReach,
 		Phase2Origin,
 		HorizLook,
 		HitResult,
@@ -107,7 +107,7 @@ void FLedgeDetector::Detect(const FVector& CharFeetPos, const FVector& LookDir,
 	FVector Phase3Origin = WallHitPoint - WallNormal * 15.f; // 15cm into wall cross-section
 	Phase3Origin.Z = CharFeetPos.Z + MaxReachHeight + ProbeMargin; // above the wall (Phase 2 confirmed)
 
-	float Phase3Distance = MaxReachHeight + ProbeMargin - Profile->MantleMinHeight;
+	float Phase3Distance = MaxReachHeight + ProbeMargin - MS->MantleMinHeight;
 	if (Phase3Distance <= 0.f) return;
 
 	// Small sphere for surface detection (5cm radius in Jolt meters)
@@ -132,16 +132,16 @@ void FLedgeDetector::Detect(const FVector& CharFeetPos, const FVector& LookDir,
 
 	// Validate ledge height is within acceptable range
 	float LedgeHeight = LedgeTopPoint.Z - CharFeetPos.Z;
-	if (LedgeHeight < Profile->MantleMinHeight || LedgeHeight > MaxReachHeight) return;
+	if (LedgeHeight < MS->MantleMinHeight || LedgeHeight > MaxReachHeight) return;
 
 	// ── Look angle gate (relative to ledge top) ──
 	// Reject if the angle between LookDir and the direction from eye to ledge top
 	// exceeds the configured threshold. Prevents activation when looking at the floor.
 	FVector EyePos = CharFeetPos;
-	EyePos.Z += Profile->StandingEyeHeight;
+	EyePos.Z += MS->StandingEyeHeight;
 	FVector ToLedge = (LedgeTopPoint - EyePos).GetSafeNormal();
 	float LookToLedgeDot = FVector::DotProduct(LookDir, ToLedge);
-	float MinDot = FMath::Cos(FMath::DegreesToRadians(Profile->LedgeDetectMaxLookDownAngle));
+	float MinDot = FMath::Cos(FMath::DegreesToRadians(MS->LedgeDetectMaxLookDownAngle));
 	if (LookToLedgeDot < MinDot) return;
 
 	// ═══════════════════════════════════════════════════════════════
@@ -151,7 +151,7 @@ void FLedgeDetector::Detect(const FVector& CharFeetPos, const FVector& LookDir,
 
 	FVector Phase4Origin = LedgeTopPoint + FVector(0, 0, 5.f); // slightly above surface
 	// Direction = into wall (opposite of wall normal) * min depth distance
-	FVector DepthDir = -WallNormal * Profile->LedgeGrabMinLedgeDepth;
+	FVector DepthDir = -WallNormal * MS->LedgeGrabMinLedgeDepth;
 
 	HitResult = MakeShared<FHitResult>();
 	Barrage->CastRay(

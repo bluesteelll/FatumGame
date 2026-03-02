@@ -476,6 +476,12 @@ protected:
 	/** Prone release (Z release, for Hold mode) */
 	void OnProneCompleted(const FInputActionValue& Value);
 
+	/** Ability 1 pressed (blink start) */
+	void OnAbility1Started(const FInputActionValue& Value);
+
+	/** Ability 1 released (blink release) */
+	void OnAbility1Completed(const FInputActionValue& Value);
+
 	/** Called by UFatumMovementComponent::OnPostureChanged delegate */
 	void HandlePostureChanged(ECharacterPosture NewPosture);
 
@@ -523,10 +529,11 @@ private:
 	TSharedPtr<std::atomic<bool>> MantleActiveAtomic;
 	TSharedPtr<std::atomic<bool>> HangingAtomic;
 
-	// Slide activation grace: sim tick when slide ability was activated on game thread.
-	// Prevents immediate deactivation before EnqueueCommand(FSlideInstance) is processed.
-	uint64 SlideActivationSimTick = 0;
-	uint64 MantleActivationSimTick = 0;
+	// Blink state: sim→game for time dilation and teleport snap.
+	TSharedPtr<std::atomic<bool>> BlinkAimingAtomic;
+	TSharedPtr<std::atomic<bool>> TeleportedAtomic;
+	TSharedPtr<std::atomic<uint8>> MantleTypeAtomic; // 0=Vault, 1=Mantle, 2=LedgeGrab
+	bool bPrevBlinkAiming = false;
 
 	// Feet-to-actor offset: Z distance from Barrage feet to UE capsule center.
 	// On ground: = CapsuleHalfHeight (standard).
@@ -551,7 +558,7 @@ private:
 	void ReadAndApplyBarragePosition(float DeltaTime);
 
 	/** Apply interpolated position: CMC feed + FeetToActorOffset + SetActorLocation. */
-	void ApplyBarrageSync(const FVector& FeetPos, uint8 GroundState, const FVector& Velocity, bool bSlideActive);
+	void ApplyBarrageSync(const FVector& FeetPos, uint8 GroundState, const FVector& Velocity);
 
 	friend class UFlecsArtillerySubsystem;
 

@@ -1,5 +1,5 @@
 // Stateless 5-phase ledge detection algorithm using Barrage (Jolt) raycasts.
-// Used by UMantleAbility for vault, mantle, and ledge grab detection.
+// Used by PrepareCharacterStep for vault, mantle, and ledge grab detection.
 //
 // Phase 1: Forward wall check (SphereCast)
 // Phase 2: High forward probe — reject walls taller than MaxReachHeight (SphereCast)
@@ -13,7 +13,7 @@
 #include "SkeletonTypes.h"
 
 class UBarrageDispatch;
-class UFlecsMovementProfile;
+struct FMovementStatic;
 
 /** Cached result of the 5-phase ledge detection algorithm. */
 struct FLedgeCandidate
@@ -36,13 +36,13 @@ public:
 	 *  @param CapsuleRadius     Character capsule radius (cm)
 	 *  @param CapsuleHalfHeight Character capsule half height (cm)
 	 *  @param MaxReachHeight    Maximum ledge height above feet (cm)
-	 *  @param Profile           Movement profile (detection parameters)
+	 *  @param MS                Movement static params (sim-thread safe)
 	 *  @param Barrage           Barrage dispatch for raycasts
 	 *  @param CharBarrageKey    Character's Barrage key (to ignore own body)
 	 *  @param OutCandidate      Detection result */
 	static void Detect(const FVector& CharFeetPos, const FVector& LookDir,
 	                   float CapsuleRadius, float CapsuleHalfHeight,
-	                   float MaxReachHeight, const UFlecsMovementProfile* Profile,
+	                   float MaxReachHeight, const FMovementStatic* MS,
 	                   UBarrageDispatch* Barrage, FSkeletonKey CharBarrageKey,
 	                   FLedgeCandidate& OutCandidate);
 };

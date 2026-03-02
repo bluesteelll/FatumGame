@@ -10,7 +10,6 @@
 #include "FBarragePrimitive.h"
 #include "EPhysicsLayer.h"
 #include "FlecsMovementProfile.h"
-#include "MantleAbility.h"
 #include "Components/CapsuleComponent.h"
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -65,18 +64,15 @@ void AFlecsCharacter::ReadAndApplyBarragePosition(float DeltaTime)
 		FeetPos = SmoothedBarragePos;
 	}
 
-	// 6. Slide state from sim thread
-	bool bSlideActive = SlideActiveAtomic ? SlideActiveAtomic->load(std::memory_order_relaxed) : false;
-
-	// 7. Apply (CMC feed + FeetToActorOffset + SetActorLocation)
-	ApplyBarrageSync(FeetPos, GS, Vel, bSlideActive);
+	// 6. Apply (CMC feed + FeetToActorOffset + SetActorLocation)
+	ApplyBarrageSync(FeetPos, GS, Vel);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
 // BARRAGE POSITION APPLY (feeds CMC, offsets feet→actor, teleports actor)
 // ═══════════════════════════════════════════════════════════════════════════
 
-void AFlecsCharacter::ApplyBarrageSync(const FVector& FeetPos, uint8 GS, const FVector& Vel, bool bSlideActive)
+void AFlecsCharacter::ApplyBarrageSync(const FVector& FeetPos, uint8 GS, const FVector& Vel)
 {
 	// Feed CMC state. Velocity + MovementMode set here (not in CMC::TickComponent)
 	// so TickPostureAndEffects has fresh data when called from actor Tick.
@@ -100,69 +96,8 @@ void AFlecsCharacter::ApplyBarrageSync(const FVector& FeetPos, uint8 GS, const F
 	FVector FinalPos = FeetPos + FVector(0, 0, FeetToActorOffset);
 	SetActorLocation(FinalPos, false, nullptr, ETeleportType::TeleportPhysics);
 
-	// Sim-thread slide exit detection
-	if (FatumMovement)
-	{
-		uint64 SimTick = LastBarrageSimTick;
-
-		if (FatumMovement->IsSliding())
-		{
-			if (SlideActivationSimTick == 0)
-			{
-				SlideActivationSimTick = SimTick;
-			}
-
-			if (!bSlideActive && SimTick > SlideActivationSimTick + 3)
-			{
-				FatumMovement->DeactivateAbility();
-				SlideActivationSimTick = 0;
-			}
-		}
-		else
-		{
-			SlideActivationSimTick = 0;
-		}
-
-		// Mantle exit detection (same 3-tick grace pattern as slide)
-		bool bMantleActive = MantleActiveAtomic ? MantleActiveAtomic->load(std::memory_order_relaxed) : false;
-		bool bHanging = HangingAtomic ? HangingAtomic->load(std::memory_order_relaxed) : false;
-
-		if (FatumMovement->IsMantling())
-		{
-			if (MantleActivationSimTick == 0)
-			{
-				MantleActivationSimTick = SimTick;
-			}
-
-			if (!bMantleActive && SimTick > MantleActivationSimTick + 3)
-			{
-				FatumMovement->DeactivateAbility();
-				MantleActivationSimTick = 0;
-			}
-		}
-		else
-		{
-			MantleActivationSimTick = 0;
-		}
-
-		// Sync hang state to MantleAbility (for HandleJumpRequest routing)
-		if (UMantleAbility* MA = FatumMovement->FindAbility<UMantleAbility>())
-		{
-			MA->SetHangingFromSim(bHanging);
-		}
-	}
-
-	// Jump impulse: consume from CMC → send as OtherForce to Barrage
-	if (FatumMovement && FBarragePrimitive::IsNotNull(CachedBarrageBody))
-	{
-		float JumpImpulse = FatumMovement->ConsumePendingJumpImpulse();
-		if (JumpImpulse > 0.f)
-		{
-			FBarragePrimitive::ApplyForce(
-				FVector3d(0, 0, JumpImpulse), CachedBarrageBody,
-				PhysicsInputType::OtherForce);
-		}
-	}
+	// Ability state is now read by TickPostureAndEffects directly from atomics.
+	// No 3-tick grace — sim thread owns activation/deactivation.
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

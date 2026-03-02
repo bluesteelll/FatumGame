@@ -54,6 +54,28 @@ struct FMovementStatic
 	float WallJumpHorizontalForce = 400.f;   // cm/s
 	float WallJumpVerticalForce = 400.f;     // cm/s
 	float LedgeGrabCooldown = 0.3f;          // seconds
+	float PullUpDuration = 0.45f;            // seconds
+	// Ledge detection params (for sim-thread LedgeDetector)
+	float LedgeGrabDetectionRadius = 12.f;   // cm, SphereCast probe radius
+	float LedgeDetectMaxLookDownAngle = 45.f;// degrees, max look-to-ledge angle
+	float LedgeGrabMinLedgeDepth = 15.f;     // cm, Phase 4 depth check
+	float StandingEyeHeight = 60.f;          // cm, chest origin for Phase 1
+	// Slide→Jump
+	float SlideJumpVelocity = 500.f;         // cm/s vertical impulse on slide-cancel jump
+	// Jump (sim thread coyote/buffer)
+	float CoyoteTimeSeconds = 5.f / 60.f;    // seconds (converted from frames at init)
+	float JumpBufferSeconds = 6.f / 60.f;    // seconds
+	// Blink params
+	float BlinkMaxRange = 1500.f;            // cm
+	int32 BlinkMaxCharges = 3;
+	float BlinkRechargeTime = 4.f;           // seconds per charge
+	float BlinkAimHoldThreshold = 0.15f;     // seconds before aim mode
+	float BlinkTargetingSphereRadius = 20.f; // cm, SphereCast probe for targeting
+	float BlinkFloorSnapDistance = 200.f;    // cm, max floor snap below air target
+	float BlinkLedgeSearchHeight = 350.f;    // cm, wall→ledge-top probe height
+	float BlinkMinLedgeDepth = 15.f;         // cm, min ledge depth for wall snap
+	bool bBlinkAllowAirTarget = true;        // allow teleport into air
+	float BlinkAimTimeDilation = 0.3f;       // time scale during aim
 };
 
 // INSTANCE component: per character, mutable state set via EnqueueCommand from game thread.
@@ -75,6 +97,33 @@ struct FSlideInstance
 	float SlideDirZ = 0.f;    // Jolt horizontal Z (normalized, captured on first tick)
 };
 
+// INSTANCE component: sim-thread-only state (jump timers, detection timers, prev button states).
+// Created once at entity registration, never removed.
+struct FCharacterSimState
+{
+	float CoyoteTimer = 0.f;
+	float JumpBufferTimer = 0.f;
+	bool bWasGrounded = true;
+	bool bPrevJumpPressed = false;
+	bool bPrevCrouchHeld = false;
+	bool bPrevBlinkHeld = false;
+	// Mantle
+	float MantleCooldownTimer = 0.f;
+	float AirDetectionTimer = 0.f;   // 10Hz ledge detection while airborne
+};
+
+// INSTANCE component: blink ability state (sim-thread FSM + charge system).
+// Created once at entity registration, never removed.
+struct FBlinkInstance
+{
+	uint8 State = 0;           // 0=Idle, 1=HoldCheck, 2=Aiming
+	float HoldTimer = 0.f;
+	int32 Charges = -1;        // -1 = needs lazy init from FMovementStatic
+	float RechargeTimer = 0.f;
+	float TargetX = 0.f, TargetY = 0.f, TargetZ = 0.f; // UE world feet pos
+	bool bTargetValid = false;
+};
+
 // INSTANCE component: active mantle/vault/ledge grab.
 // Added via EnqueueCommand on activation, removed when complete.
 // Sim thread owns position lerp in PrepareCharacterStep.
@@ -90,4 +139,5 @@ struct FMantleInstance
 	float LandDuration = 0.f;                                // cached from profile
 	uint8 Phase = 0;     // 0=GrabTransition, 1=Rise, 2=Pull, 3=Land, 4=Hanging
 	uint8 MantleType = 0; // 0=Vault, 1=Mantle, 2=LedgeGrab
+	bool bCanPullUp = false; // Phase 5 clearance check result (for hang exit routing)
 };

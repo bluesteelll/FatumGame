@@ -119,6 +119,8 @@ void UFlecsArtillerySubsystem::RegisterFlecsComponents()
 	World.component<FSlideInstance>();
 	World.component<FMantleInstance>();
 	World.component<FMovementStatic>();
+	World.component<FCharacterSimState>();
+	World.component<FBlinkInstance>();
 
 	// ─────────────────────────────────────────────────────────
 	// COLLISION PAIR SYSTEM COMPONENTS

@@ -71,7 +71,7 @@ public class Barrage : ModuleRules
 
         // JOLT Stuff - needs to match on both sides.
         DefineIt("JPH_CROSS_PLATFORM_DETERMINISTIC");
-        DefineIt("JPH_OBJECT_STREAM"); 
+        DefineIt("JPH_OBJECT_STREAM");
         DefineIt("JPH_OBJECT_LAYER_BITS=16");
         DefineIt("JPH_USE_SSE4_2");
         DefineIt("JPH_USE_SSE4_1");
@@ -80,6 +80,16 @@ public class Barrage : ModuleRules
         DefineIt("JPH_USE_AVX");
         DefineIt("JPH_USE_AVX2");
 
+        // Jolt.cmake adds NDEBUG for Release/Distribution configs (line 516 in Jolt.cmake).
+        // That define only propagates within CMake, NOT to UBT modules.
+        // Without this, Core.h auto-defines JPH_DEBUG (since UBT Development lacks NDEBUG),
+        // which auto-enables JPH_ENABLE_ASSERTS in IssueReporting.h, causing game code
+        // to reference JPH::AssertFailed — a symbol that doesn't exist in the Release Jolt.lib.
+        // JPH_NO_DEBUG prevents the JPH_DEBUG auto-define, matching the library's build config.
+        if (Target.Configuration != UnrealTargetConfiguration.Debug)
+        {
+            DefineIt("JPH_NO_DEBUG");
+        }
 
         var configType = "";
 

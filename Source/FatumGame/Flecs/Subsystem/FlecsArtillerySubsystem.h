@@ -47,6 +47,11 @@ struct FCharacterPhysBridge
 	TSharedPtr<std::atomic<bool>> SlideActive;
 	TSharedPtr<std::atomic<bool>> MantleActive;
 	TSharedPtr<std::atomic<bool>> Hanging;
+
+	// Blink (sim→game)
+	TSharedPtr<std::atomic<bool>> BlinkAiming;   // game thread reads → time dilation
+	TSharedPtr<std::atomic<bool>> Teleported;    // game thread reads → position snap
+	TSharedPtr<std::atomic<uint8>> MantleType;   // 0=Vault, 1=Mantle, 2=LedgeGrab
 };
 
 /**
