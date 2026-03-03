@@ -159,14 +159,24 @@ void UFlecsRenderManager::DoRemoveInstance(FSkeletonKey Key)
 		if (IndexPtr && *IndexPtr != INDEX_NONE)
 		{
 			int32 Index = *IndexPtr;
+			int32 LastIndex = Group.IndexToKey.Num() - 1;
+			checkf(Index >= 0 && Index <= LastIndex,
+				TEXT("DoRemoveInstance: Index %d out of range [0, %d]"), Index, LastIndex);
 
 			if (Group.ISM)
 			{
-				Group.ISM->RemoveInstance(Index);
+				// Manual swap-and-pop: copy last instance into removed slot, then remove last (O(1)).
+				// ISM::RemoveInstance shifts all indices above — removing LAST avoids any shift.
+				if (Index != LastIndex && LastIndex >= 0)
+				{
+					FTransform LastTransform;
+					Group.ISM->GetInstanceTransform(LastIndex, LastTransform, true);
+					Group.ISM->UpdateInstanceTransform(Index, LastTransform, true, false, true);
+				}
+				Group.ISM->RemoveInstance(LastIndex);
 			}
 
-			// Update tracking for swapped instance (ISM swaps with last on remove)
-			int32 LastIndex = Group.IndexToKey.Num() - 1;
+			// Mirror swap-and-pop in tracking
 			if (Index != LastIndex && LastIndex >= 0)
 			{
 				FSkeletonKey SwappedKey = Group.IndexToKey[LastIndex];
@@ -176,7 +186,7 @@ void UFlecsRenderManager::DoRemoveInstance(FSkeletonKey Key)
 
 			Group.KeyToIndex.Remove(Key);
 			Group.TransformStates.Remove(Key);
-			Group.IndexToKey.SetNum(FMath::Max(0, Group.IndexToKey.Num() - 1));
+			Group.IndexToKey.SetNum(FMath::Max(0, LastIndex));
 
 			break;
 		}
@@ -291,7 +301,7 @@ void UFlecsRenderManager::UpdateTransforms(float Alpha, uint64 CurrentSimTick)
 
 		for (const FSkeletonKey& Key : KeysToRemove)
 		{
-			PendingRemovals.Enqueue(Key);
+			DoRemoveInstance(Key);
 		}
 
 		if (bAnyUpdated)
