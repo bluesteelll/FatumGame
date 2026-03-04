@@ -1,5 +1,6 @@
-// Core lifecycle, input routing, and identity for AFlecsCharacter.
+// Core lifecycle, Tick, and identity for AFlecsCharacter.
 // Other responsibilities split into:
+//   FlecsCharacter_Input.cpp       — Input binding + all input handler methods
 //   FlecsCharacter_Physics.cpp     — Barrage position readback, CMC feed, posture→Jolt
 //   FlecsCharacter_Combat.cpp      — Health, projectile, weapon
 //   FlecsCharacter_Interaction.cpp — Detection + state machine
@@ -15,7 +16,6 @@
 #include "FlecsGameTags.h"
 #include "FlecsStaticComponents.h"
 #include "FlecsInstanceComponents.h"
-#include "FlecsContainerLibrary.h"
 #include "BarrageDispatch.h"
 #include "FBarragePrimitive.h"
 #include "FBShapeParams.h"
@@ -26,18 +26,13 @@
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/SpringArmComponent.h"
 #include "Camera/CameraComponent.h"
-#include "FatumInputComponent.h"
-#include "FatumInputTags.h"
 #include "FlecsMovementProfile.h"
 #include "FlecsMovementStatic.h"
 #include "EnhancedInputSubsystems.h"
-#include "InputActionValue.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "FlecsMessageSubsystem.h"
 #include "FlecsUIMessages.h"
 #include "FlecsHUDWidget.h"
-#include "FlecsItemDefinition.h"
-#include "Engine/Engine.h"
 #include "Kismet/GameplayStatics.h"
 #include "HAL/PlatformTime.h"
 #include "FlecsAbilityTypes.h"
@@ -168,7 +163,7 @@ void AFlecsCharacter::InitECSRegistration()
 	// Allocate shared atomics on game thread — bridge will hold second refs.
 	InputAtomics = MakeShared<FCharacterInputAtomics, ESPMode::ThreadSafe>();
 	StateAtomics = MakeShared<FCharacterStateAtomics, ESPMode::ThreadSafe>();
-	FeetToActorOffset = CapsuleHalfHeight; // init offset = standing HH
+	PosState.FeetToActorOffset = CapsuleHalfHeight; // init offset = standing HH
 
 	// Capture movement profile values for sim thread (can't access UObjects there).
 	float CapturedGravityScale = 1.f;
@@ -358,11 +353,25 @@ void AFlecsCharacter::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
 
-	// 1. Read Jolt position, feed CMC, set actor location.
-	//    Must happen in TG_PrePhysics — BEFORE CameraManager (TG_PostPhysics).
-	ReadAndApplyBarragePosition(DeltaTime);
+	ReadAndApplyBarragePosition(DeltaTime);  // 1. Jolt → lerp → SetActorLocation (before CameraManager)
+	WriteCameraAtomics();                     // 2. Camera pos/dir → sim thread (blink, mantle)
+	ConsumeTeleportSnap();                    // 3. Sim teleport → reset lerp buffers
+	TickTimeDilation(DeltaTime);              // 4. Blink aim push/remove, stack tick, sim atomics
+	TickPostureAndResnap(DeltaTime);          // 5. Posture effects, FeetToActorOffset re-snap
+	CheckHealthChanges();                     // 6. Health change detection
+	TickInteractionStateMachine(DeltaTime);   // 7. Focus/Hold state machine
+	UpdateCamera();                           // 8. FP position + rotation + FOV
+	SyncMovementStateToECS();                 // 9. Posture → Flecs (on change)
+	ProcessPendingWeaponEquip();              // 10. Sim→game weapon attach
+	WriteAimDirection();                      // 11. LateSyncBridge FAimDirection
+}
 
-	// 1.5. Write camera pos/dir for sim thread (blink targeting + mantle hang exit).
+// ═══════════════════════════════════════════════════════════════════════════
+// TICK HELPERS
+// ═══════════════════════════════════════════════════════════════════════════
+
+void AFlecsCharacter::WriteCameraAtomics()
+{
 	if (InputAtomics.IsValid() && FollowCamera)
 	{
 		FVector CamLoc = FollowCamera->GetComponentLocation();
@@ -374,14 +383,19 @@ void AFlecsCharacter::Tick(float DeltaTime)
 		InputAtomics->CamDirY.Write(static_cast<float>(CamDir.Y));
 		InputAtomics->CamDirZ.Write(static_cast<float>(CamDir.Z));
 	}
+}
 
-	// 1.6. Teleport snap: sim thread teleported character → snap interpolation buffers.
+void AFlecsCharacter::ConsumeTeleportSnap()
+{
 	if (StateAtomics && StateAtomics->Teleported.Consume())
 	{
-		bBarrageJustSpawned = true; // Next ReadAndApplyBarragePosition will snap Prev=Curr=Smoothed
+		PosState.bJustSpawned = true; // Next ReadAndApplyBarragePosition will snap Prev=Curr=Smoothed
 	}
+}
 
-	// 1.7. Time dilation: push/remove blink aim source based on BlinkAiming state.
+void AFlecsCharacter::TickTimeDilation(float DeltaTime)
+{
+	// Push/remove blink aim source based on BlinkAiming state.
 	static const FName BlinkAimTag("BlinkAim");
 	if (StateAtomics)
 	{
@@ -399,124 +413,115 @@ void AFlecsCharacter::Tick(float DeltaTime)
 		}
 		else if (!bAiming && bPrevBlinkAiming)
 		{
-			DilationStack.Remove(BlinkAimTag); // auto-captures ExitSpeed
+			DilationStack.Remove(BlinkAimTag);
 		}
 		bPrevBlinkAiming = bAiming;
 	}
 
 	// Tick dilation stack → write to sim thread + UE GlobalTimeDilation.
+	// Use undilated wall-clock DT for stack tick (durations count in real time).
+	double Now = FPlatformTime::Seconds();
+	float RealDT = (LastRealTickTime > 0.0) ? FMath::Clamp(static_cast<float>(Now - LastRealTickTime), 0.0001f, 0.1f) : DeltaTime;
+	LastRealTickTime = Now;
+	DilationStack.Tick(RealDT);
+
+	float TargetScale = DilationStack.GetTargetScale();
+	float InterpSpeed = DilationStack.GetTransitionSpeed();
+
+	if (auto* Sub = GetWorld() ? GetWorld()->GetSubsystem<UFlecsArtillerySubsystem>() : nullptr)
 	{
-		// Use undilated wall-clock DT for stack tick (durations count in real time).
-		// FApp::GetDeltaTime() and Tick DeltaTime are both dilated by GlobalTimeDilation.
-		double Now = FPlatformTime::Seconds();
-		float RealDT = (LastRealTickTime > 0.0) ? FMath::Clamp(static_cast<float>(Now - LastRealTickTime), 0.0001f, 0.1f) : DeltaTime;
-		LastRealTickTime = Now;
-		DilationStack.Tick(RealDT);
+		Sub->GetSimWorker().DesiredTimeScale.store(TargetScale, std::memory_order_relaxed);
+		Sub->GetSimWorker().bPlayerFullSpeed.store(
+			DilationStack.IsPlayerFullSpeed(), std::memory_order_relaxed);
+		Sub->GetSimWorker().TransitionSpeed.store(InterpSpeed, std::memory_order_relaxed);
 
-		float TargetScale = DilationStack.GetTargetScale();
-		float InterpSpeed = DilationStack.GetTransitionSpeed();
+		float PublishedScale = Sub->GetSimWorker().ActiveTimeScalePublished.load(std::memory_order_relaxed);
+		UGameplayStatics::SetGlobalTimeDilation(GetWorld(), PublishedScale);
+	}
+	else if (UWorld* W = GetWorld())
+	{
+		UGameplayStatics::SetGlobalTimeDilation(W, TargetScale);
+	}
+}
 
-		if (auto* Sub = GetWorld() ? GetWorld()->GetSubsystem<UFlecsArtillerySubsystem>() : nullptr)
+void AFlecsCharacter::TickPostureAndResnap(float DeltaTime)
+{
+	if (!FatumMovement || !StateAtomics) return;
+
+	FatumMovement->TickPostureAndEffects(DeltaTime,
+		StateAtomics->SlideActive.Read(),
+		StateAtomics->MantleActive.Read(),
+		StateAtomics->Hanging.Read(),
+		StateAtomics->MantleType.Read());
+
+	// If posture changed capsule while grounded, re-snap FeetToActorOffset
+	// and re-set actor location (step 1 used pre-posture capsule HH).
+	if (FatumMovement->IsMovingOnGround())
+	{
+		float CurrentHH = GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
+		if (!FMath::IsNearlyEqual(PosState.FeetToActorOffset, CurrentHH, 0.01f))
 		{
-			Sub->GetSimWorker().DesiredTimeScale.store(TargetScale, std::memory_order_relaxed);
-			Sub->GetSimWorker().bPlayerFullSpeed.store(
-				DilationStack.IsPlayerFullSpeed(), std::memory_order_relaxed);
-			Sub->GetSimWorker().TransitionSpeed.store(InterpSpeed, std::memory_order_relaxed);
-
-			// Mirror sim thread's smoothed scale for UE GlobalTimeDilation (prevents snap vs smooth desync)
-			float PublishedScale = Sub->GetSimWorker().ActiveTimeScalePublished.load(std::memory_order_relaxed);
-			UGameplayStatics::SetGlobalTimeDilation(GetWorld(), PublishedScale);
-		}
-		else if (UWorld* W = GetWorld())
-		{
-			UGameplayStatics::SetGlobalTimeDilation(W, TargetScale);
+			PosState.FeetToActorOffset = CurrentHH;
+			SetActorLocation(PosState.SmoothedPos + FVector(0, 0, PosState.FeetToActorOffset),
+				false, nullptr, ETeleportType::TeleportPhysics);
 		}
 	}
+}
 
-	// 2. Posture/abilities/camera effects — uses CURRENT velocity/GS from step 1.
-	//    Must run BEFORE camera update so eye height is fresh (not 1 frame stale).
-	if (FatumMovement && StateAtomics)
+void AFlecsCharacter::UpdateCamera()
+{
+	// Skip when Focus interaction manually drives camera position/rotation.
+	bool bFocusDrivingCamera = (Interact.State == EInteractionState::Focusing
+		|| Interact.State == EInteractionState::Unfocusing
+		|| (Interact.State == EInteractionState::Focused
+			&& Interact.ActiveProfile && Interact.ActiveProfile->bMoveCamera));
+
+	if (!FatumMovement || !FollowCamera || bFocusDrivingCamera) return;
+
+	FollowCamera->SetFieldOfView(BaseFOV + FatumMovement->GetCurrentFOVOffset());
+
+	if (bFirstPersonCamera)
 	{
-		FatumMovement->TickPostureAndEffects(DeltaTime,
-			StateAtomics->SlideActive.Read(),
-			StateAtomics->MantleActive.Read(),
-			StateAtomics->Hanging.Read(),
-			StateAtomics->MantleType.Read());
+		FVector CameraPos(
+			0.f,
+			FatumMovement->GetHeadBobHorizontalOffset(),
+			FatumMovement->GetCurrentEyeHeight()
+				+ FatumMovement->GetLandingCameraOffset()
+				+ FatumMovement->GetHeadBobVerticalOffset());
+		FollowCamera->SetRelativeLocation(CameraPos);
 
-		// If posture changed capsule while grounded, re-snap FeetToActorOffset
-		// and re-set actor location (step 1 used pre-posture capsule HH).
-		if (FatumMovement->IsMovingOnGround())
-		{
-			float CurrentHH = GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
-			if (!FMath::IsNearlyEqual(FeetToActorOffset, CurrentHH, 0.01f))
-			{
-				FeetToActorOffset = CurrentHH;
-				SetActorLocation(SmoothedBarragePos + FVector(0, 0, FeetToActorOffset),
-					false, nullptr, ETeleportType::TeleportPhysics);
-			}
-		}
+		FRotator ControlRot = GetControlRotation();
+		FollowCamera->SetWorldRotation(
+			FRotator(ControlRot.Pitch, ControlRot.Yaw, FatumMovement->GetSlideTiltAngle()));
 	}
+}
 
-	CheckHealthChanges();
-	TickInteractionStateMachine(DeltaTime);
+void AFlecsCharacter::ProcessPendingWeaponEquip()
+{
+	if (!PendingWeaponEquip.bPending.load(std::memory_order_acquire)) return;
 
-	// 3. Camera update — reads CURRENT eye height (fresh from step 2).
-	//    Skip when Focus interaction manually drives camera position/rotation.
-	bool bFocusDrivingCamera = (InteractionState == EInteractionState::Focusing
-		|| InteractionState == EInteractionState::Unfocusing
-		|| (InteractionState == EInteractionState::Focused
-			&& ActiveInteractionProfile && ActiveInteractionProfile->bMoveCamera));
+	PendingWeaponEquip.bPending.store(false, std::memory_order_relaxed);
+	int64 WeaponId = PendingWeaponEquip.WeaponId.load(std::memory_order_acquire);
 
-	if (FatumMovement && FollowCamera && !bFocusDrivingCamera)
+	TestWeaponEntityId = WeaponId;
+	if (HUDWidget)
 	{
-		FollowCamera->SetFieldOfView(BaseFOV + FatumMovement->GetCurrentFOVOffset());
-
-		if (bFirstPersonCamera)
-		{
-			// Position: eye height + landing compress + head bob (Y = lateral sway, Z = vertical)
-			FVector CameraPos(
-				0.f,
-				FatumMovement->GetHeadBobHorizontalOffset(),
-				FatumMovement->GetCurrentEyeHeight()
-					+ FatumMovement->GetLandingCameraOffset()
-					+ FatumMovement->GetHeadBobVerticalOffset());
-			FollowCamera->SetRelativeLocation(CameraPos);
-
-			// Rotation: ControlRotation + additive Roll (slide tilt, future: lean)
-			FRotator ControlRot = GetControlRotation();
-			FollowCamera->SetWorldRotation(
-				FRotator(ControlRot.Pitch, ControlRot.Yaw, FatumMovement->GetSlideTiltAngle()));
-		}
+		HUDWidget->SetWeaponEntityId(WeaponId);
 	}
+	AttachWeaponVisual(PendingWeaponEquip.Mesh, PendingWeaponEquip.AttachOffset);
+	UE_LOG(LogTemp, Log, TEXT("FlecsCharacter: Weapon spawned and equipped (EntityId=%lld)"), WeaponId);
 
-	SyncMovementStateToECS();
-
-	// Process pending weapon equip (set by sim thread via atomics).
-	// Must run in Tick(), not AsyncTask(GameThread) — AsyncTask can fire during
-	// post-tick component update phase, causing assert !bPostTickComponentUpdate.
-	if (PendingWeaponEquip.bPending.load(std::memory_order_acquire))
+	if (bPendingFireAfterSpawn)
 	{
-		PendingWeaponEquip.bPending.store(false, std::memory_order_relaxed);
-		int64 WeaponId = PendingWeaponEquip.WeaponId.load(std::memory_order_acquire);
-
-		TestWeaponEntityId = WeaponId;
-		if (HUDWidget)
-		{
-			HUDWidget->SetWeaponEntityId(WeaponId);
-		}
-		AttachWeaponVisual(PendingWeaponEquip.Mesh, PendingWeaponEquip.AttachOffset);
-		UE_LOG(LogTemp, Log, TEXT("FlecsCharacter: Weapon spawned and equipped (EntityId=%lld)"), WeaponId);
-
-		if (bPendingFireAfterSpawn)
-		{
-			bPendingFireAfterSpawn = false;
-			StartFiringWeapon();
-		}
+		bPendingFireAfterSpawn = false;
+		StartFiringWeapon();
 	}
+}
 
+void AFlecsCharacter::WriteAimDirection()
+{
 	UFlecsArtillerySubsystem* FlecsSubsystem = GetWorld()->GetSubsystem<UFlecsArtillerySubsystem>();
 
-	// Continuously update aim direction, muzzle offset, and position so WeaponFireSystem has fresh data.
 	int64 CharId = GetCharacterEntityId();
 	if (CharId != 0 && FlecsSubsystem)
 	{
@@ -563,250 +568,4 @@ int64 AFlecsCharacter::GetCharacterEntityId() const
 	return static_cast<int64>(CharEntity.id());
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// ENHANCED INPUT SETUP
-// ═══════════════════════════════════════════════════════════════════════════
-
-void AFlecsCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
-{
-	Super::SetupPlayerInputComponent(PlayerInputComponent);
-
-	UFatumInputComponent* FatumInput = CastChecked<UFatumInputComponent>(PlayerInputComponent);
-	checkf(InputConfig, TEXT("AFlecsCharacter: InputConfig is not set! Assign a UFatumInputConfig Data Asset."));
-
-	FatumInput->BindNativeAction(InputConfig, TAG_Input_Move,      ETriggerEvent::Triggered, this, &AFlecsCharacter::Move);
-	FatumInput->BindNativeAction(InputConfig, TAG_Input_Move,      ETriggerEvent::Completed, this, &AFlecsCharacter::Move);
-	FatumInput->BindNativeAction(InputConfig, TAG_Input_Look,      ETriggerEvent::Triggered, this, &AFlecsCharacter::Look);
-	FatumInput->BindNativeAction(InputConfig, TAG_Input_Jump,      ETriggerEvent::Started,   this, &AFlecsCharacter::OnJumpStarted);
-	FatumInput->BindNativeAction(InputConfig, TAG_Input_Jump,      ETriggerEvent::Completed, this, &AFlecsCharacter::OnJumpCompleted);
-	FatumInput->BindNativeAction(InputConfig, TAG_Input_Fire,      ETriggerEvent::Started,   this, &AFlecsCharacter::StartFire);
-	FatumInput->BindNativeAction(InputConfig, TAG_Input_Fire,      ETriggerEvent::Completed, this, &AFlecsCharacter::StopFire);
-	FatumInput->BindNativeAction(InputConfig, TAG_Input_Interact,  ETriggerEvent::Started,   this, &AFlecsCharacter::OnSpawnItem);
-	FatumInput->BindNativeAction(InputConfig, TAG_Input_Interact,  ETriggerEvent::Completed, this, &AFlecsCharacter::OnInteractReleased);
-	FatumInput->BindNativeAction(InputConfig, TAG_Input_Destroy,   ETriggerEvent::Started,   this, &AFlecsCharacter::OnDestroyItem);
-	FatumInput->BindNativeAction(InputConfig, TAG_Input_Inventory, ETriggerEvent::Started,   this, &AFlecsCharacter::ToggleInventory);
-	FatumInput->BindNativeAction(InputConfig, TAG_Input_Cancel,    ETriggerEvent::Started,   this, &AFlecsCharacter::OnInteractCancel);
-	FatumInput->BindNativeAction(InputConfig, TAG_Input_Sprint,    ETriggerEvent::Started,   this, &AFlecsCharacter::OnSprintStarted);
-	FatumInput->BindNativeAction(InputConfig, TAG_Input_Sprint,    ETriggerEvent::Completed, this, &AFlecsCharacter::OnSprintCompleted);
-	FatumInput->BindNativeAction(InputConfig, TAG_Input_Crouch,    ETriggerEvent::Started,   this, &AFlecsCharacter::OnCrouchStarted);
-	FatumInput->BindNativeAction(InputConfig, TAG_Input_Crouch,    ETriggerEvent::Completed, this, &AFlecsCharacter::OnCrouchCompleted);
-	FatumInput->BindNativeAction(InputConfig, TAG_Input_Prone,     ETriggerEvent::Started,   this, &AFlecsCharacter::OnProneStarted);
-	FatumInput->BindNativeAction(InputConfig, TAG_Input_Prone,     ETriggerEvent::Completed, this, &AFlecsCharacter::OnProneCompleted);
-	FatumInput->BindNativeAction(InputConfig, TAG_Input_Ability1,  ETriggerEvent::Started,   this, &AFlecsCharacter::OnAbility1Started);
-	FatumInput->BindNativeAction(InputConfig, TAG_Input_Ability1,  ETriggerEvent::Completed, this, &AFlecsCharacter::OnAbility1Completed);
-	FatumInput->BindNativeAction(InputConfig, TAG_Input_Ability2,  ETriggerEvent::Started,   this, &AFlecsCharacter::OnAbility2Started);
-}
-
-UInputComponent* AFlecsCharacter::CreatePlayerInputComponent()
-{
-	return NewObject<UFatumInputComponent>(this, UFatumInputComponent::StaticClass(), TEXT("FatumInputComponent"));
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// INPUT HANDLERS (thin routing — delegates to CMC / Combat / Interaction / Test)
-// ═══════════════════════════════════════════════════════════════════════════
-
-void AFlecsCharacter::Move(const FInputActionValue& Value)
-{
-	// Input is a Vector2D (X = Right/Left, Y = Forward/Back)
-	FVector2D MovementVector = Value.Get<FVector2D>();
-
-	if (Controller != nullptr && InputAtomics.IsValid())
-	{
-		// Get controller rotation and extract yaw only
-		const FRotator Rotation = Controller->GetControlRotation();
-		const FRotator YawRotation(0, Rotation.Yaw, 0);
-
-		// Calculate forward and right directions
-		const FVector ForwardDirection = FRotationMatrix(YawRotation).GetUnitAxis(EAxis::X);
-		const FVector RightDirection = FRotationMatrix(YawRotation).GetUnitAxis(EAxis::Y);
-
-		// Build world-space direction (not normalized — magnitude = stick tilt)
-		FVector WorldDir = ForwardDirection * MovementVector.Y + RightDirection * MovementVector.X;
-
-		// Write to atomics (lock-free, latest-wins) — sim thread reads in PrepareCharacterStep.
-		InputAtomics->DirX.Write(static_cast<float>(WorldDir.X));
-		InputAtomics->DirZ.Write(static_cast<float>(WorldDir.Y));
-	}
-}
-
-void AFlecsCharacter::Look(const FInputActionValue& Value)
-{
-	FVector2D LookAxisVector = Value.Get<FVector2D>();
-
-	if (Controller != nullptr)
-	{
-		AddControllerYawInput(LookAxisVector.X);
-		AddControllerPitchInput(LookAxisVector.Y);
-	}
-}
-
-void AFlecsCharacter::OnSprintStarted(const FInputActionValue& Value)
-{
-	if (InputAtomics) InputAtomics->Sprinting.Write(true);
-	if (FatumMovement) FatumMovement->RequestSprint(true); // game-thread cosmetics (FOV, move mode)
-}
-
-void AFlecsCharacter::OnSprintCompleted(const FInputActionValue& Value)
-{
-	if (InputAtomics) InputAtomics->Sprinting.Write(false);
-	if (FatumMovement) FatumMovement->RequestSprint(false);
-}
-
-void AFlecsCharacter::OnJumpStarted(const FInputActionValue& Value)
-{
-	// One-shot: sim thread reads + clears in PrepareCharacterStep
-	if (InputAtomics) InputAtomics->JumpPressed.Fire();
-}
-
-void AFlecsCharacter::OnJumpCompleted(const FInputActionValue& Value)
-{
-	// Jump is one-shot (consumed by sim thread), no release needed
-}
-
-void AFlecsCharacter::OnCrouchStarted(const FInputActionValue& Value)
-{
-	if (InputAtomics) InputAtomics->CrouchHeld.Write(true);
-	if (FatumMovement) FatumMovement->RequestCrouch(true); // game-thread PostureSM (non-slide crouch)
-}
-
-void AFlecsCharacter::OnCrouchCompleted(const FInputActionValue& Value)
-{
-	if (InputAtomics) InputAtomics->CrouchHeld.Write(false);
-	if (FatumMovement) FatumMovement->RequestCrouch(false);
-}
-
-void AFlecsCharacter::OnProneStarted(const FInputActionValue& Value)
-{
-	if (FatumMovement) FatumMovement->RequestProne(true);
-}
-
-void AFlecsCharacter::OnProneCompleted(const FInputActionValue& Value)
-{
-	if (FatumMovement) FatumMovement->RequestProne(false);
-}
-
-void AFlecsCharacter::OnAbility1Started(const FInputActionValue& Value)
-{
-	if (InputAtomics) InputAtomics->BlinkHeld.Write(true);
-}
-
-void AFlecsCharacter::OnAbility1Completed(const FInputActionValue& Value)
-{
-	if (InputAtomics) InputAtomics->BlinkHeld.Write(false);
-}
-
-void AFlecsCharacter::OnAbility2Started(const FInputActionValue& Value)
-{
-	if (InputAtomics) InputAtomics->Ability2Pressed.Fire();
-}
-
-void AFlecsCharacter::StartFire(const FInputActionValue& Value)
-{
-	// If we have a weapon, use the weapon system
-	if (TestWeaponDefinition)
-	{
-		// Spawn weapon if not yet spawned
-		if (TestWeaponEntityId == 0)
-		{
-			SpawnAndEquipTestWeapon();
-			bPendingFireAfterSpawn = true;
-			return;
-		}
-		StartFiringWeapon();
-	}
-	else
-	{
-		// Fallback to direct projectile spawning
-		FireProjectile();
-	}
-}
-
-void AFlecsCharacter::StopFire(const FInputActionValue& Value)
-{
-	bPendingFireAfterSpawn = false;
-	if (TestWeaponEntityId != 0)
-	{
-		StopFiringWeapon();
-	}
-}
-
-void AFlecsCharacter::OnSpawnItem(const FInputActionValue& Value)
-{
-	// E closes loot panel if open
-	if (IsLootOpen())
-	{
-		CloseLootPanel();
-		return;
-	}
-
-	// If in an interaction state, route to state machine (E exits Focus, etc.)
-	if (InteractionState != EInteractionState::Gameplay)
-	{
-		HandleInteractionInput();
-		return;
-	}
-
-	// If we have an interaction target, begin interaction
-	if (CurrentInteractionTarget.IsValid())
-	{
-		bInteractKeyHeld = true; // For Hold detection
-		HandleInteractionInput();
-		return;
-	}
-
-	// If container testing is configured, use container mode
-	if (TestContainerDefinition && TestItemDefinition && TestItemDefinition->ItemDefinition)
-	{
-		// Spawn container if not yet spawned
-		if (!TestContainerKey.IsValid())
-		{
-			SpawnTestContainer();
-		}
-		else
-		{
-			// Add item to existing container
-			AddItemToTestContainer();
-		}
-	}
-	else if (TestItemDefinition && TestItemDefinition->ItemDefinition && InventoryEntityId != 0)
-	{
-		// No test container — add item directly to player inventory
-		int32 Added = 0;
-		UFlecsContainerLibrary::AddItemToContainer(this, InventoryEntityId, TestItemDefinition, 1, Added, false);
-		if (GEngine)
-		{
-			GEngine->AddOnScreenDebugMessage(-1, 2.f, FColor::Cyan,
-				FString::Printf(TEXT("Added '%s' to inventory"), *TestItemDefinition->GetName()));
-		}
-	}
-	else
-	{
-		// Fallback to entity spawning
-		SpawnTestEntity();
-	}
-}
-
-void AFlecsCharacter::OnInteractReleased(const FInputActionValue& Value)
-{
-	HandleInteractionRelease();
-}
-
-void AFlecsCharacter::OnInteractCancel(const FInputActionValue& Value)
-{
-	HandleInteractionCancel();
-}
-
-void AFlecsCharacter::OnDestroyItem(const FInputActionValue& Value)
-{
-	// If container testing is configured, use container mode
-	if (TestContainerDefinition && TestContainerKey.IsValid())
-	{
-		RemoveAllItemsFromTestContainer();
-	}
-	else
-	{
-		// Fallback to entity destruction
-		DestroyLastSpawnedEntity();
-	}
-}
+// Input binding + handler methods: see FlecsCharacter_Input.cpp

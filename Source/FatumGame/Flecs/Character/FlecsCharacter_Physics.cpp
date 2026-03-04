@@ -40,26 +40,23 @@ void AFlecsCharacter::ReadAndApplyBarragePosition(float DeltaTime)
 	FVector Vel(Vel3f);
 
 	// 4. Prev/Curr double-buffer (same as ISM FEntityTransformState)
-	if (SimTick > LastBarrageSimTick)
+	if (SimTick > PosState.LastSimTick)
 	{
-		PrevBarragePos = CurrBarragePos;
-		CurrBarragePos = PhysPos;
-		LastBarrageSimTick = SimTick;
+		PosState.PrevPos = PosState.CurrPos;
+		PosState.CurrPos = PhysPos;
+		PosState.LastSimTick = SimTick;
 	}
 
 	// 5. Interpolate + smooth
 	FVector FeetPos;
-	if (bBarrageJustSpawned)
+	if (PosState.bJustSpawned)
 	{
-		PrevBarragePos = PhysPos;
-		CurrBarragePos = PhysPos;
-		SmoothedBarragePos = PhysPos;
+		PosState.SnapTo(PhysPos);
 		FeetPos = PhysPos;
-		bBarrageJustSpawned = false;
 	}
 	else
 	{
-		FVector LerpTarget = FMath::Lerp(PrevBarragePos, CurrBarragePos, Alpha);
+		FVector LerpTarget = FMath::Lerp(PosState.PrevPos, PosState.CurrPos, Alpha);
 
 		// When player moves at full speed but UE DeltaTime is dilated,
 		// VInterpTo needs undilated DT to keep up with full-speed position changes.
@@ -71,8 +68,8 @@ void AFlecsCharacter::ReadAndApplyBarragePosition(float DeltaTime)
 			SmoothDT = DeltaTime / PublishedScale;
 		}
 
-		SmoothedBarragePos = FMath::VInterpTo(SmoothedBarragePos, LerpTarget, SmoothDT, 30.f);
-		FeetPos = SmoothedBarragePos;
+		PosState.SmoothedPos = FMath::VInterpTo(PosState.SmoothedPos, LerpTarget, SmoothDT, 30.f);
+		FeetPos = PosState.SmoothedPos;
 	}
 
 	// 6. Apply (CMC feed + FeetToActorOffset + SetActorLocation)
@@ -100,11 +97,11 @@ void AFlecsCharacter::ApplyBarrageSync(const FVector& FeetPos, uint8 GS, const F
 	const bool bGrounded = FatumMovement && FatumMovement->IsMovingOnGround();
 	if (bGrounded)
 	{
-		FeetToActorOffset = GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
+		PosState.FeetToActorOffset = GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
 	}
 
 	// TeleportPhysics: skip UE capsule overlap tests — Barrage is physics authority.
-	FVector FinalPos = FeetPos + FVector(0, 0, FeetToActorOffset);
+	FVector FinalPos = FeetPos + FVector(0, 0, PosState.FeetToActorOffset);
 	SetActorLocation(FinalPos, false, nullptr, ETeleportType::TeleportPhysics);
 
 	// Ability state is now read by TickPostureAndEffects directly from atomics.

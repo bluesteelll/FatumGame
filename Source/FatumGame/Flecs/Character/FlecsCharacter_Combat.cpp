@@ -74,7 +74,7 @@ void AFlecsCharacter::CheckHealthChanges()
 			OnDamageTaken(-Delta, CurrentHealth);
 
 			// Force cancel active interaction on damage
-			if (InteractionState != EInteractionState::Gameplay)
+			if (Interact.State != EInteractionState::Gameplay)
 			{
 				ForceCancelInteraction();
 			}

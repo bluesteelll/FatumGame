@@ -72,3 +72,42 @@ struct FCharacterStateAtomics
 	FAtomicOneShot              Teleported;    // sim fires, game consumes → position snap
 	TAtomicLatestWins<uint8>    MantleType;    // 0=Vault, 1=Mantle, 2=LedgeGrab
 };
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GROUPED STATE STRUCTS
+// Reduce header bloat by grouping related private members into plain structs.
+// ═══════════════════════════════════════════════════════════════════════════
+
+class USkeletalMesh;
+
+/** Pending weapon equip data (sim thread → game thread via atomics).
+ *  Processed in Tick() to avoid modifying components during post-tick update phase. */
+struct FPendingWeaponEquip
+{
+	std::atomic<int64> WeaponId{0};
+	std::atomic<bool> bPending{false};
+	USkeletalMesh* Mesh = nullptr;       // Set on game thread before EnqueueCommand
+	FTransform AttachOffset;              // Set on game thread before EnqueueCommand
+};
+
+/** Character position interpolation state (game thread only, updated in Tick).
+ *  Same pattern as ISM FEntityTransformState + VInterpTo smoothing. */
+struct FCharacterPositionState
+{
+	FVector PrevPos = FVector::ZeroVector;
+	FVector CurrPos = FVector::ZeroVector;
+	FVector SmoothedPos = FVector::ZeroVector;
+	uint64 LastSimTick = 0;
+	bool bJustSpawned = true;
+
+	// Feet-to-actor Z offset: CapsuleHalfHeight on ground, frozen in air.
+	float FeetToActorOffset = 0.f;
+
+	void SnapTo(const FVector& Pos)
+	{
+		PrevPos = Pos;
+		CurrPos = Pos;
+		SmoothedPos = Pos;
+		bJustSpawned = false;
+	}
+};

@@ -42,20 +42,20 @@ static float EaseOutQuad(float T)
 
 bool AFlecsCharacter::IsInInteraction() const
 {
-	return InteractionState != EInteractionState::Gameplay;
+	return Interact.State != EInteractionState::Gameplay;
 }
 
 void AFlecsCharacter::SetInteractionState(EInteractionState NewState)
 {
-	if (InteractionState == NewState) return;
-	InteractionState = NewState;
+	if (Interact.State == NewState) return;
+	Interact.State = NewState;
 	OnInteractionStateChanged(static_cast<uint8>(NewState));
 
 	if (UFlecsMessageSubsystem* MsgSub = UFlecsMessageSubsystem::Get(this))
 	{
 		FUIInteractionStateMessage Msg;
 		Msg.State = static_cast<uint8>(NewState);
-		Msg.TargetKey = ActiveInteractionTargetKey;
+		Msg.TargetKey = Interact.ActiveTargetKey;
 		MsgSub->BroadcastMessage(TAG_UI_InteractionState, Msg);
 	}
 }
@@ -113,7 +113,7 @@ bool AFlecsCharacter::GetEntityWorldTransform(FSkeletonKey EntityKey, FVector& O
 void AFlecsCharacter::HandleInteractionInput()
 {
 	// If already in a state, handle context-specific E press
-	switch (InteractionState)
+	switch (Interact.State)
 	{
 	case EInteractionState::Gameplay:
 		break; // Fall through to new interaction below
@@ -129,9 +129,9 @@ void AFlecsCharacter::HandleInteractionInput()
 	}
 
 	// Start new interaction
-	if (!CurrentInteractionTarget.IsValid()) return;
+	if (!Interact.CurrentTarget.IsValid()) return;
 
-	const UFlecsInteractionProfile* Profile = ResolveInteractionProfile(CurrentInteractionTarget);
+	const UFlecsInteractionProfile* Profile = ResolveInteractionProfile(Interact.CurrentTarget);
 	if (!Profile)
 	{
 		// Backward compatibility: entities with tags but no InteractionProfile
@@ -141,13 +141,13 @@ void AFlecsCharacter::HandleInteractionInput()
 			OpenLootPanel(ContainerId, Title);
 		});
 		UFlecsInteractionLibrary::DispatchLegacyInteraction(
-			this, CurrentInteractionTarget, InventoryEntityId,
-			CachedInteractionPrompt, LegacyCallback);
+			this, Interact.CurrentTarget, InventoryEntityId,
+			Interact.CachedPrompt, LegacyCallback);
 		return;
 	}
 
-	ActiveInteractionProfile = Profile;
-	ActiveInteractionTargetKey = CurrentInteractionTarget;
+	Interact.ActiveProfile = Profile;
+	Interact.ActiveTargetKey = Interact.CurrentTarget;
 
 	switch (Profile->InteractionType)
 	{
@@ -159,10 +159,10 @@ void AFlecsCharacter::HandleInteractionInput()
 			OpenLootPanel(ContainerId, Title);
 		});
 		UFlecsInteractionLibrary::DispatchInstantAction(
-			this, Profile->InstantAction, CurrentInteractionTarget,
+			this, Profile->InstantAction, Interact.CurrentTarget,
 			InventoryEntityId, Profile->CustomEventTag,
-			CachedInteractionPrompt, ContainerCallback);
-		UFlecsInteractionLibrary::ApplySingleUseIfNeeded(this, CurrentInteractionTarget);
+			Interact.CachedPrompt, ContainerCallback);
+		UFlecsInteractionLibrary::ApplySingleUseIfNeeded(this, Interact.CurrentTarget);
 		break;
 	}
 
@@ -178,20 +178,20 @@ void AFlecsCharacter::HandleInteractionInput()
 
 void AFlecsCharacter::HandleInteractionRelease()
 {
-	bInteractKeyHeld = false;
+	Interact.bInteractKeyHeld = false;
 	// Hold cancellation is handled in TickInteractionStateMachine via bInteractKeyHeld
 }
 
 void AFlecsCharacter::HandleInteractionCancel()
 {
-	switch (InteractionState)
+	switch (Interact.State)
 	{
 	case EInteractionState::Focused:
 		BeginUnfocusTransition();
 		return;
 
 	case EInteractionState::Holding:
-		if (bHoldCanCancel) CancelHoldInteraction();
+		if (Interact.bHoldCanCancel) CancelHoldInteraction();
 		return;
 
 	case EInteractionState::Gameplay:
@@ -221,19 +221,19 @@ void AFlecsCharacter::HandleInteractionCancel()
 
 void AFlecsCharacter::TickInteractionStateMachine(float DeltaTime)
 {
-	switch (InteractionState)
+	switch (Interact.State)
 	{
 	case EInteractionState::Gameplay:
 		return;
 
 	case EInteractionState::Focusing:
 	{
-		checkf(CurrentTransitionDuration > 0.f, TEXT("TickInteraction: TransitionDuration must be > 0"));
-		FocusLerpAlpha += DeltaTime / CurrentTransitionDuration;
+		checkf(Interact.CurrentTransitionDuration > 0.f, TEXT("TickInteraction: TransitionDuration must be > 0"));
+		Interact.FocusLerpAlpha += DeltaTime / Interact.CurrentTransitionDuration;
 
-		if (FocusLerpAlpha >= 1.f)
+		if (Interact.FocusLerpAlpha >= 1.f)
 		{
-			FocusLerpAlpha = 1.f;
+			Interact.FocusLerpAlpha = 1.f;
 			ApplyFocusCameraLerp(1.f);
 			SetInteractionState(EInteractionState::Focused);
 
@@ -242,7 +242,7 @@ void AFlecsCharacter::TickInteractionStateMachine(float DeltaTime)
 		}
 		else
 		{
-			ApplyFocusCameraLerp(EaseInOutCubic(FocusLerpAlpha));
+			ApplyFocusCameraLerp(EaseInOutCubic(Interact.FocusLerpAlpha));
 		}
 		break;
 	}
@@ -253,21 +253,21 @@ void AFlecsCharacter::TickInteractionStateMachine(float DeltaTime)
 
 	case EInteractionState::Unfocusing:
 	{
-		checkf(CurrentTransitionDuration > 0.f, TEXT("TickInteraction: TransitionDuration must be > 0"));
-		FocusLerpAlpha -= DeltaTime / CurrentTransitionDuration;
+		checkf(Interact.CurrentTransitionDuration > 0.f, TEXT("TickInteraction: TransitionDuration must be > 0"));
+		Interact.FocusLerpAlpha -= DeltaTime / Interact.CurrentTransitionDuration;
 
-		if (FocusLerpAlpha <= 0.f)
+		if (Interact.FocusLerpAlpha <= 0.f)
 		{
-			FocusLerpAlpha = 0.f;
+			Interact.FocusLerpAlpha = 0.f;
 			ApplyFocusCameraLerp(0.f);
 			RestoreCameraControl();
 			SetInteractionState(EInteractionState::Gameplay);
-			ActiveInteractionProfile = nullptr;
-			ActiveInteractionTargetKey = FSkeletonKey();
+			Interact.ActiveProfile = nullptr;
+			Interact.ActiveTargetKey = FSkeletonKey();
 		}
 		else
 		{
-			ApplyFocusCameraLerp(EaseOutQuad(FocusLerpAlpha));
+			ApplyFocusCameraLerp(EaseOutQuad(Interact.FocusLerpAlpha));
 		}
 		break;
 	}
@@ -275,18 +275,18 @@ void AFlecsCharacter::TickInteractionStateMachine(float DeltaTime)
 	case EInteractionState::Holding:
 	{
 		// Cancel if E released
-		if (!bInteractKeyHeld && bHoldCanCancel)
+		if (!Interact.bInteractKeyHeld && Interact.bHoldCanCancel)
 		{
 			CancelHoldInteraction();
 			return;
 		}
 
 		// Cancel if target lost (with grace period to handle 10Hz trace flicker)
-		if (!CurrentInteractionTarget.IsValid() ||
-			CurrentInteractionTarget != ActiveInteractionTargetKey)
+		if (!Interact.CurrentTarget.IsValid() ||
+			Interact.CurrentTarget != Interact.ActiveTargetKey)
 		{
-			HoldTargetLostTime += DeltaTime;
-			if (HoldTargetLostTime >= 0.3f)
+			Interact.HoldTargetLostTime += DeltaTime;
+			if (Interact.HoldTargetLostTime >= 0.3f)
 			{
 				CancelHoldInteraction();
 				return;
@@ -294,11 +294,11 @@ void AFlecsCharacter::TickInteractionStateMachine(float DeltaTime)
 		}
 		else
 		{
-			HoldTargetLostTime = 0.f;
+			Interact.HoldTargetLostTime = 0.f;
 		}
 
-		HoldAccumulator += DeltaTime;
-		float Progress = FMath::Clamp(HoldAccumulator / HoldRequiredDuration, 0.f, 1.f);
+		Interact.HoldAccumulator += DeltaTime;
+		float Progress = FMath::Clamp(Interact.HoldAccumulator / Interact.HoldRequiredDuration, 0.f, 1.f);
 
 		// Broadcast progress
 		OnHoldProgressChanged(Progress);
@@ -306,11 +306,11 @@ void AFlecsCharacter::TickInteractionStateMachine(float DeltaTime)
 		{
 			FUIHoldProgressMessage Msg;
 			Msg.Progress = Progress;
-			Msg.TotalDuration = HoldRequiredDuration;
+			Msg.TotalDuration = Interact.HoldRequiredDuration;
 			MsgSub->BroadcastMessage(TAG_UI_HoldProgress, Msg);
 		}
 
-		if (HoldAccumulator >= HoldRequiredDuration)
+		if (Interact.HoldAccumulator >= Interact.HoldRequiredDuration)
 		{
 			CompleteHoldInteraction();
 		}
@@ -327,45 +327,39 @@ FTransform AFlecsCharacter::ComputeFocusCameraTransform(
 	FVector EntityPos, FQuat EntityRot,
 	FVector LocalCameraPos, FRotator LocalCameraRot) const
 {
-	// Camera position: entity origin + local offset rotated by entity orientation
 	FVector FinalCameraPos = EntityPos + EntityRot.RotateVector(LocalCameraPos);
-
-	// Camera rotation: local rotation composed with entity orientation
 	FQuat FinalCameraRot = EntityRot * LocalCameraRot.Quaternion();
-
 	return FTransform(FinalCameraRot, FinalCameraPos);
 }
 
 void AFlecsCharacter::ApplyFocusCameraLerp(float Alpha)
 {
 	check(FollowCamera);
-	FVector LerpedPos = FMath::Lerp(SavedCameraTransform.GetLocation(), FocusCameraTarget.GetLocation(), Alpha);
-	FQuat LerpedRot = FQuat::Slerp(SavedCameraTransform.GetRotation(), FocusCameraTarget.GetRotation(), Alpha);
+	FVector LerpedPos = FMath::Lerp(Interact.SavedCameraTransform.GetLocation(), Interact.FocusCameraTarget.GetLocation(), Alpha);
+	FQuat LerpedRot = FQuat::Slerp(Interact.SavedCameraTransform.GetRotation(), Interact.FocusCameraTarget.GetRotation(), Alpha);
 	FollowCamera->SetWorldLocationAndRotation(LerpedPos, LerpedRot.Rotator());
 
-	if (FocusTargetFOV > 0.f)
+	if (Interact.FocusTargetFOV > 0.f)
 	{
-		float LerpedFOV = FMath::Lerp(SavedCameraFOV, FocusTargetFOV, Alpha);
+		float LerpedFOV = FMath::Lerp(Interact.SavedCameraFOV, Interact.FocusTargetFOV, Alpha);
 		FollowCamera->SetFieldOfView(LerpedFOV);
 	}
 }
 
 void AFlecsCharacter::BeginFocusTransition()
 {
-	check(ActiveInteractionProfile);
-	check(ActiveInteractionProfile->InteractionType == EInteractionType::Focus);
+	check(Interact.ActiveProfile);
+	check(Interact.ActiveProfile->InteractionType == EInteractionType::Focus);
 	check(FollowCamera);
 
 	// For Focus without camera movement, skip directly to Focused
-	if (!ActiveInteractionProfile->bMoveCamera)
+	if (!Interact.ActiveProfile->bMoveCamera)
 	{
-		// Block movement and input
 		APlayerController* PC = Cast<APlayerController>(Controller);
 		check(PC);
 		PC->SetIgnoreMoveInput(true);
 		PC->SetIgnoreLookInput(true);
 
-		// Swap input contexts
 		if (auto* InputSub = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(PC->GetLocalPlayer()))
 		{
 			FModifyContextOptions Opts;
@@ -383,22 +377,22 @@ void AFlecsCharacter::BeginFocusTransition()
 	// Cache entity transform at start (don't track moving entity)
 	FVector EntityPos;
 	FQuat EntityRot;
-	if (!GetEntityWorldTransform(ActiveInteractionTargetKey, EntityPos, EntityRot))
+	if (!GetEntityWorldTransform(Interact.ActiveTargetKey, EntityPos, EntityRot))
 	{
 		UE_LOG(LogTemp, Warning, TEXT("BeginFocusTransition: Entity has no valid position, aborting"));
-		ActiveInteractionProfile = nullptr;
-		ActiveInteractionTargetKey = FSkeletonKey();
+		Interact.ActiveProfile = nullptr;
+		Interact.ActiveTargetKey = FSkeletonKey();
 		return;
 	}
 
 	// Resolve camera position/rotation: per-instance override > InteractionProfile default
-	FVector LocalCamPos = ActiveInteractionProfile->FocusCameraPosition;
-	FRotator LocalCamRot = ActiveInteractionProfile->FocusCameraRotation;
+	FVector LocalCamPos = Interact.ActiveProfile->FocusCameraPosition;
+	FRotator LocalCamRot = Interact.ActiveProfile->FocusCameraRotation;
 
 	UFlecsArtillerySubsystem* FlecsSubsystem = GetWorld()->GetSubsystem<UFlecsArtillerySubsystem>();
 	if (ensure(FlecsSubsystem))
 	{
-		flecs::entity E = FlecsSubsystem->GetEntityForBarrageKey(ActiveInteractionTargetKey);
+		flecs::entity E = FlecsSubsystem->GetEntityForBarrageKey(Interact.ActiveTargetKey);
 		if (E.is_valid())
 		{
 			const FFocusCameraOverride* Override = E.try_get<FFocusCameraOverride>();
@@ -411,17 +405,16 @@ void AFlecsCharacter::BeginFocusTransition()
 	}
 
 	// Compute target camera transform
-	FocusCameraTarget = ComputeFocusCameraTransform(EntityPos, EntityRot, LocalCamPos, LocalCamRot);
-	FocusTargetFOV = ActiveInteractionProfile->FocusFOV;
-	CurrentTransitionDuration = ActiveInteractionProfile->TransitionInTime;
-	FocusLerpAlpha = 0.f;
+	Interact.FocusCameraTarget = ComputeFocusCameraTransform(EntityPos, EntityRot, LocalCamPos, LocalCamRot);
+	Interact.FocusTargetFOV = Interact.ActiveProfile->FocusFOV;
+	Interact.CurrentTransitionDuration = Interact.ActiveProfile->TransitionInTime;
+	Interact.FocusLerpAlpha = 0.f;
 
 	// Save current camera state
-	SavedCameraTransform = FollowCamera->GetComponentTransform();
-	SavedCameraFOV = FollowCamera->FieldOfView;
+	Interact.SavedCameraTransform = FollowCamera->GetComponentTransform();
+	Interact.SavedCameraFOV = FollowCamera->FieldOfView;
 
 	// Disable camera following — we drive it manually via lerp.
-	// First-person: already false (Phase 4 manual rotation). Third-person: disable boom rotation.
 	FollowCamera->bUsePawnControlRotation = false;
 
 	// Block movement and input
@@ -449,24 +442,24 @@ void AFlecsCharacter::BeginUnfocusTransition(float OverrideDuration)
 	CloseFocusPanel();
 
 	// Apply single-use after focus session
-	if (ActiveInteractionTargetKey.IsValid())
+	if (Interact.ActiveTargetKey.IsValid())
 	{
-		UFlecsInteractionLibrary::ApplySingleUseIfNeeded(this, ActiveInteractionTargetKey);
+		UFlecsInteractionLibrary::ApplySingleUseIfNeeded(this, Interact.ActiveTargetKey);
 	}
 
 	// For Focus without camera movement, skip directly to Gameplay
-	if (ActiveInteractionProfile && !ActiveInteractionProfile->bMoveCamera)
+	if (Interact.ActiveProfile && !Interact.ActiveProfile->bMoveCamera)
 	{
 		RestoreCameraControl();
 		SetInteractionState(EInteractionState::Gameplay);
-		ActiveInteractionProfile = nullptr;
-		ActiveInteractionTargetKey = FSkeletonKey();
+		Interact.ActiveProfile = nullptr;
+		Interact.ActiveTargetKey = FSkeletonKey();
 		return;
 	}
 
 	float Duration = OverrideDuration > 0.f ? OverrideDuration
-		: (ActiveInteractionProfile ? ActiveInteractionProfile->TransitionOutTime : 0.25f);
-	CurrentTransitionDuration = Duration;
+		: (Interact.ActiveProfile ? Interact.ActiveProfile->TransitionOutTime : 0.25f);
+	Interact.CurrentTransitionDuration = Duration;
 
 	SetInteractionState(EInteractionState::Unfocusing);
 }
@@ -475,12 +468,9 @@ void AFlecsCharacter::RestoreCameraControl()
 {
 	check(FollowCamera);
 
-	// Restore camera rotation: first-person uses manual SetWorldRotation (Phase 4),
-	// third-person uses bUsePawnControlRotation via boom.
 	FollowCamera->bUsePawnControlRotation = !bFirstPersonCamera;
-	FollowCamera->SetFieldOfView(SavedCameraFOV);
+	FollowCamera->SetFieldOfView(Interact.SavedCameraFOV);
 
-	// Restore player input
 	APlayerController* PC = Cast<APlayerController>(Controller);
 	if (PC)
 	{
@@ -488,7 +478,6 @@ void AFlecsCharacter::RestoreCameraControl()
 		PC->ResetIgnoreMoveInput();
 		PC->SetShowMouseCursor(false);
 
-		// Restore input contexts
 		if (auto* InputSub = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(PC->GetLocalPlayer()))
 		{
 			FModifyContextOptions Opts;
@@ -505,16 +494,16 @@ void AFlecsCharacter::RestoreCameraControl()
 
 void AFlecsCharacter::OpenFocusPanel()
 {
-	if (!ActiveInteractionProfile || !ActiveInteractionProfile->FocusWidgetClass) return;
+	if (!Interact.ActiveProfile || !Interact.ActiveProfile->FocusWidgetClass) return;
 
 	APlayerController* PC = Cast<APlayerController>(Controller);
 	check(PC);
 
-	ActiveFocusPanel = CreateWidget<UFlecsUIPanel>(PC, ActiveInteractionProfile->FocusWidgetClass);
+	ActiveFocusPanel = CreateWidget<UFlecsUIPanel>(PC, Interact.ActiveProfile->FocusWidgetClass);
 	if (!ActiveFocusPanel)
 	{
 		UE_LOG(LogTemp, Warning, TEXT("OpenFocusPanel: Failed to create widget of class %s"),
-			*ActiveInteractionProfile->FocusWidgetClass->GetName());
+			*Interact.ActiveProfile->FocusWidgetClass->GetName());
 		return;
 	}
 
@@ -540,26 +529,25 @@ void AFlecsCharacter::CloseFocusPanel()
 
 void AFlecsCharacter::BeginHoldInteraction()
 {
-	check(ActiveInteractionProfile);
-	check(ActiveInteractionProfile->InteractionType == EInteractionType::Hold);
+	check(Interact.ActiveProfile);
+	check(Interact.ActiveProfile->InteractionType == EInteractionType::Hold);
 
-	HoldAccumulator = 0.f;
-	HoldRequiredDuration = ActiveInteractionProfile->HoldDuration;
-	HoldTargetLostTime = 0.f;
-	bHoldCanCancel = ActiveInteractionProfile->bCanCancel;
-	bInteractKeyHeld = true;
+	Interact.HoldAccumulator = 0.f;
+	Interact.HoldRequiredDuration = Interact.ActiveProfile->HoldDuration;
+	Interact.HoldTargetLostTime = 0.f;
+	Interact.bHoldCanCancel = Interact.ActiveProfile->bCanCancel;
+	Interact.bInteractKeyHeld = true;
 
 	SetInteractionState(EInteractionState::Holding);
 }
 
 void AFlecsCharacter::CancelHoldInteraction()
 {
-	// Broadcast cancellation
 	if (UFlecsMessageSubsystem* MsgSub = UFlecsMessageSubsystem::Get(this))
 	{
 		FUIHoldProgressMessage Msg;
-		Msg.Progress = FMath::Clamp(HoldAccumulator / HoldRequiredDuration, 0.f, 1.f);
-		Msg.TotalDuration = HoldRequiredDuration;
+		Msg.Progress = FMath::Clamp(Interact.HoldAccumulator / Interact.HoldRequiredDuration, 0.f, 1.f);
+		Msg.TotalDuration = Interact.HoldRequiredDuration;
 		Msg.bFinished = true;
 		Msg.bCompleted = false;
 		MsgSub->BroadcastMessage(TAG_UI_HoldProgress, Msg);
@@ -567,48 +555,46 @@ void AFlecsCharacter::CancelHoldInteraction()
 
 	OnHoldProgressChanged(0.f);
 	SetInteractionState(EInteractionState::Gameplay);
-	ActiveInteractionProfile = nullptr;
-	ActiveInteractionTargetKey = FSkeletonKey();
-	HoldAccumulator = 0.f;
-	bInteractKeyHeld = false;
+	Interact.ActiveProfile = nullptr;
+	Interact.ActiveTargetKey = FSkeletonKey();
+	Interact.HoldAccumulator = 0.f;
+	Interact.bInteractKeyHeld = false;
 }
 
 void AFlecsCharacter::CompleteHoldInteraction()
 {
-	// Broadcast completion
 	if (UFlecsMessageSubsystem* MsgSub = UFlecsMessageSubsystem::Get(this))
 	{
 		FUIHoldProgressMessage Msg;
 		Msg.Progress = 1.f;
-		Msg.TotalDuration = HoldRequiredDuration;
+		Msg.TotalDuration = Interact.HoldRequiredDuration;
 		Msg.bFinished = true;
 		Msg.bCompleted = true;
 		MsgSub->BroadcastMessage(TAG_UI_HoldProgress, Msg);
 	}
 
-	// Execute completion action
-	check(ActiveInteractionProfile);
+	check(Interact.ActiveProfile);
 	FOnContainerOpened ContainerCallback;
 	ContainerCallback.BindWeakLambda(this, [this](int64 ContainerId, const FText& Title)
 	{
 		OpenLootPanel(ContainerId, Title);
 	});
 	UFlecsInteractionLibrary::DispatchInstantAction(
-		this, ActiveInteractionProfile->CompletionAction, ActiveInteractionTargetKey,
-		InventoryEntityId, ActiveInteractionProfile->HoldCompletionEventTag,
-		CachedInteractionPrompt, ContainerCallback);
-	UFlecsInteractionLibrary::ApplySingleUseIfNeeded(this, ActiveInteractionTargetKey);
+		this, Interact.ActiveProfile->CompletionAction, Interact.ActiveTargetKey,
+		InventoryEntityId, Interact.ActiveProfile->HoldCompletionEventTag,
+		Interact.CachedPrompt, ContainerCallback);
+	UFlecsInteractionLibrary::ApplySingleUseIfNeeded(this, Interact.ActiveTargetKey);
 
 	SetInteractionState(EInteractionState::Gameplay);
-	ActiveInteractionProfile = nullptr;
-	ActiveInteractionTargetKey = FSkeletonKey();
-	HoldAccumulator = 0.f;
-	bInteractKeyHeld = false;
+	Interact.ActiveProfile = nullptr;
+	Interact.ActiveTargetKey = FSkeletonKey();
+	Interact.HoldAccumulator = 0.f;
+	Interact.bInteractKeyHeld = false;
 }
 
 void AFlecsCharacter::ForceCancelInteraction()
 {
-	switch (InteractionState)
+	switch (Interact.State)
 	{
 	case EInteractionState::Gameplay:
 		return;
@@ -616,25 +602,25 @@ void AFlecsCharacter::ForceCancelInteraction()
 	case EInteractionState::Focusing:
 	case EInteractionState::Focused:
 	{
-		if (ActiveInteractionProfile && !ActiveInteractionProfile->bAllowDamageCancel)
+		if (Interact.ActiveProfile && !Interact.ActiveProfile->bAllowDamageCancel)
 			return;
 
 		CloseFocusPanel();
 
 		// For no-camera focus, just restore directly
-		if (ActiveInteractionProfile && !ActiveInteractionProfile->bMoveCamera)
+		if (Interact.ActiveProfile && !Interact.ActiveProfile->bMoveCamera)
 		{
 			RestoreCameraControl();
 			SetInteractionState(EInteractionState::Gameplay);
-			ActiveInteractionProfile = nullptr;
-			ActiveInteractionTargetKey = FSkeletonKey();
+			Interact.ActiveProfile = nullptr;
+			Interact.ActiveTargetKey = FSkeletonKey();
 			return;
 		}
 
 		// Fast camera exit
-		float FastDuration = ActiveInteractionProfile
-			? ActiveInteractionProfile->DamageCancelTransitionTime : 0.15f;
-		CurrentTransitionDuration = FastDuration;
+		float FastDuration = Interact.ActiveProfile
+			? Interact.ActiveProfile->DamageCancelTransitionTime : 0.15f;
+		Interact.CurrentTransitionDuration = FastDuration;
 		SetInteractionState(EInteractionState::Unfocusing);
 		break;
 	}
@@ -644,16 +630,13 @@ void AFlecsCharacter::ForceCancelInteraction()
 
 	case EInteractionState::Holding:
 	{
-		if (ActiveInteractionProfile && !ActiveInteractionProfile->bAllowDamageCancel)
+		if (Interact.ActiveProfile && !Interact.ActiveProfile->bAllowDamageCancel)
 			return;
 		CancelHoldInteraction();
 		break;
 	}
 	}
 }
-
-// Dispatch functions moved to UFlecsInteractionLibrary (FlecsInteractionLibrary.h/cpp).
-// Character now calls Library static methods with FOnContainerOpened callback for UI.
 
 // ═══════════════════════════════════════════════════════════════════════════
 // INIT / CLEANUP (called from BeginPlay / EndPlay)
@@ -672,17 +655,17 @@ void AFlecsCharacter::InitInteractionTrace()
 
 void AFlecsCharacter::CleanupInteraction()
 {
-	if (InteractionState != EInteractionState::Gameplay)
+	if (Interact.State != EInteractionState::Gameplay)
 	{
 		CloseFocusPanel();
 		RestoreCameraControl();
-		InteractionState = EInteractionState::Gameplay;
-		ActiveInteractionProfile = nullptr;
-		ActiveInteractionTargetKey = FSkeletonKey();
+		Interact.State = EInteractionState::Gameplay;
+		Interact.ActiveProfile = nullptr;
+		Interact.ActiveTargetKey = FSkeletonKey();
 	}
 
 	GetWorld()->GetTimerManager().ClearTimer(InteractionTraceTimerHandle);
-	CurrentInteractionTarget = FSkeletonKey();
+	Interact.CurrentTarget = FSkeletonKey();
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -776,19 +759,16 @@ void AFlecsCharacter::PerformInteractionTrace()
 
 					if (bHasAngleRestriction)
 					{
-						// Get entity rotation to transform local direction to world space
 						FQuat EntityRot = FQuat(FBarragePrimitive::OptimisticGetAbsoluteRotation(Prim));
 						FVector WorldAngleDir = EntityRot.RotateVector(AngleDir);
 
-						// Vector from camera to entity (matches FocusCameraPosition convention:
-						// camera sits behind the "front" face and looks toward it)
 						FVector EntityPos = FVector(FBarragePrimitive::GetPosition(Prim));
 						FVector ToEntity = (EntityPos - CameraLocation).GetSafeNormal();
 
 						float Dot = FVector::DotProduct(WorldAngleDir, ToEntity);
 						bAngleOk = (Dot >= AngleCosine);
 
-						UE_LOG(LogTemp, Warning, TEXT("AngleCheck: EntityPos=%s CamPos=%s ToEntity=%s WorldDir=%s Dot=%.3f Cos=%.3f Ok=%d"),
+						UE_LOG(LogTemp, Verbose, TEXT("AngleCheck: EntityPos=%s CamPos=%s ToEntity=%s WorldDir=%s Dot=%.3f Cos=%.3f Ok=%d"),
 							*EntityPos.ToString(), *CameraLocation.ToString(), *ToEntity.ToString(),
 							*WorldAngleDir.ToString(), Dot, AngleCosine, bAngleOk);
 					}
@@ -803,9 +783,9 @@ void AFlecsCharacter::PerformInteractionTrace()
 	}
 
 	// Fire event if target changed
-	if (NewTarget != CurrentInteractionTarget)
+	if (NewTarget != Interact.CurrentTarget)
 	{
-		CurrentInteractionTarget = NewTarget;
+		Interact.CurrentTarget = NewTarget;
 
 		// Cache interaction prompt (avoids cross-thread reads later)
 		if (NewTarget.IsValid())
@@ -816,24 +796,24 @@ void AFlecsCharacter::PerformInteractionTrace()
 				const FEntityDefinitionRef* DefRef = TargetEntity.try_get<FEntityDefinitionRef>();
 				if (DefRef && DefRef->Definition && DefRef->Definition->InteractionProfile)
 				{
-					CachedInteractionPrompt = DefRef->Definition->InteractionProfile->InteractionPrompt;
-					CachedInteractionType = DefRef->Definition->InteractionProfile->InteractionType;
-					CachedHoldDuration = DefRef->Definition->InteractionProfile->HoldDuration;
+					Interact.CachedPrompt = DefRef->Definition->InteractionProfile->InteractionPrompt;
+					Interact.CachedType = DefRef->Definition->InteractionProfile->InteractionType;
+					Interact.CachedHoldDuration = DefRef->Definition->InteractionProfile->HoldDuration;
 				}
 				else
 				{
-					CachedInteractionPrompt = NSLOCTEXT("Interaction", "Fallback", "Press E");
-					CachedInteractionType = EInteractionType::Instant;
-					CachedHoldDuration = 0.f;
+					Interact.CachedPrompt = NSLOCTEXT("Interaction", "Fallback", "Press E");
+					Interact.CachedType = EInteractionType::Instant;
+					Interact.CachedHoldDuration = 0.f;
 				}
 			}
 			UE_LOG(LogTemp, Log, TEXT("Interaction: Target acquired Key=%llu"), static_cast<uint64>(NewTarget));
 		}
 		else
 		{
-			CachedInteractionPrompt = FText::GetEmpty();
-			CachedInteractionType = EInteractionType::Instant;
-			CachedHoldDuration = 0.f;
+			Interact.CachedPrompt = FText::GetEmpty();
+			Interact.CachedType = EInteractionType::Instant;
+			Interact.CachedHoldDuration = 0.f;
 
 			// Auto-close loot panel when target lost (walked away)
 			if (IsLootOpen())
@@ -850,8 +830,8 @@ void AFlecsCharacter::PerformInteractionTrace()
 			FUIInteractionMessage InterMsg;
 			InterMsg.bHasTarget = NewTarget.IsValid();
 			InterMsg.TargetKey = NewTarget;
-			InterMsg.InteractionType = static_cast<uint8>(CachedInteractionType);
-			InterMsg.HoldDuration = CachedHoldDuration;
+			InterMsg.InteractionType = static_cast<uint8>(Interact.CachedType);
+			InterMsg.HoldDuration = Interact.CachedHoldDuration;
 			if (NewTarget.IsValid())
 			{
 				flecs::entity E = FlecsSubsystem->GetEntityForBarrageKey(NewTarget);
@@ -862,9 +842,7 @@ void AFlecsCharacter::PerformInteractionTrace()
 	}
 }
 
-// TryInteract() removed — replaced by HandleInteractionInput() above.
-
 FText AFlecsCharacter::GetInteractionPrompt() const
 {
-	return CachedInteractionPrompt;
+	return Interact.CachedPrompt;
 }

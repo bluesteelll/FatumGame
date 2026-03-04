@@ -306,6 +306,13 @@ void UFlecsArtillerySubsystem::SetupFragmentationSystems()
 				{
 					ObjectPosition = FVector(FBarragePrimitive::GetPosition(TargetPrim));
 					ObjectRotation = FQuat(FBarragePrimitive::OptimisticGetAbsoluteRotation(TargetPrim));
+
+					// Immediately disable intact body collision — can't wait for
+					// DeadEntityCleanupSystem because deferred add<FTagDead>() isn't
+					// visible to it until next tick. Without this, fragment bodies
+					// (MOVING) collide with the intact body (NON_MOVING for static
+					// objects) on the next StepWorld → explosion.
+					CachedBarrageDispatch->SetBodyObjectLayer(TargetPrim->KeyIntoBarrage, Layers::DEBRIS);
 				}
 			}
 			FTransform ObjectTransform(ObjectRotation, ObjectPosition);
@@ -406,6 +413,7 @@ void UFlecsArtillerySubsystem::SetupFragmentationSystems()
 					FVector3d::ZeroVector,
 					FMassByCategory::MostEnemies
 				);
+				BoxParams.AllowedDOFs = 0x3F; // All DOFs — bypass MOVING layer RotationY-only restriction
 
 				FBLet FragPrim = CachedBarrageDispatch->CreatePrimitive(
 					BoxParams, FragKey, Layers::MOVING,

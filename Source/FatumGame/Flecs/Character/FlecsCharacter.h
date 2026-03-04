@@ -306,11 +306,11 @@ public:
 
 	/** Get the BarrageKey of the current interaction target */
 	UFUNCTION(BlueprintPure, Category = "Flecs|Interaction")
-	FSkeletonKey GetInteractionTarget() const { return CurrentInteractionTarget; }
+	FSkeletonKey GetInteractionTarget() const { return Interact.CurrentTarget; }
 
 	/** Is there a valid interaction target? */
 	UFUNCTION(BlueprintPure, Category = "Flecs|Interaction")
-	bool HasInteractionTarget() const { return CurrentInteractionTarget.IsValid(); }
+	bool HasInteractionTarget() const { return Interact.CurrentTarget.IsValid(); }
 
 	/** Get prompt text for current interaction target */
 	UFUNCTION(BlueprintPure, Category = "Flecs|Interaction")
@@ -391,8 +391,8 @@ public:
 	int64 GetCharacterEntityId() const;
 
 	/** Set the feet-to-actor Z offset (used by mantle to force crouch offset). */
-	void SetFeetToActorOffset(float Value) { FeetToActorOffset = Value; }
-	float GetFeetToActorOffset() const { return FeetToActorOffset; }
+	void SetFeetToActorOffset(float Value) { PosState.FeetToActorOffset = Value; }
+	float GetFeetToActorOffset() const { return PosState.FeetToActorOffset; }
 
 	/** Get cached Barrage body (read-only). */
 	TSharedPtr<FBarragePrimitive> GetCachedBarrageBody() const { return CachedBarrageBody; }
@@ -540,24 +540,14 @@ private:
 	FTimeDilationStack DilationStack;
 	double LastRealTickTime = 0.0; // wall-clock time for undilated DT in dilation stack
 
-	// Feet-to-actor offset: Z distance from Barrage feet to UE capsule center.
-	// On ground: = CapsuleHalfHeight (standard).
-	// In air: FROZEN when posture changes — keeps actor Z stable, capsule shrinks from bottom.
-	float FeetToActorOffset = 0.f;
-
 	/** Cached Barrage body — set once in BeginPlay EnqueueCommand (sim thread).
 	 *  Read by Tick() (game thread) for direct Jolt position reads. */
 	TSharedPtr<FBarragePrimitive> CachedBarrageBody;
 
 	// ─────────────────────────────────────────────────────────
 	// POSITION INTERPOLATION (game thread only, updated in Tick)
-	// Same pattern as ISM FEntityTransformState + VInterpTo smoothing.
 	// ─────────────────────────────────────────────────────────
-	FVector PrevBarragePos = FVector::ZeroVector;
-	FVector CurrBarragePos = FVector::ZeroVector;
-	FVector SmoothedBarragePos = FVector::ZeroVector;
-	uint64 LastBarrageSimTick = 0;
-	bool bBarrageJustSpawned = true;
+	FCharacterPositionState PosState;
 
 	/** Read Jolt position, interpolate, call ApplyBarrageSync. Called from Tick(). */
 	void ReadAndApplyBarragePosition(float DeltaTime);
@@ -567,77 +557,60 @@ private:
 
 	friend class UFlecsArtillerySubsystem;
 
-	/**
-	 * Pending weapon equip data (sim thread → game thread via atomics).
-	 * Processed in Tick() to avoid modifying components during post-tick update phase.
-	 * AsyncTask(GameThread) can fire during render phase → assert !bPostTickComponentUpdate.
-	 */
-	struct FPendingWeaponEquip
-	{
-		std::atomic<int64> WeaponId{0};
-		std::atomic<bool> bPending{false};
-		USkeletalMesh* Mesh = nullptr;       // Set on game thread before EnqueueCommand
-		FTransform AttachOffset;              // Set on game thread before EnqueueCommand
-	};
+	// ─────────────────────────────────────────────────────────
+	// PENDING WEAPON EQUIP (sim→game via atomics, processed in Tick)
+	// ─────────────────────────────────────────────────────────
 	FPendingWeaponEquip PendingWeaponEquip;
 
 	/** Check for health changes from Flecs and fire events */
 	void CheckHealthChanges();
 
 	// ─────────────────────────────────────────────────────────
-	// INTERACTION DETECTION (private)
+	// INTERACTION (detection + state machine)
+	// Grouped into FCharacterInteractionState for header clarity.
+	// Implementation in FlecsCharacter_Interaction.cpp
 	// ─────────────────────────────────────────────────────────
 
-	/** Current interaction target (SkeletonKey of a Barrage body) */
-	FSkeletonKey CurrentInteractionTarget;
+	/** All interaction state: detection, state machine, focus camera, hold progress. */
+	struct FCharacterInteractionState
+	{
+		// State machine
+		EInteractionState State = EInteractionState::Gameplay;
+		const UFlecsInteractionProfile* ActiveProfile = nullptr;
+		FSkeletonKey ActiveTargetKey;
 
-	/** Cached prompt text for current target (avoids cross-thread reads) */
-	FText CachedInteractionPrompt;
+		// Detection (10Hz trace results)
+		FSkeletonKey CurrentTarget;
+		FText CachedPrompt;
+		EInteractionType CachedType = EInteractionType::Instant;
+		float CachedHoldDuration = 0.f;
 
-	/** Cached interaction type for current target */
-	EInteractionType CachedInteractionType = EInteractionType::Instant;
+		// Focus camera transition
+		FTransform SavedCameraTransform = FTransform::Identity;
+		float SavedCameraFOV = 90.f;
+		FTransform FocusCameraTarget = FTransform::Identity;
+		float FocusTargetFOV = 0.f;
+		float FocusLerpAlpha = 0.f;
+		float CurrentTransitionDuration = 0.4f;
 
-	/** Cached hold duration (for UI preview) */
-	float CachedHoldDuration = 0.f;
+		// Hold state
+		float HoldAccumulator = 0.f;
+		float HoldRequiredDuration = 1.f;
+		float HoldTargetLostTime = 0.f;
+		bool bHoldCanCancel = true;
+		bool bInteractKeyHeld = false;
+	};
+	FCharacterInteractionState Interact;
+
+	/** Focus panel widget instance (UPROPERTY for GC, can't live in plain struct) */
+	UPROPERTY()
+	TObjectPtr<UFlecsUIPanel> ActiveFocusPanel;
 
 	/** Timer handle for 10 Hz interaction raycast */
 	FTimerHandle InteractionTraceTimerHandle;
 
 	/** Perform periodic raycast to detect interactable entities */
 	void PerformInteractionTrace();
-
-	// ─────────────────────────────────────────────────────────
-	// INTERACTION STATE MACHINE (private)
-	// Implementation in FlecsCharacter_Interaction.cpp
-	// ─────────────────────────────────────────────────────────
-
-	/** Current interaction state */
-	EInteractionState InteractionState = EInteractionState::Gameplay;
-
-	/** Cached interaction profile for active interaction (valid while state != Gameplay) */
-	const UFlecsInteractionProfile* ActiveInteractionProfile = nullptr;
-
-	/** Cached SkeletonKey of the entity being interacted with */
-	FSkeletonKey ActiveInteractionTargetKey;
-
-	// Focus camera state
-	FTransform SavedCameraTransform = FTransform::Identity;
-	float SavedCameraFOV = 90.f;
-	FTransform FocusCameraTarget = FTransform::Identity;
-	float FocusTargetFOV = 0.f;
-	float FocusLerpAlpha = 0.f;
-	float CurrentTransitionDuration = 0.4f;
-
-	/** Focus panel widget instance (created per-interaction, destroyed on exit) */
-	UPROPERTY()
-	TObjectPtr<UFlecsUIPanel> ActiveFocusPanel;
-
-	// Hold state
-	float HoldAccumulator = 0.f;
-	float HoldRequiredDuration = 1.f;
-	float HoldTargetLostTime = 0.f; // Grace period for 10Hz trace flicker
-	bool bHoldCanCancel = true;
-	bool bInteractKeyHeld = false;
 
 	// State machine methods (implemented in FlecsCharacter_Interaction.cpp)
 	void HandleInteractionInput();
@@ -654,10 +627,21 @@ private:
 	void CancelHoldInteraction();
 	void CompleteHoldInteraction();
 	void ForceCancelInteraction();
-	// Dispatch functions moved to UFlecsInteractionLibrary (static Blueprint library)
 	void SetInteractionState(EInteractionState NewState);
 	const UFlecsInteractionProfile* ResolveInteractionProfile(FSkeletonKey TargetKey) const;
 	bool GetEntityWorldPosition(FSkeletonKey EntityKey, FVector& OutPosition) const;
 	void OpenFocusPanel();
 	void CloseFocusPanel();
+
+	// ─────────────────────────────────────────────────────────
+	// TICK HELPERS (implemented in FlecsCharacter.cpp)
+	// Extracted from Tick() for readability. Execution order matters.
+	// ─────────────────────────────────────────────────────────
+	void WriteCameraAtomics();
+	void ConsumeTeleportSnap();
+	void TickTimeDilation(float DeltaTime);
+	void TickPostureAndResnap(float DeltaTime);
+	void UpdateCamera();
+	void ProcessPendingWeaponEquip();
+	void WriteAimDirection();
 };
