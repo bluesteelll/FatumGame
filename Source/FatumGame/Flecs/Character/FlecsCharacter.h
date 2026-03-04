@@ -18,6 +18,7 @@ class UFlecsInteractionProfile;
 class UFlecsUIPanel;
 class UFatumMovementComponent;
 class UFatumInputConfig;
+class UFlecsAbilityLoadout;
 enum class ECharacterPosture : uint8;
 class UInputMappingContext;
 class USpringArmComponent;
@@ -157,6 +158,14 @@ public:
 	/** Cached typed pointer to our custom CMC (set MovementProfile on this component) */
 	UPROPERTY(BlueprintReadOnly, Category = "Flecs|Movement")
 	TObjectPtr<UFatumMovementComponent> FatumMovement;
+
+	// ═══════════════════════════════════════════════════════════════
+	// ABILITIES
+	// ═══════════════════════════════════════════════════════════════
+
+	/** Ability loadout — defines which abilities the character has. REQUIRED. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flecs|Abilities")
+	TObjectPtr<UFlecsAbilityLoadout> AbilityLoadout;
 
 	// ═══════════════════════════════════════════════════════════════
 	// ENTITY SPAWNING (TEST)
@@ -482,6 +491,9 @@ protected:
 
 	/** Ability 1 released (blink release) */
 	void OnAbility1Completed(const FInputActionValue& Value);
+
+	/** Ability 2 pressed (kinetic blast) */
+	void OnAbility2Started(const FInputActionValue& Value);
 
 	/** Called by UFatumMovementComponent::OnPostureChanged delegate */
 	void HandlePostureChanged(ECharacterPosture NewPosture);

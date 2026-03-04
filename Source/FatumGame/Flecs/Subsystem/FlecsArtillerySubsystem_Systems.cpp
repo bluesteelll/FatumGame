@@ -34,6 +34,9 @@
 #include "PhysicsFilters/FastObjectLayerFilters.h"
 #include "FlecsDoorComponents.h"
 #include "FlecsMovementComponents.h"
+#include "FlecsAbilityTypes.h"
+#include "FlecsAbilityStates.h"
+#include "AbilityTickFunctions.h"
 
 // ═══════════════════════════════════════════════════════════════
 // COMPONENT REGISTRATION
@@ -116,11 +119,12 @@ void UFlecsArtillerySubsystem::RegisterFlecsComponents()
 	// ─────────────────────────────────────────────────────────
 	World.component<FMovementState>();
 	World.component<FCharacterMoveState>();
-	World.component<FSlideInstance>();
-	World.component<FMantleInstance>();
 	World.component<FMovementStatic>();
 	World.component<FCharacterSimState>();
-	World.component<FBlinkInstance>();
+	World.component<FAbilitySystem>();
+	World.component<FSlideState>();
+	World.component<FBlinkState>();
+	World.component<FMantleState>();
 
 	// ─────────────────────────────────────────────────────────
 	// COLLISION PAIR SYSTEM COMPONENTS
@@ -279,6 +283,7 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 	// 1. COMPONENT REGISTRATION (must be first)
 	// ─────────────────────────────────────────────────────────
 	RegisterFlecsComponents();
+	InitAbilityTickFunctions();
 
 	// ═══════════════════════════════════════════════════════════════
 	// OBSERVERS (Event-driven processing)

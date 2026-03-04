@@ -59,6 +59,11 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics", meta = (ClampMin = "0.0"))
 	float ImpulseMultiplier = 0.15f;
 
+	/** Minimum impulse magnitude (cm/s) to trigger fragmentation from non-contact forces
+	 *  (abilities, explosions). 0 = any impulse fragments. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics", meta = (ClampMin = "0.0"))
+	float FragmentationForceThreshold = 2000.f;
+
 	/** Mass while fragments are held by constraints (kg).
 	 *  High value = minimal jitter from projectile impacts while structure is intact.
 	 *  When last constraint breaks, mass is restored to FragmentMassKg. */

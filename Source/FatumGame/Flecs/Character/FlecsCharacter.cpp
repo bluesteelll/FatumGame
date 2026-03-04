@@ -40,6 +40,10 @@
 #include "Engine/Engine.h"
 #include "Kismet/GameplayStatics.h"
 #include "HAL/PlatformTime.h"
+#include "FlecsAbilityTypes.h"
+#include "FlecsAbilityStates.h"
+#include "FlecsAbilityDefinition.h"
+#include "FlecsAbilityLoadout.h"
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONSTRUCTOR
@@ -175,10 +179,39 @@ void AFlecsCharacter::InitECSRegistration()
 		CapturedGravityScale = CapturedMS.GravityScale;
 	}
 
+	// Capture ability loadout → FAbilitySystem (game thread, can access UObjects).
+	FAbilitySystem CapturedAbilSys;
+	checkf(AbilityLoadout, TEXT("AFlecsCharacter: AbilityLoadout (Flecs|Abilities) must be set on %s"), *GetName());
+	{
+		int32 Count = FMath::Min(AbilityLoadout->Abilities.Num(), MAX_ABILITY_SLOTS);
+		for (int32 i = 0; i < Count; ++i)
+		{
+			const UFlecsAbilityDefinition* Def = AbilityLoadout->Abilities[i];
+			if (!Def || Def->AbilityType == EAbilityType::None) continue;
+
+			FAbilitySlot& Slot = CapturedAbilSys.Slots[CapturedAbilSys.SlotCount];
+			Slot.TypeId = static_cast<EAbilityTypeId>(Def->AbilityType);
+			Slot.MaxCharges = static_cast<int8>(Def->MaxCharges);
+			Slot.Charges = static_cast<int8>(Def->StartingCharges); // -1 = infinite
+			Slot.RechargeRate = Def->RechargeRate;
+			Slot.CooldownDuration = Def->CooldownDuration;
+			Slot.bAlwaysTick = Def->bAlwaysTick;
+			Slot.bExclusive = Def->bExclusive;
+
+			// Copy per-ability-type config into slot buffer
+			if (Def->AbilityType == EAbilityType::KineticBlast)
+			{
+				FMemory::Memcpy(Slot.ConfigData, &Def->KineticBlastConfig, sizeof(FKineticBlastConfig));
+			}
+
+			CapturedAbilSys.SlotCount++;
+		}
+	}
+
 	TWeakObjectPtr<AFlecsCharacter> WeakSelf(this);
 	FlecsSubsystem->EnqueueCommand([FlecsSubsystem, Key, CapturedMaxHealth, CapturedInitialHealth,
 		CapturedArmor, SpawnLocation, CapsuleRadius, CapsuleHalfHeight, WeakSelf,
-		CapturedGravityScale, CapturedMS]()
+		CapturedGravityScale, CapturedMS, CapturedAbilSys]()
 	{
 		flecs::world* FlecsWorld = FlecsSubsystem->GetFlecsWorld();
 		if (!FlecsWorld) return;
@@ -247,8 +280,14 @@ void AFlecsCharacter::InitECSRegistration()
 		FCharacterSimState SimState;
 		Entity.set<FCharacterSimState>(SimState);
 
-		FBlinkInstance BlinkInst;
-		Entity.set<FBlinkInstance>(BlinkInst);
+		// Ability system (generic slots + per-ability state components)
+		Entity.set<FAbilitySystem>(CapturedAbilSys);
+		FSlideState InitSlide;
+		Entity.set<FSlideState>(InitSlide);
+		FBlinkState InitBlink;
+		Entity.set<FBlinkState>(InitBlink);
+		FMantleState InitMantle;
+		Entity.set<FMantleState>(InitMantle);
 
 		// Register in sim→game state cache with initial health
 		FlecsSubsystem->GetSimStateCache().Register(static_cast<int64>(Entity.id()));
@@ -555,6 +594,7 @@ void AFlecsCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 	FatumInput->BindNativeAction(InputConfig, TAG_Input_Prone,     ETriggerEvent::Completed, this, &AFlecsCharacter::OnProneCompleted);
 	FatumInput->BindNativeAction(InputConfig, TAG_Input_Ability1,  ETriggerEvent::Started,   this, &AFlecsCharacter::OnAbility1Started);
 	FatumInput->BindNativeAction(InputConfig, TAG_Input_Ability1,  ETriggerEvent::Completed, this, &AFlecsCharacter::OnAbility1Completed);
+	FatumInput->BindNativeAction(InputConfig, TAG_Input_Ability2,  ETriggerEvent::Started,   this, &AFlecsCharacter::OnAbility2Started);
 }
 
 UInputComponent* AFlecsCharacter::CreatePlayerInputComponent()
@@ -654,6 +694,11 @@ void AFlecsCharacter::OnAbility1Started(const FInputActionValue& Value)
 void AFlecsCharacter::OnAbility1Completed(const FInputActionValue& Value)
 {
 	if (InputAtomics) InputAtomics->BlinkHeld.Write(false);
+}
+
+void AFlecsCharacter::OnAbility2Started(const FInputActionValue& Value)
+{
+	if (InputAtomics) InputAtomics->Ability2Pressed.Fire();
 }
 
 void AFlecsCharacter::StartFire(const FInputActionValue& Value)

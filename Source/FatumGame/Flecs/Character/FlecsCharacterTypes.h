@@ -55,6 +55,7 @@ struct FCharacterInputAtomics
 	FAtomicHeld    CrouchHeld;     // held: game writes true on press, false on release
 	FAtomicHeld    BlinkHeld;      // held: game writes true on press, false on release
 	FAtomicHeld    Sprinting;      // held: game writes true on press, false on release
+	FAtomicOneShot Ability2Pressed;// one-shot: kinetic blast activation
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
