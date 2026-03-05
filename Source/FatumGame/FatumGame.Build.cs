@@ -11,14 +11,38 @@ public class FatumGame : ModuleRules
 		PublicIncludePaths.AddRange(
 			new string[] {
 				"FatumGame",
-				"FatumGame/Flecs/Subsystem",
-				"FatumGame/Flecs/Components",
-				"FatumGame/Flecs/Definitions",
-				"FatumGame/Flecs/Spawner",
-				"FatumGame/Flecs/Character",
-				"FatumGame/Flecs/Input",
-				"FatumGame/Flecs/Library",
-				"FatumGame/Flecs/UI"
+				// Domain-based structure
+				"FatumGame/Core",
+				"FatumGame/Core/Components",
+				"FatumGame/Definitions",
+				"FatumGame/Weapon",
+				"FatumGame/Weapon/Components",
+				"FatumGame/Weapon/Systems",
+				"FatumGame/Weapon/Library",
+				"FatumGame/Movement",
+				"FatumGame/Movement/Components",
+				"FatumGame/Character",
+				"FatumGame/Abilities",
+				"FatumGame/Abilities/Components",
+				"FatumGame/Destructible",
+				"FatumGame/Destructible/Components",
+				"FatumGame/Destructible/Systems",
+				"FatumGame/Destructible/Library",
+				"FatumGame/Door",
+				"FatumGame/Door/Components",
+				"FatumGame/Door/Systems",
+				"FatumGame/Item",
+				"FatumGame/Item/Components",
+				"FatumGame/Item/Systems",
+				"FatumGame/Item/Library",
+				"FatumGame/Interaction",
+				"FatumGame/Interaction/Library",
+				"FatumGame/Spawning",
+				"FatumGame/Spawning/Library",
+				"FatumGame/Rendering",
+				"FatumGame/UI",
+				"FatumGame/Input",
+				"FatumGame/Utils"
 			}
 		);
 
