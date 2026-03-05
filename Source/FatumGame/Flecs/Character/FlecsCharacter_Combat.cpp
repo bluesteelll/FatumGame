@@ -18,6 +18,7 @@
 #include "FlecsMessageSubsystem.h"
 #include "FlecsUIMessages.h"
 #include "FlecsHUDWidget.h"
+#include "FSimStateCache.h"
 #include "FBarragePrimitive.h"
 #include "Camera/CameraComponent.h"
 #include "Components/SkeletalMeshComponent.h"
@@ -99,6 +100,67 @@ void AFlecsCharacter::HandleDeath()
 {
 	UE_LOG(LogTemp, Warning, TEXT("FlecsCharacter: %s died!"), *GetName());
 	OnDeath();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// RESOURCE UI (poll SimStateCache for resource changes)
+// ═══════════════════════════════════════════════════════════════════════════
+
+void AFlecsCharacter::UpdateResourceUI()
+{
+	if (CachedResourcePoolCount == 0 || !HUDWidget) return;
+
+	UFlecsArtillerySubsystem* FlecsSubsystem = GetWorld()->GetSubsystem<UFlecsArtillerySubsystem>();
+	if (!FlecsSubsystem) return;
+
+	int64 EntityId = GetCharacterEntityId();
+	if (EntityId == 0) return;
+
+	FResourceSnapshot Snap;
+	if (!FlecsSubsystem->GetSimStateCache().ReadResources(EntityId, Snap)) return;
+
+	ensureMsgf(Snap.PoolCount == CachedResourcePoolCount,
+		TEXT("UpdateResourceUI: Snap.PoolCount=%d != CachedResourcePoolCount=%d"),
+		Snap.PoolCount, CachedResourcePoolCount);
+
+	// Detect changes (threshold < one quantization step of 1/255 ≈ 0.00392)
+	bool bChanged = false;
+	for (int32 p = 0; p < CachedResourcePoolCount; ++p)
+	{
+		if (FMath::Abs(Snap.Ratios[p] - CachedResourceRatios[p]) > 0.003f)
+		{
+			bChanged = true;
+			break;
+		}
+	}
+
+	if (!bChanged) return;
+
+	// Update cache from snapshot (all pools at once for consistency)
+	for (int32 p = 0; p < CachedResourcePoolCount; ++p)
+		CachedResourceRatios[p] = Snap.Ratios[p];
+
+	// Build array for Blueprint directly from snapshot
+	TArray<FResourceBarData> Resources;
+	Resources.Reserve(CachedResourcePoolCount);
+	for (int32 p = 0; p < CachedResourcePoolCount; ++p)
+	{
+		FResourceBarData Entry;
+		Entry.ResourceType = ResourcePoolTypes[p];
+		Entry.Ratio = Snap.Ratios[p];
+		Entry.Max = ResourcePoolMaxValues[p];
+		Entry.Current = FMath::RoundToFloat(Entry.Ratio * Entry.Max);
+		Resources.Add(Entry);
+	}
+
+	HUDWidget->OnResourcesUpdated(Resources);
+
+	// Fire per-type convenience events
+	for (const FResourceBarData& R : Resources)
+	{
+		if (R.ResourceType == 1) // Mana
+			HUDWidget->OnManaChanged(R.Current, R.Max, R.Ratio);
+	}
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

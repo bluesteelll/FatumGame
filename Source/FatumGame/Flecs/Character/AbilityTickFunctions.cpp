@@ -302,10 +302,13 @@ EAbilityTickResult TickBlink(FAbilityTickContext& Ctx, FAbilitySlot& Slot)
 
 		if (bReleased)
 		{
-			// Quick-tap: instant blink
+			// Quick-tap: instant blink — check resource cost before teleport
 			FVector TargetFeet;
-			if (ComputeBlinkTarget(MS, Ctx.Barrage, Ctx.CharacterKey, Ctx.Input, TargetFeet))
+			FResourcePools* Pools = Slot.HasActivationCosts() ? Ctx.Entity.try_get_mut<FResourcePools>() : nullptr;
+			bool bCanAfford = !Slot.HasActivationCosts() || (Pools && CheckActivationCosts(*Pools, Slot));
+			if (bCanAfford && ComputeBlinkTarget(MS, Ctx.Barrage, Ctx.CharacterKey, Ctx.Input, TargetFeet))
 			{
+				if (Pools && Slot.HasActivationCosts()) CommitActivationCosts(*Pools, Slot);
 				JPH::Vec3 JoltPos = CoordinateUtils::ToJoltCoordinates(FVector3d(TargetFeet));
 				Ctx.FBChar->mCharacter->SetPosition(JoltPos);
 				Ctx.FBChar->mCharacter->SetLinearVelocity(JPH::Vec3::sZero());
@@ -344,15 +347,21 @@ EAbilityTickResult TickBlink(FAbilityTickContext& Ctx, FAbilitySlot& Slot)
 		{
 			if (Blink->bTargetValid)
 			{
-				FVector TargetFeet(Blink->TargetX, Blink->TargetY, Blink->TargetZ);
-				JPH::Vec3 JoltPos = CoordinateUtils::ToJoltCoordinates(FVector3d(TargetFeet));
-				Ctx.FBChar->mCharacter->SetPosition(JoltPos);
-				Ctx.FBChar->mCharacter->SetLinearVelocity(JPH::Vec3::sZero());
-				Ctx.FBChar->mLocomotionUpdate = JPH::Vec3::sZero();
-				if (Slot.Charges > 0) Slot.Charges--; // don't decrement infinite (-1)
-				Ctx.Bridge->StateAtomics->Teleported.Fire();
-				CancelSlideAbility(Ctx.Entity);
-				Blink->bTeleportedThisFrame = true;
+				FResourcePools* Pools = Slot.HasActivationCosts() ? Ctx.Entity.try_get_mut<FResourcePools>() : nullptr;
+				bool bCanAfford = !Slot.HasActivationCosts() || (Pools && CheckActivationCosts(*Pools, Slot));
+				if (bCanAfford)
+				{
+					if (Pools && Slot.HasActivationCosts()) CommitActivationCosts(*Pools, Slot);
+					FVector TargetFeet(Blink->TargetX, Blink->TargetY, Blink->TargetZ);
+					JPH::Vec3 JoltPos = CoordinateUtils::ToJoltCoordinates(FVector3d(TargetFeet));
+					Ctx.FBChar->mCharacter->SetPosition(JoltPos);
+					Ctx.FBChar->mCharacter->SetLinearVelocity(JPH::Vec3::sZero());
+					Ctx.FBChar->mLocomotionUpdate = JPH::Vec3::sZero();
+					if (Slot.Charges > 0) Slot.Charges--; // don't decrement infinite (-1)
+					Ctx.Bridge->StateAtomics->Teleported.Fire();
+					CancelSlideAbility(Ctx.Entity);
+					Blink->bTeleportedThisFrame = true;
+				}
 			}
 			Blink->State = 0;
 			Slot.Phase = 0; // Return to idle

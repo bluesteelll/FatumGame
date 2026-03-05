@@ -7,6 +7,7 @@
 #include "CoreMinimal.h"
 #include "Engine/DataAsset.h"
 #include "FlecsAbilityTypes.h"
+#include "FlecsResourcePoolProfile.h" // EResourceType, FAbilityCostDefinition
 #include "FlecsAbilityDefinition.generated.h"
 
 // Blueprint-exposed mirror of EAbilityTypeId. Values MUST match exactly.
@@ -92,6 +93,20 @@ public:
 	/** When active, only this ability ticks (suppress all others). Use for Mantle. */
 	UPROPERTY(EditAnywhere, Category = "Behavior")
 	bool bExclusive = false;
+
+	// ── Resource Costs ──
+
+	/** One-time costs consumed on activation. Max 2 entries. */
+	UPROPERTY(EditAnywhere, Category = "Resource Costs", meta = (TitleProperty = "ResourceType"))
+	TArray<FAbilityCostDefinition> ActivationCosts;
+
+	/** Per-second costs while ability is active (channeled abilities). Max 2 entries. */
+	UPROPERTY(EditAnywhere, Category = "Resource Costs", meta = (TitleProperty = "ResourceType"))
+	TArray<FAbilityCostDefinition> SustainCosts;
+
+	/** Fraction (0.0-1.0) of activation costs refunded on voluntary deactivation (End). */
+	UPROPERTY(EditAnywhere, Category = "Resource Costs", meta = (ClampMin = "0", ClampMax = "1"))
+	float DeactivationRefund = 0.f;
 
 	// ── Per-ability-type configs (conditionally visible) ──
 

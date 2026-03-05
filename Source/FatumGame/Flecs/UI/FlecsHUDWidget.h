@@ -8,16 +8,9 @@
 #include "CoreMinimal.h"
 #include "Blueprint/UserWidget.h"
 #include "FlecsMessageSubsystem.h"
+#include "FlecsUIMessages.h"
 #include "SkeletonTypes.h"
 #include "FlecsHUDWidget.generated.h"
-
-struct FUIHealthMessage;
-struct FUIDeathMessage;
-struct FUIAmmoMessage;
-struct FUIReloadMessage;
-struct FUIInteractionMessage;
-struct FUIHoldProgressMessage;
-struct FUIInteractionStateMessage;
 
 UCLASS(Abstract, Blueprintable)
 class FATUMGAME_API UFlecsHUDWidget : public UUserWidget
@@ -64,6 +57,15 @@ public:
 	/** Interaction state changed (EInteractionState cast). */
 	UFUNCTION(BlueprintImplementableEvent, Category = "HUD")
 	void OnInteractionStateChanged(uint8 State);
+
+	/** Resource pools updated. Called from game thread poll (every tick with changes).
+	 *  ResourceType: 1=Mana, 2=Stamina, 3=Energy, 4=Rage */
+	UFUNCTION(BlueprintImplementableEvent, Category = "HUD")
+	void OnResourcesUpdated(const TArray<FResourceBarData>& Resources);
+
+	/** Mana changed. Convenience event fired per-tick when mana pool value changes. */
+	UFUNCTION(BlueprintImplementableEvent, Category = "HUD")
+	void OnManaChanged(float Current, float Max, float Percent);
 
 protected:
 	virtual void NativeConstruct() override;

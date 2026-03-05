@@ -8,6 +8,7 @@ FSimStateCache::FSimStateCache()
 		EntityIds[i].store(0, std::memory_order_relaxed);
 		HealthPacked[i].store(0, std::memory_order_relaxed);
 		WeaponPacked[i].store(0, std::memory_order_relaxed);
+		ResourcePacked[i].store(0, std::memory_order_relaxed);
 	}
 }
 
@@ -30,6 +31,7 @@ int32 FSimStateCache::Register(int64 EntityId)
 		{
 			HealthPacked[i].store(0, std::memory_order_relaxed);
 			WeaponPacked[i].store(0, std::memory_order_relaxed);
+			ResourcePacked[i].store(0, std::memory_order_relaxed);
 			// Publish EntityId LAST (after data is zeroed) — readers use EntityId as publication flag
 			EntityIds[i].store(EntityId, std::memory_order_release);
 			return i;
@@ -49,6 +51,7 @@ void FSimStateCache::Unregister(int64 EntityId)
 		// Clear data FIRST, then clear EntityId — EntityId is the publication flag
 		HealthPacked[Slot].store(0, std::memory_order_relaxed);
 		WeaponPacked[Slot].store(0, std::memory_order_relaxed);
+		ResourcePacked[Slot].store(0, std::memory_order_relaxed);
 		EntityIds[Slot].store(0, std::memory_order_release);
 	}
 }
@@ -72,6 +75,15 @@ void FSimStateCache::WriteWeapon(int64 EntityId, int32 Ammo, int32 MagSize, int3
 	if (Slot != -1)
 	{
 		WeaponPacked[Slot].store(SimStatePacking::PackWeapon(Ammo, MagSize, Reserve, bReloading), std::memory_order_release);
+	}
+}
+
+void FSimStateCache::WriteResources(int64 EntityId, const float Ratios[4], uint8 PoolCount)
+{
+	int32 Slot = FindSlot(EntityId);
+	if (Slot != -1)
+	{
+		ResourcePacked[Slot].store(SimStatePacking::PackResources(Ratios, PoolCount), std::memory_order_release);
 	}
 }
 
@@ -99,6 +111,17 @@ bool FSimStateCache::ReadWeapon(int64 EntityId, FWeaponSnapshot& Out) const
 	Out = SimStatePacking::UnpackWeapon(WeaponPacked[Slot].load(std::memory_order_acquire));
 
 	// Re-validate: slot still belongs to this entity (prevents ABA if Unregister+Register raced)
+	if (EntityIds[Slot].load(std::memory_order_acquire) != EntityId) return false;
+	return true;
+}
+
+bool FSimStateCache::ReadResources(int64 EntityId, FResourceSnapshot& Out) const
+{
+	int32 Slot = FindSlot(EntityId);
+	if (Slot == -1) return false;
+
+	Out = SimStatePacking::UnpackResources(ResourcePacked[Slot].load(std::memory_order_acquire));
+
 	if (EntityIds[Slot].load(std::memory_order_acquire) != EntityId) return false;
 	return true;
 }

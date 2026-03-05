@@ -23,6 +23,7 @@
 #include "AbilityTickFunctions.h"
 #include "FlecsAbilityTypes.h"
 #include "FlecsAbilityStates.h"
+#include "FlecsResourceTypes.h"
 
 // ═══════════════════════════════════════════════════════════════
 // CHARACTER PHYSICS BRIDGE
@@ -114,6 +115,14 @@ static bool TryActivateMantle(flecs::entity Entity, FBCharacterBase* FBChar,
 	int32 MantleIdx = AbilSys->FindSlotByType(EAbilityTypeId::Mantle);
 	if (MantleIdx == INDEX_NONE || AbilSys->IsSlotActive(MantleIdx)) return false;
 
+	// Resource cost check (before expensive ledge detection raycasts)
+	FAbilitySlot& MantleSlot = AbilSys->Slots[MantleIdx];
+	if (MantleSlot.HasActivationCosts())
+	{
+		FResourcePools* Pools = Entity.try_get_mut<FResourcePools>();
+		if (!Pools || !CheckActivationCosts(*Pools, MantleSlot)) return false;
+	}
+
 	// Get character feet position from Jolt
 	JPH::Vec3 JoltPos = FBChar->mCharacter->GetPosition();
 	FVector3d FeetPosD = CoordinateUtils::FromJoltCoordinatesD(JoltPos);
@@ -194,6 +203,13 @@ static bool TryActivateMantle(flecs::entity Entity, FBCharacterBase* FBChar,
 		Mantle->Phase = 1; // Rise (skip GrabTransition)
 	}
 
+	// Commit resource costs (checked earlier before ledge detection)
+	if (MantleSlot.HasActivationCosts())
+	{
+		FResourcePools* Pools = Entity.try_get_mut<FResourcePools>();
+		if (Pools) CommitActivationCosts(*Pools, MantleSlot);
+	}
+
 	AbilSys->ActivateSlot(MantleIdx);
 	return true;
 }
@@ -267,6 +283,7 @@ void UFlecsArtillerySubsystem::PrepareCharacterStep(float RealDT, float DilatedD
 			== JPH::CharacterVirtual::EGroundState::OnGround);
 
 		// ── 2.5. Kinetic Blast activation (instant one-shot) ──
+		FResourcePools* Pools = Bridge.Entity.try_get_mut<FResourcePools>();
 		if (bAbility2Pressed)
 		{
 			FAbilitySystem* AbilSys = Bridge.Entity.try_get_mut<FAbilitySystem>();
@@ -276,10 +293,16 @@ void UFlecsArtillerySubsystem::PrepareCharacterStep(float RealDT, float DilatedD
 				if (KBIdx != INDEX_NONE && !AbilSys->IsSlotActive(KBIdx))
 				{
 					FAbilitySlot& KBSlot = AbilSys->Slots[KBIdx];
-					if (KBSlot.CooldownTimer <= 0.f && KBSlot.Charges != 0) // not on cooldown, has charges
+					if (KBSlot.CooldownTimer <= 0.f && KBSlot.Charges != 0)
 					{
-						if (KBSlot.Charges > 0) KBSlot.Charges--;
-						AbilSys->ActivateSlot(KBIdx);
+						// Resource cost check (all-or-nothing)
+						bool bAffordable = !KBSlot.HasActivationCosts() || (Pools && CheckActivationCosts(*Pools, KBSlot));
+						if (bAffordable)
+						{
+							if (KBSlot.Charges > 0) KBSlot.Charges--;
+							if (Pools && KBSlot.HasActivationCosts()) CommitActivationCosts(*Pools, KBSlot);
+							AbilSys->ActivateSlot(KBIdx);
+						}
 					}
 				}
 			}
@@ -370,15 +393,21 @@ void UFlecsArtillerySubsystem::PrepareCharacterStep(float RealDT, float DilatedD
 						float HorizSpeedCm = FMath::Sqrt(CurVel.GetX() * CurVel.GetX() + CurVel.GetZ() * CurVel.GetZ()) * 100.f * SpeedScale;
 						if (HorizSpeedCm >= MS->SlideMinEntrySpeed)
 						{
-							FSlideState* Slide = Bridge.Entity.try_get_mut<FSlideState>();
-							checkf(Slide, TEXT("FSlideState missing"));
-							Slide->CurrentSpeed = HorizSpeedCm + MS->SlideInitialSpeedBoost;
-							Slide->Timer = MS->SlideMaxDuration;
-							Slide->SlideDirX = 0.f;
-							Slide->SlideDirZ = 0.f;
-							AbilSys->ActivateSlot(SlideIdx);
-							Bridge.StateAtomics->SlideActive.Write(true);
-							goto TickTimers;
+							FAbilitySlot& SlideSlot = AbilSys->Slots[SlideIdx];
+							bool bAffordable = !SlideSlot.HasActivationCosts() || (Pools && CheckActivationCosts(*Pools, SlideSlot));
+							if (bAffordable)
+							{
+								if (Pools && SlideSlot.HasActivationCosts()) CommitActivationCosts(*Pools, SlideSlot);
+								FSlideState* Slide = Bridge.Entity.try_get_mut<FSlideState>();
+								checkf(Slide, TEXT("FSlideState missing"));
+								Slide->CurrentSpeed = HorizSpeedCm + MS->SlideInitialSpeedBoost;
+								Slide->Timer = MS->SlideMaxDuration;
+								Slide->SlideDirX = 0.f;
+								Slide->SlideDirZ = 0.f;
+								AbilSys->ActivateSlot(SlideIdx);
+								Bridge.StateAtomics->SlideActive.Write(true);
+								goto TickTimers;
+							}
 						}
 					}
 				}
@@ -448,6 +477,15 @@ void UFlecsArtillerySubsystem::PrepareCharacterStep(float RealDT, float DilatedD
 		}
 
 	TickTimers:
+		// ── 6.5. Write resource snapshot to SimStateCache ──
+		if (Pools && Pools->PoolCount > 0)
+		{
+			float Ratios[4] = {};
+			for (int32 p = 0; p < Pools->PoolCount; ++p)
+				Ratios[p] = Pools->Pools[p].GetRatio();
+			SimStateCache.WriteResources(static_cast<int64>(Bridge.Entity.id()), Ratios, Pools->PoolCount);
+		}
+
 		// ── 7. Tick sim-thread timers ──
 		if (SimState)
 		{

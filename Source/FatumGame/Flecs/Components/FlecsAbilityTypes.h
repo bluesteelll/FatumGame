@@ -4,6 +4,7 @@
 
 #pragma once
 #include "CoreMinimal.h"
+#include "FlecsResourceTypes.h"
 
 // Unique ID per ability type. Index into dispatch table.
 enum class EAbilityTypeId : uint8
@@ -41,10 +42,20 @@ struct FAbilitySlot
 	float CooldownTimer = 0.f;    // remaining cooldown (ticks down after deactivation)
 	bool bAlwaysTick = false;  // tick even when Phase==0 (e.g. Blink: always listening for input)
 	bool bExclusive = false;   // when active, only this ability ticks (e.g. Mantle: overrides everything)
+
+	// ── Resource costs ──
+	FAbilityCostEntry ActivationCosts[MAX_ABILITY_COSTS] = {};  // one-time on activation
+	FAbilityCostEntry SustainCosts[MAX_ABILITY_COSTS] = {};     // per-second while active (channeled)
+	uint8 ActivationCostCount = 0;
+	uint8 SustainCostCount = 0;
+	float DeactivationRefund = 0.f;  // fraction (0.0-1.0) of activation costs refunded on voluntary End
+
 	alignas(8) uint8 ConfigData[ABILITY_CONFIG_SIZE] = {}; // per-ability-type config, cast by TypeId
 
 	bool IsActive() const { return Phase > 0; }
 	bool IsEmpty() const { return TypeId == EAbilityTypeId::None; }
+	bool HasActivationCosts() const { return ActivationCostCount > 0; }
+	bool HasSustainCosts() const { return SustainCostCount > 0; }
 };
 
 static constexpr int32 MAX_ABILITY_SLOTS = 8;

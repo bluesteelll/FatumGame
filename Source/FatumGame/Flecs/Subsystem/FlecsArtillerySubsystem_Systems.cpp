@@ -36,6 +36,7 @@
 #include "FlecsMovementComponents.h"
 #include "FlecsAbilityTypes.h"
 #include "FlecsAbilityStates.h"
+#include "FlecsResourceTypes.h"
 #include "AbilityTickFunctions.h"
 
 // ═══════════════════════════════════════════════════════════════
@@ -125,6 +126,7 @@ void UFlecsArtillerySubsystem::RegisterFlecsComponents()
 	World.component<FSlideState>();
 	World.component<FBlinkState>();
 	World.component<FMantleState>();
+	World.component<FResourcePools>();
 
 	// ─────────────────────────────────────────────────────────
 	// COLLISION PAIR SYSTEM COMPONENTS

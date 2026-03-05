@@ -19,6 +19,7 @@ class UFlecsUIPanel;
 class UFatumMovementComponent;
 class UFatumInputConfig;
 class UFlecsAbilityLoadout;
+class UFlecsResourcePoolProfile;
 enum class ECharacterPosture : uint8;
 class UInputMappingContext;
 class USpringArmComponent;
@@ -166,6 +167,10 @@ public:
 	/** Ability loadout — defines which abilities the character has. REQUIRED. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flecs|Abilities")
 	TObjectPtr<UFlecsAbilityLoadout> AbilityLoadout;
+
+	/** Resource pools (Mana, Stamina, etc.) for ability costs. Optional — no resource costs if null. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flecs|Abilities")
+	TObjectPtr<UFlecsResourcePoolProfile> ResourcePoolProfile;
 
 	// ═══════════════════════════════════════════════════════════════
 	// ENTITY SPAWNING (TEST)
@@ -564,6 +569,15 @@ private:
 
 	/** Check for health changes from Flecs and fire events */
 	void CheckHealthChanges();
+
+	/** Poll SimStateCache for resource changes and fire OnResourcesUpdated on HUD */
+	void UpdateResourceUI();
+
+	/** Cached resource ratios for change detection (game thread) */
+	float CachedResourceRatios[4] = {};
+	uint8 CachedResourcePoolCount = 0;
+	float ResourcePoolMaxValues[4] = {};  // from ResourcePoolProfile (static)
+	uint8 ResourcePoolTypes[4] = {};      // EResourceType values (static)
 
 	// ─────────────────────────────────────────────────────────
 	// INTERACTION (detection + state machine)

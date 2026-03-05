@@ -39,6 +39,8 @@
 #include "FlecsAbilityStates.h"
 #include "FlecsAbilityDefinition.h"
 #include "FlecsAbilityLoadout.h"
+#include "FlecsResourcePoolProfile.h"
+#include "FlecsResourceTypes.h"
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONSTRUCTOR
@@ -199,14 +201,80 @@ void AFlecsCharacter::InitECSRegistration()
 				FMemory::Memcpy(Slot.ConfigData, &Def->KineticBlastConfig, sizeof(FKineticBlastConfig));
 			}
 
+			// Copy resource costs from data asset → FAbilitySlot
+			{
+				checkf(Def->ActivationCosts.Num() <= MAX_ABILITY_COSTS,
+					TEXT("Ability %s has %d ActivationCosts but MAX_ABILITY_COSTS is %d"),
+					*Def->GetName(), Def->ActivationCosts.Num(), MAX_ABILITY_COSTS);
+				int32 CostCount = FMath::Min(Def->ActivationCosts.Num(), static_cast<int32>(MAX_ABILITY_COSTS));
+				for (int32 c = 0; c < CostCount; ++c)
+				{
+					const FAbilityCostDefinition& CostDef = Def->ActivationCosts[c];
+					if (CostDef.ResourceType == EResourceType::None) continue;
+					Slot.ActivationCosts[Slot.ActivationCostCount].ResourceType = static_cast<EResourceTypeId>(CostDef.ResourceType);
+					Slot.ActivationCosts[Slot.ActivationCostCount].Amount = CostDef.Amount;
+					Slot.ActivationCostCount++;
+				}
+			}
+			{
+				checkf(Def->SustainCosts.Num() <= MAX_ABILITY_COSTS,
+					TEXT("Ability %s has %d SustainCosts but MAX_ABILITY_COSTS is %d"),
+					*Def->GetName(), Def->SustainCosts.Num(), MAX_ABILITY_COSTS);
+				int32 CostCount = FMath::Min(Def->SustainCosts.Num(), static_cast<int32>(MAX_ABILITY_COSTS));
+				for (int32 c = 0; c < CostCount; ++c)
+				{
+					const FAbilityCostDefinition& CostDef = Def->SustainCosts[c];
+					if (CostDef.ResourceType == EResourceType::None) continue;
+					Slot.SustainCosts[Slot.SustainCostCount].ResourceType = static_cast<EResourceTypeId>(CostDef.ResourceType);
+					Slot.SustainCosts[Slot.SustainCostCount].Amount = CostDef.Amount;
+					Slot.SustainCostCount++;
+				}
+			}
+			Slot.DeactivationRefund = Def->DeactivationRefund;
+
 			CapturedAbilSys.SlotCount++;
 		}
+	}
+
+	// Capture resource pools from profile (game thread, can access UObjects).
+	FResourcePools CapturedPools;
+	if (ResourcePoolProfile)
+	{
+		checkf(ResourcePoolProfile->Pools.Num() <= MAX_RESOURCE_POOLS,
+			TEXT("ResourcePoolProfile on %s has %d pools but MAX_RESOURCE_POOLS is %d"),
+			*GetName(), ResourcePoolProfile->Pools.Num(), MAX_RESOURCE_POOLS);
+		int32 PoolCount = FMath::Min(ResourcePoolProfile->Pools.Num(), static_cast<int32>(MAX_RESOURCE_POOLS));
+		for (int32 p = 0; p < PoolCount; ++p)
+		{
+			const FResourcePoolDefinition& PoolDef = ResourcePoolProfile->Pools[p];
+			if (PoolDef.ResourceType == EResourceType::None) continue;
+
+			FResourcePool& Pool = CapturedPools.Pools[CapturedPools.PoolCount];
+			Pool.TypeId = static_cast<EResourceTypeId>(PoolDef.ResourceType);
+			Pool.MaxValue = PoolDef.MaxValue;
+			Pool.CurrentValue = PoolDef.GetStartingValue();
+			Pool.BaseRegenRate = PoolDef.RegenRate;
+			Pool.RegenDelay = PoolDef.RegenDelay;
+			Pool.RegenDelayTimer = 0.f;
+			Pool.RegenAccumulator = 0.f;
+			Pool.bRegenWhileChanneling = PoolDef.bRegenWhileChanneling;
+			CapturedPools.PoolCount++;
+		}
+	}
+
+	// Cache static resource data on game thread for UI polling (MaxValues, Types).
+	// CachedResourceRatios left at 0 — first poll will detect change and fire initial BPIE.
+	CachedResourcePoolCount = CapturedPools.PoolCount;
+	for (int32 p = 0; p < CapturedPools.PoolCount; ++p)
+	{
+		ResourcePoolMaxValues[p] = CapturedPools.Pools[p].MaxValue;
+		ResourcePoolTypes[p] = static_cast<uint8>(CapturedPools.Pools[p].TypeId);
 	}
 
 	TWeakObjectPtr<AFlecsCharacter> WeakSelf(this);
 	FlecsSubsystem->EnqueueCommand([FlecsSubsystem, Key, CapturedMaxHealth, CapturedInitialHealth,
 		CapturedArmor, SpawnLocation, CapsuleRadius, CapsuleHalfHeight, WeakSelf,
-		CapturedGravityScale, CapturedMS, CapturedAbilSys]()
+		CapturedGravityScale, CapturedMS, CapturedAbilSys, CapturedPools]()
 	{
 		flecs::world* FlecsWorld = FlecsSubsystem->GetFlecsWorld();
 		if (!FlecsWorld) return;
@@ -284,10 +352,25 @@ void AFlecsCharacter::InitECSRegistration()
 		FMantleState InitMantle;
 		Entity.set<FMantleState>(InitMantle);
 
-		// Register in sim→game state cache with initial health
+		// Resource pools (if any)
+		if (CapturedPools.PoolCount > 0)
+		{
+			Entity.set<FResourcePools>(CapturedPools);
+		}
+
+		// Register in sim→game state cache with initial health + resources
 		FlecsSubsystem->GetSimStateCache().Register(static_cast<int64>(Entity.id()));
 		FlecsSubsystem->GetSimStateCache().WriteHealth(
 			static_cast<int64>(Entity.id()), CapturedInitialHealth, CapturedMaxHealth);
+
+		if (CapturedPools.PoolCount > 0)
+		{
+			float Ratios[4] = {};
+			for (int32 p = 0; p < CapturedPools.PoolCount; ++p)
+				Ratios[p] = CapturedPools.Pools[p].GetRatio();
+			FlecsSubsystem->GetSimStateCache().WriteResources(
+				static_cast<int64>(Entity.id()), Ratios, CapturedPools.PoolCount);
+		}
 
 		// Register for sim-thread position readback
 		if (WeakSelf.IsValid())
@@ -359,6 +442,7 @@ void AFlecsCharacter::Tick(float DeltaTime)
 	TickTimeDilation(DeltaTime);              // 4. Blink aim push/remove, stack tick, sim atomics
 	TickPostureAndResnap(DeltaTime);          // 5. Posture effects, FeetToActorOffset re-snap
 	CheckHealthChanges();                     // 6. Health change detection
+	UpdateResourceUI();                       // 6b. Resource pool display
 	TickInteractionStateMachine(DeltaTime);   // 7. Focus/Hold state machine
 	UpdateCamera();                           // 8. FP position + rotation + FOV
 	SyncMovementStateToECS();                 // 9. Posture → Flecs (on change)
@@ -541,6 +625,7 @@ void AFlecsCharacter::WriteAimDirection()
 		if (HUDWidget && HUDWidget->CachedPlayerEntityId == 0)
 		{
 			HUDWidget->SetPlayerEntityId(CharId);
+			// Initial resource update handled by UpdateResourceUI() poll (CachedResourceRatios start at 0)
 		}
 	}
 }

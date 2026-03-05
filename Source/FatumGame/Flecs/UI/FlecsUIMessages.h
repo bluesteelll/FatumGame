@@ -166,6 +166,29 @@ struct FUIHoldProgressMessage
 	bool bCompleted = false;
 };
 
+/** Resource pool UI data (one per active pool). Used by OnResourcesUpdated. */
+USTRUCT(BlueprintType)
+struct FResourceBarData
+{
+	GENERATED_BODY()
+
+	/** Resource type (Mana=1, Stamina=2, Energy=3, Rage=4) */
+	UPROPERTY(BlueprintReadOnly, Category = "UI")
+	uint8 ResourceType = 0;
+
+	/** Current value */
+	UPROPERTY(BlueprintReadOnly, Category = "UI")
+	float Current = 0.f;
+
+	/** Maximum value */
+	UPROPERTY(BlueprintReadOnly, Category = "UI")
+	float Max = 0.f;
+
+	/** Current / Max ratio (0.0 - 1.0) */
+	UPROPERTY(BlueprintReadOnly, Category = "UI")
+	float Ratio = 0.f;
+};
+
 /** Interaction state changed. Fired by character state machine. */
 USTRUCT(BlueprintType)
 struct FUIInteractionStateMessage

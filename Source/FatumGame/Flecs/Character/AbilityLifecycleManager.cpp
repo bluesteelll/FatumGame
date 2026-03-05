@@ -10,6 +10,7 @@
 #include "FlecsMovementStatic.h"
 #include "FlecsArtillerySubsystem.h"
 #include "FWorldSimOwner.h"
+#include "FlecsResourceTypes.h"
 
 /** Dispatch a tick function for a given slot. Handles result (deactivation, consume). */
 static void DispatchSlotTick(FAbilityTickContext& Ctx, FAbilitySystem* AbilSys, int32 i,
@@ -29,13 +30,52 @@ static void DispatchSlotTick(FAbilityTickContext& Ctx, FAbilitySystem* AbilSys, 
 	{
 	case EAbilityTickResult::Continue:
 		Slot.PhaseTimer += DeltaTime;
+		// Sustain drain (channeled abilities) — deplete → force deactivate, NO refund.
+		// Intentional: ability tick runs BEFORE drain check, so the last frame still executes.
+		if (Slot.HasSustainCosts())
+		{
+			FResourcePools* Pools = Ctx.Entity.try_get_mut<FResourcePools>();
+			if (Pools && !ApplySustainDrain(*Pools, Slot, DeltaTime))
+			{
+				// Clean up ability-specific state before force-deactivating
+				switch (Slot.TypeId)
+				{
+				case EAbilityTypeId::Slide:
+					if (auto* S = Ctx.Entity.try_get_mut<FSlideState>()) S->Reset();
+					break;
+				case EAbilityTypeId::Mantle:
+					if (auto* M = Ctx.Entity.try_get_mut<FMantleState>()) M->Reset();
+					break;
+				case EAbilityTypeId::Blink:
+					if (auto* B = Ctx.Entity.try_get_mut<FBlinkState>()) { B->State = 0; B->bTeleportedThisFrame = false; }
+					break;
+				default: break;
+				}
+				AbilSys->DeactivateSlot(i);
+			}
+		}
 		break;
 
 	case EAbilityTickResult::End:
+		// Partial refund on voluntary end (e.g., cancel channeled ability early)
+		if (Slot.DeactivationRefund > 0.f && Slot.ActivationCostCount > 0)
+		{
+			FResourcePools* Pools = Ctx.Entity.try_get_mut<FResourcePools>();
+			if (Pools)
+			{
+				for (int32 c = 0; c < Slot.ActivationCostCount; ++c)
+				{
+					const FAbilityCostEntry& Cost = Slot.ActivationCosts[c];
+					if (Cost.IsValid())
+						Pools->Refund(Cost.ResourceType, Cost.Amount * Slot.DeactivationRefund);
+				}
+			}
+		}
 		AbilSys->DeactivateSlot(i);
 		break;
 
 	case EAbilityTickResult::EndAndConsume:
+		// No refund on consume (ability completed its purpose)
 		AbilSys->DeactivateSlot(i);
 		if (Slot.TypeId == EAbilityTypeId::Slide)
 		{
@@ -152,6 +192,25 @@ FAbilityTickResults TickAbilities(
 		{
 			Slot.Charges++;
 			Slot.RechargeTimer -= Slot.RechargeRate;
+		}
+	}
+
+	// ── Phase 4: Resource pool regeneration ──
+	// Always runs. Regen suppressed per-pool if channeled ability is active and !bRegenWhileChanneling.
+	{
+		FResourcePools* Pools = Entity.try_get_mut<FResourcePools>();
+		if (Pools && Pools->PoolCount > 0)
+		{
+			bool bAnyChanneledActive = false;
+			for (int32 i = 0; i < AbilSys->SlotCount; ++i)
+			{
+				if (AbilSys->IsSlotActive(i) && AbilSys->Slots[i].HasSustainCosts())
+				{
+					bAnyChanneledActive = true;
+					break;
+				}
+			}
+			TickResourceRegen(*Pools, DeltaTime, bAnyChanneledActive);
 		}
 	}
 
