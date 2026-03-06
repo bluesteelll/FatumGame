@@ -14,7 +14,7 @@ public class FatumGame : ModuleRules
 				// Domain-based structure (Public headers)
 				"FatumGame/Core/Public",
 				"FatumGame/Core/Public/Components",
-				"FatumGame/Definitions",
+				"FatumGame/Definitions/Public",
 				"FatumGame/Weapon/Public",
 				"FatumGame/Weapon/Public/Components",
 				"FatumGame/Weapon/Public/Library",
@@ -44,6 +44,7 @@ public class FatumGame : ModuleRules
 
 		PrivateIncludePaths.AddRange(
 			new string[] {
+				"FatumGame/Definitions/Private",
 				"FatumGame/Core/Private",
 				"FatumGame/Core/Private/Components",
 				"FatumGame/Weapon/Private",
