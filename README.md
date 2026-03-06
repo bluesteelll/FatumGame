@@ -1,6 +1,6 @@
 # FatumGame
 
-Unreal Engine 5.7 game project using **Flecs ECS** for gameplay logic and **Jolt Physics** (via Barrage) for high-performance physics simulation.
+Unreal Engine 5.7 game project using **Flecs ECS** for gameplay logic and **Jolt Physics** (via Barrage) for high-performance physics simulation on a dedicated 60Hz simulation thread.
 
 ## Requirements
 
@@ -22,60 +22,93 @@ Open `FatumGame.uproject` in Unreal Engine 5.7.
 ## Architecture
 
 ```
-FSimulationWorker -> Simulation thread (60Hz, lock-free)
-  DrainCommandQueue -> StackUp -> StepWorld -> BroadcastContactEvents -> progress()
+FSimulationWorker -> Simulation thread (60Hz)
+  DrainCommandQueue -> PrepareCharacterStep(RealDT, DilatedDT)
+    -> StackUp -> StepWorld(DilatedDT) -> BroadcastContactEvents -> progress(DilatedDT)
 Barrage            -> Jolt Physics integration
-Flecs              -> Gameplay ECS (health, damage, items, weapons)
-Game Thread        -> Cosmetics, rendering, ISM spawns
+Flecs              -> Gameplay ECS (health, damage, items, weapons, destructibles)
+Game Thread        -> Cosmetics, rendering, ISM spawns, UI
+Time Dilation      -> FTimeDilationStack (game thread) -> atomics -> sim thread DT splitting
 ```
 
 ### Key Technologies
 
 | Component | Description |
 |-----------|-------------|
-| **Flecs** | High-performance ECS via UnrealFlecs plugin |
+| **Flecs** | High-performance ECS via FlecsIntegration plugin |
 | **Jolt Physics** | Fast physics via Barrage plugin |
 | **FSimulationWorker** | 60Hz simulation thread (physics + ECS) |
 | **SkeletonKey** | Type-safe entity identity system |
+| **FTimeDilationStack** | Multi-source time dilation with min-wins resolution |
+| **Render Interpolation** | Sub-tick smoothing via Prev/Curr lerp with alpha |
 
 ## Project Structure
 
+Domain-based vertical folder layout:
+
 ```
 Source/FatumGame/
-  Flecs/
-    Subsystem/      - Simulation subsystem (sim thread, collisions, binding)
-    Components/     - ECS components (health, damage, items, weapons)
-    Definitions/    - Entity definitions and profiles
-    Spawner/        - Unified entity spawning API + render manager
-    Character/      - FlecsCharacter implementation
-    Library/        - Blueprint function libraries
+  Core/             - Simulation core (subsystem, sim worker, late sync bridge, tags)
+    Components/     - Health, entity, interaction ECS components
+  Abilities/        - Ability components, lifecycle, tick functions
+  Character/        - FlecsCharacter, movement component, posture state machine
+  Definitions/      - All Data Assets and Profiles (~30 files)
+  Destructible/     - Destructible components, fragmentation, debris pool
+  Door/             - Door components and systems
+  Input/            - Input config, input component, input tags
+  Interaction/      - Interaction types and library
+  Item/             - Item components, pickup collision, container library, registry
+  Movement/         - Movement components, character movement systems
+  Rendering/        - Render manager, Niagara manager, ISM transforms
+  Spawning/         - Entity spawner, spawner actor, spawn library
+  UI/               - FlecsUI subsystem, message subsystem, HUD, inventory, loot
+  Utils/            - Time dilation stack, cone impulse, ledge detector, spawn utils
+  Weapon/           - Weapon/projectile components, damage/weapon systems, libraries
 
 Plugins/
-    Barrage/        - Jolt Physics wrapper
-    FlecsBarrage/   - Flecs-Barrage bridge (bidirectional binding)
-    FlecsIntegration/ - UnrealFlecs, SolidMacros, FlecsLibrary
-    SkeletonKey/    - Entity identity system
-    LocomoCore/     - Spatial utilities
-    BarrageTests/   - Physics test suite
+  Artillery/          - Core Artillery framework
+  Barrage/            - Jolt Physics wrapper
+  BarrageCollision/   - Collision detection utilities
+  BarrageTests/       - Physics test suite
+  Bristlecone/        - Networking
+  Cabling/            - Constraint system
+  Enace/              - Entity framework utilities
+  FlecsBarrage/       - Flecs-Barrage bridge (bidirectional binding)
+  FlecsIntegration/   - UnrealFlecs, SolidMacros, FlecsLibrary
+  FlecsUI/            - Model/View UI framework (CommonUI, lock-free sync)
+  ImGui/              - Debug UI
+  LocomoCore/         - Spatial utilities
+  NiagaraUIRenderer/  - Niagara UI rendering
+  Phosphorus/         - Rendering utilities
+  SkeletonKey/        - Entity identity system
+  Thistle/            - Utility plugin
+  UE4CMake/           - CMake integration for UE
 ```
 
 ## Features
 
-- **Unified Entity System** - Data-driven entity spawning with composable profiles
+- **Unified Entity System** - Data-driven entity spawning with composable profiles (physics, render, health, damage, projectile, weapon, interaction, container, destructible)
 - **Lock-Free Physics Binding** - Bidirectional Entity-Physics mapping without locks
-- **Collision Pair System** - Data-driven collision handling via ECS
-- **Item Prefab System** - Shared static data for items via Flecs prefabs
-- **Container System** - Grid/Slot/List containers for inventory
+- **Collision Pair System** - Tag-based collision handling (damage, bounce, pickup, destructible)
 - **Weapon System** - Fire rate, burst, reload, ammo with sim-thread firing
+- **Item & Container System** - Grid/Slot/List containers, inventory UI with drag-drop
+- **Destructible Objects** - Constraint-based fragmentation, debris pool, world anchors
+- **Interaction System** - Barrage raycast-based interaction with ECS entities
+- **Time Dilation** - Multi-source time dilation stack with player speed compensation
+- **Render Interpolation** - Sub-tick transform smoothing for characters and ISM entities
+- **Door System** - Physics-based doors with ECS state
+- **Abilities** - Ability resources, lifecycle management, tick functions
 
 ## Documentation
 
 See [CLAUDE.md](CLAUDE.md) for detailed technical documentation including:
-- Development principles
-- Quick start guide
-- API reference
-- Debugging tips
-- Known issues
+- Development principles and architecture
+- ECS patterns (Static/Instance prefab inheritance)
+- Quick start guide (projectiles, characters, spawners)
+- Unified Spawn API and Blueprint API reference
+- Collision pair system and system execution order
+- Time dilation and render interpolation
+- Debugging tips and known issues
 
 ## Credits
 
