@@ -40,30 +40,42 @@ Time Dilation -> FTimeDilationStack (game thread) -> atomics -> FSimulationWorke
 
 ---
 
-## Key Files
+## Project Structure
 
-| File | Purpose |
-|------|---------|
-| `FlecsCharacter.h/cpp` | Character with Flecs (health, shooting, interaction, E/F test) |
-| `FlecsEntitySpawner.h/cpp` | **Unified Entity API**: FEntitySpawnRequest, UFlecsEntityLibrary |
-| `FlecsEntitySpawnerActor.h/cpp` | **Editor spawner**: drag to level, set EntityDefinition |
-| `FlecsEntityDefinition.h` | Unified preset combining all profiles |
-| `FlecsStaticComponents.h` | PREFAB components (FHealthStatic, FDamageStatic, etc.) |
-| `FlecsInstanceComponents.h/cpp` | Instance components (FHealthInstance, etc.) |
-| `FlecsGameTags.h/cpp` | Tags + ENUMs (FTagItem, FTagCharacter) |
-| `FlecsDamageLibrary.h/cpp` | Blueprint API: damage, heal, health queries |
-| `FlecsWeaponLibrary.h/cpp` | Blueprint API: weapon control (fire, reload, aim) |
-| `FlecsContainerLibrary.h/cpp` | Blueprint API: container & item operations |
-| `FlecsConstraintLibrary.h/cpp` | Blueprint API: physics constraints |
-| `FlecsSpawnLibrary.h/cpp` | Blueprint API: spawn (projectiles, items, destructibles, groups) |
-| `FlecsLibraryHelpers.h` | Shared inline helpers for library classes |
-| `FlecsArtillerySubsystem.h/cpp` | Simulation subsystem: sim thread, collisions, binding |
-| `FSimulationWorker.h/cpp` | Simulation thread (~60Hz, lock-free, time dilation atomics) |
-| `FTimeDilationStack.h` | Time dilation priority stack (min-wins, per-source config) |
-| `BarrageSpawnUtils.h/cpp` | Barrage spawn utilities |
-| `FlecsRenderManager.h/cpp` | ISM component manager |
-| **Plugin:** `FlecsBarrageComponents.h/cpp` | Bridge: FBarrageBody, FISMRender, FCollisionPair |
-| **Plugin:** `FBarragePrimitive.h` | Atomic FlecsEntityId for reverse binding |
+Domain-based vertical folder layout under `Source/FatumGame/`:
+
+```
+Core/           — Simulation core (FlecsArtillerySubsystem, FSimulationWorker, FLateSyncBridge, FlecsGameTags)
+  Components/   — FlecsHealthComponents, FlecsEntityComponents, FlecsInteractionComponents
+Definitions/    — ALL Data Assets & Profiles (30 files)
+Weapon/         — Components/ (Weapon, Projectile), Systems/ (DamageCollision, WeaponSystems), Library/ (Damage, Weapon)
+Movement/       — Components/ (Movement), Character systems, FlecsCharacterTypes
+Character/      — FlecsCharacter + all _*.cpp, FatumMovementComponent, FPostureStateMachine
+Abilities/      — Components/ (AbilityTypes, States, Resources), Lifecycle, TickFunctions, CapsuleHelper
+Destructible/   — Components/ (Destructible), Systems/ (Fragmentation, DestructibleCollision), Library/ (Constraint)
+Door/           — Components/ (Door), Systems/ (DoorSystems)
+Item/           — Components/ (Item), Systems/ (PickupCollision), Library/ (Container), ItemRegistry
+Interaction/    — InteractionTypes, Library/ (InteractionLibrary)
+Spawning/       — FlecsEntitySpawner, SpawnerActor, Library/ (SpawnLibrary)
+Rendering/      — FlecsRenderManager, FlecsNiagaraManager
+UI/             — FlecsUISubsystem, MessageSubsystem, HUD, Inventory, LootPanel
+Input/          — FatumInputConfig, InputComponent, InputTags
+Utils/          — FTimeDilationStack, ConeImpulse, LedgeDetector, BarrageSpawnUtils
+```
+
+### Component Headers (domain-split)
+
+| Header | Contains |
+|--------|----------|
+| `FlecsHealthComponents.h` | FHealthStatic, FDamageStatic, FHealthInstance, FDamageHit, FPendingDamage |
+| `FlecsEntityComponents.h` | FEntityDefinitionRef, FFocusCameraOverride, FLootStatic |
+| `FlecsInteractionComponents.h` | FInteractionStatic, FInteractionInstance, FInteractionAngleOverride |
+| `FlecsProjectileComponents.h` | FProjectileStatic, FProjectileInstance |
+| `FlecsItemComponents.h` | FItemStaticData, FContainerStatic, FItemInstance, FContainerInstance, etc. |
+| `FlecsDestructibleComponents.h` | FDestructibleStatic, FDebrisInstance, FFragmentationData |
+| `FlecsWeaponComponents.h` | FAimDirection, FWeaponStatic, FWeaponInstance, FEquippedBy |
+| `FlecsDoorComponents.h` | FDoorStatic, FDoorInstance |
+| **Plugin:** `FlecsBarrageComponents.h` | FBarrageBody, FISMRender, FCollisionPair, FTagCollision* |
 
 **Profiles:** PhysicsProfile, RenderProfile, HealthProfile, DamageProfile, ProjectileProfile, ContainerProfile, ItemDefinition, WeaponProfile, InteractionProfile
 

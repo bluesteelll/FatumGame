@@ -9,7 +9,7 @@
 
 class UFlecsAbilityDefinition;
 
-UCLASS(BlueprintType)
+UCLASS(BlueprintType, EditInlineNew)
 class FATUMGAME_API UFlecsAbilityLoadout : public UDataAsset
 {
 	GENERATED_BODY()

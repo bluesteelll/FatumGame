@@ -62,7 +62,7 @@ struct FAbilityCostDefinition
 	float Amount = 0.f;
 };
 
-UCLASS(BlueprintType)
+UCLASS(BlueprintType, EditInlineNew)
 class FATUMGAME_API UFlecsResourcePoolProfile : public UDataAsset
 {
 	GENERATED_BODY()

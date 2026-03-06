@@ -19,6 +19,8 @@ class UFlecsNiagaraProfile;
 class UFlecsDestructibleProfile;
 class UFlecsDoorProfile;
 class UFlecsMovementProfile;
+class UFlecsAbilityLoadout;
+class UFlecsResourcePoolProfile;
 
 /**
  * Unified entity definition - a preset combining multiple profiles.
@@ -119,6 +121,14 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Instanced, Category = "Profiles")
 	TObjectPtr<UFlecsMovementProfile> MovementProfile;
 
+	/** Ability loadout — which abilities this entity has */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Instanced, Category = "Profiles")
+	TObjectPtr<UFlecsAbilityLoadout> AbilityLoadout;
+
+	/** Resource pool profile — Mana, Stamina, Energy pools for ability costs */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Instanced, Category = "Profiles")
+	TObjectPtr<UFlecsResourcePoolProfile> ResourcePoolProfile;
+
 	// ═══════════════════════════════════════════════════════════════
 	// DEFAULT TAGS
 	// ═══════════════════════════════════════════════════════════════
@@ -170,7 +180,9 @@ public:
 			|| NiagaraProfile != nullptr
 			|| DestructibleProfile != nullptr
 			|| DoorProfile != nullptr
-			|| MovementProfile != nullptr;
+			|| MovementProfile != nullptr
+			|| AbilityLoadout != nullptr
+			|| ResourcePoolProfile != nullptr;
 	}
 
 	/** Check if this will create a world entity (physics or render) */
