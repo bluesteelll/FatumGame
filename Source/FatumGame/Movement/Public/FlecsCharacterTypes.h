@@ -56,6 +56,11 @@ struct FCharacterInputAtomics
 	FAtomicHeld    BlinkHeld;      // held: game writes true on press, false on release
 	FAtomicHeld    Sprinting;      // held: game writes true on press, false on release
 	FAtomicOneShot Ability2Pressed;// one-shot: kinetic blast activation
+
+	// Telekinesis
+	FAtomicOneShot TelekinesisToggle; // one-shot: grab/release toggle
+	FAtomicOneShot TelekinesisThrow;  // one-shot: throw held object
+	FAtomicAxis    TelekinesisScroll; // scroll delta for hold distance adjustment
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -71,6 +76,7 @@ struct FCharacterStateAtomics
 	FAtomicState                BlinkAiming;
 	FAtomicOneShot              Teleported;    // sim fires, game consumes → position snap
 	TAtomicLatestWins<uint8>    MantleType;    // 0=Vault, 1=Mantle, 2=LedgeGrab
+	FAtomicState                TelekinesisActive; // sim→game: holding an object
 };
 
 // ═══════════════════════════════════════════════════════════════════════════

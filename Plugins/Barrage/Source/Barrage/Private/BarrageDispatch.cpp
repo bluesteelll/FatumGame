@@ -389,6 +389,14 @@ void UBarrageDispatch::SetBodyPositionDirect(FBarrageKey BarrageKey, const FVect
 	}
 }
 
+void UBarrageDispatch::MoveKinematicBody(FBarrageKey BarrageKey, const FVector& TargetPosition, float DeltaTime)
+{
+	if (JoltGameSim)
+	{
+		JoltGameSim->MoveKinematicBody(BarrageKey, TargetPosition, DeltaTime);
+	}
+}
+
 void UBarrageDispatch::SetBodyRotationDirect(FBarrageKey BarrageKey, const FQuat& Rotation, bool bActivate)
 {
 	if (JoltGameSim)
@@ -411,6 +419,24 @@ void UBarrageDispatch::SetBodyMass(FBarrageKey BarrageKey, float MassKg)
 	{
 		JoltGameSim->SetBodyMass(BarrageKey, MassKg);
 	}
+}
+
+float UBarrageDispatch::GetBodyMass(FBarrageKey BarrageKey) const
+{
+	if (JoltGameSim)
+	{
+		return JoltGameSim->GetBodyMass(BarrageKey);
+	}
+	return 0.f;
+}
+
+float UBarrageDispatch::GetBodyGravityFactor(FBarrageKey BarrageKey) const
+{
+	if (JoltGameSim)
+	{
+		return JoltGameSim->GetBodyGravityFactor(BarrageKey);
+	}
+	return 1.f;
 }
 
 void UBarrageDispatch::ResetBodyVelocities(FBarrageKey BarrageKey)
@@ -611,6 +637,15 @@ float UBarrageDispatch::GetConstraintCurrentPosition(FBarrageConstraintKey Key) 
 	if (const FBarrageConstraintSystem* CS = GetConstraintSystem())
 		return CS->GetCurrentPosition(Key);
 	return 0.f;
+}
+
+FBarrageKey UBarrageDispatch::CreateKinematicPivot(const FVector& Position)
+{
+	if (JoltGameSim)
+	{
+		return JoltGameSim->CreateKinematicPivot(Position);
+	}
+	return FBarrageKey();
 }
 
 void UBarrageDispatch::SetBodyAngularDamping(FBarrageKey Key, float Damping)

@@ -23,6 +23,7 @@ struct FAbilityTickResults
 	bool bMantling = false;            // mantle FSM active
 	bool bHanging = false;             // mantle in hang phase
 	uint8 MantleType = 0;             // 0=Vault, 1=Mantle, 2=LedgeGrab
+	bool bTelekinesisActive = false;   // telekinesis holding an object
 };
 
 FAbilityTickResults TickAbilities(

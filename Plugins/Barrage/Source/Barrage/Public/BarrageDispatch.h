@@ -124,6 +124,10 @@ public:
 	/** Synchronously set body position (NOT queued). Use from sim thread. */
 	void SetBodyPositionDirect(FBarrageKey BarrageKey, const FVector& Position, bool bActivate = true);
 
+	/** Move kinematic body toward target, setting velocity = (target-current)/dt.
+	 *  Constraint solver sees motion (unlike SetBodyPositionDirect which leaves V=0). */
+	void MoveKinematicBody(FBarrageKey BarrageKey, const FVector& TargetPosition, float DeltaTime);
+
 	/** Synchronously set body rotation (NOT queued). Use from sim thread. */
 	void SetBodyRotationDirect(FBarrageKey BarrageKey, const FQuat& Rotation, bool bActivate = true);
 
@@ -132,6 +136,12 @@ public:
 
 	/** Synchronously override a body's mass (kg). Recalculates inertia from shape. Use from sim thread. */
 	void SetBodyMass(FBarrageKey BarrageKey, float MassKg);
+
+	/** Synchronously read a body's mass (kg). Returns 0 for non-dynamic bodies. Use from sim thread. */
+	float GetBodyMass(FBarrageKey BarrageKey) const;
+
+	/** Synchronously read a body's gravity factor. Returns 1.0 if not found/not dynamic. Use from sim thread. */
+	float GetBodyGravityFactor(FBarrageKey BarrageKey) const;
 
 	/** Synchronously zero both linear and angular velocity. Use from sim thread for pool body reset. */
 	void ResetBodyVelocities(FBarrageKey BarrageKey);
@@ -237,6 +247,13 @@ public:
 
 	/** Get current position of slider constraint (Jolt meters). */
 	float GetConstraintCurrentPosition(FBarrageConstraintKey Key) const;
+
+	/**
+	 * Create a kinematic pivot body (invisible anchor for constraint-based grabs).
+	 * Small sensor sphere on DEBRIS layer. Move with MoveKinematicBody().
+	 * Destroy with FinalizeReleasePrimitive().
+	 */
+	FBarrageKey CreateKinematicPivot(const FVector& Position);
 
 	// ── Angular Damping ──
 

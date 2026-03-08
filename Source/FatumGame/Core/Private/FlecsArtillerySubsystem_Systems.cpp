@@ -131,7 +131,9 @@ void UFlecsArtillerySubsystem::RegisterFlecsComponents()
 	World.component<FSlideState>();
 	World.component<FBlinkState>();
 	World.component<FMantleState>();
+	World.component<FTelekinesisState>();
 	World.component<FResourcePools>();
+	World.component<FTagTelekinesisHeld>();
 
 	// ─────────────────────────────────────────────────────────
 	// COLLISION PAIR SYSTEM COMPONENTS

@@ -14,6 +14,7 @@ enum class EAbilityTypeId : uint8
 	Blink = 2,
 	Mantle = 3,
 	KineticBlast = 4,
+	Telekinesis = 5,
 	MAX
 };
 

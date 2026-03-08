@@ -11,6 +11,7 @@
 #include "FlecsArtillerySubsystem.h"
 #include "FWorldSimOwner.h"
 #include "FlecsResourceTypes.h"
+#include "FlecsAbilityDefinition.h"
 
 /** Dispatch a tick function for a given slot. Handles result (deactivation, consume). */
 static void DispatchSlotTick(FAbilityTickContext& Ctx, FAbilitySystem* AbilSys, int32 i,
@@ -48,6 +49,13 @@ static void DispatchSlotTick(FAbilityTickContext& Ctx, FAbilitySystem* AbilSys, 
 					break;
 				case EAbilityTypeId::Blink:
 					if (auto* B = Ctx.Entity.try_get_mut<FBlinkState>()) { B->State = 0; B->bTeleportedThisFrame = false; }
+					break;
+				case EAbilityTypeId::Telekinesis:
+					if (auto* TK = Ctx.Entity.try_get_mut<FTelekinesisState>())
+					{
+						auto* SD = reinterpret_cast<FTelekinesisSlotData*>(Slot.ConfigData);
+						ReleaseTelekinesisObject(*TK, Ctx, false, SD ? SD->Config : nullptr, &Slot);
+					}
 					break;
 				default: break;
 				}
@@ -250,6 +258,17 @@ FAbilityTickResults TickAbilities(
 			{
 				Results.bHanging = (Mantle->Phase == 4);
 				Results.MantleType = Mantle->MantleType;
+			}
+		}
+	}
+	{
+		int32 TKIdx = AbilSys->FindSlotByType(EAbilityTypeId::Telekinesis);
+		if (TKIdx != INDEX_NONE)
+		{
+			FTelekinesisState* TK = Entity.try_get_mut<FTelekinesisState>();
+			if (TK && TK->Phase > 0)
+			{
+				Results.bTelekinesisActive = true;
 			}
 		}
 	}

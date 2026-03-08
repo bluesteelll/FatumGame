@@ -45,6 +45,9 @@ void AFlecsCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 	FatumInput->BindNativeAction(InputConfig, TAG_Input_Ability1,  ETriggerEvent::Started,   this, &AFlecsCharacter::OnAbility1Started);
 	FatumInput->BindNativeAction(InputConfig, TAG_Input_Ability1,  ETriggerEvent::Completed, this, &AFlecsCharacter::OnAbility1Completed);
 	FatumInput->BindNativeAction(InputConfig, TAG_Input_Ability2,  ETriggerEvent::Started,   this, &AFlecsCharacter::OnAbility2Started);
+	FatumInput->BindNativeAction(InputConfig, TAG_Input_Ability3,  ETriggerEvent::Started,   this, &AFlecsCharacter::OnTelekinesisToggle);
+	FatumInput->BindNativeAction(InputConfig, TAG_Input_TKThrow,   ETriggerEvent::Started,   this, &AFlecsCharacter::OnTelekinesisThrow);
+	FatumInput->BindNativeAction(InputConfig, TAG_Input_TKScroll,  ETriggerEvent::Triggered, this, &AFlecsCharacter::OnTelekinesisScroll);
 }
 
 UInputComponent* AFlecsCharacter::CreatePlayerInputComponent()
@@ -145,6 +148,21 @@ void AFlecsCharacter::OnAbility1Completed(const FInputActionValue& Value)
 void AFlecsCharacter::OnAbility2Started(const FInputActionValue& Value)
 {
 	if (InputAtomics) InputAtomics->Ability2Pressed.Fire();
+}
+
+void AFlecsCharacter::OnTelekinesisToggle(const FInputActionValue& Value)
+{
+	if (InputAtomics) InputAtomics->TelekinesisToggle.Fire();
+}
+
+void AFlecsCharacter::OnTelekinesisThrow(const FInputActionValue& Value)
+{
+	if (InputAtomics) InputAtomics->TelekinesisThrow.Fire();
+}
+
+void AFlecsCharacter::OnTelekinesisScroll(const FInputActionValue& Value)
+{
+	if (InputAtomics) InputAtomics->TelekinesisScroll.Write(Value.Get<float>());
 }
 
 void AFlecsCharacter::StartFire(const FInputActionValue& Value)

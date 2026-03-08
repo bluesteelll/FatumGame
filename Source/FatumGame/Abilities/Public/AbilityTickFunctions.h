@@ -54,3 +54,10 @@ EAbilityTickResult TickSlide(FAbilityTickContext& Ctx, FAbilitySlot& Slot);
 EAbilityTickResult TickBlink(FAbilityTickContext& Ctx, FAbilitySlot& Slot);
 EAbilityTickResult TickMantle(FAbilityTickContext& Ctx, FAbilitySlot& Slot);
 EAbilityTickResult TickKineticBlast(FAbilityTickContext& Ctx, FAbilitySlot& Slot);
+EAbilityTickResult TickTelekinesis(FAbilityTickContext& Ctx, FAbilitySlot& Slot);
+
+// Telekinesis release helper (also called by lifecycle manager on forced deactivation)
+struct FTelekinesisState;
+struct FTelekinesisConfig;
+void ReleaseTelekinesisObject(FTelekinesisState& State, FAbilityTickContext& Ctx,
+	bool bThrow, const FTelekinesisConfig* Config, FAbilitySlot* Slot = nullptr);

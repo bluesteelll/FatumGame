@@ -17,6 +17,7 @@ void UFlecsAbilityDefinition::PostLoad()
 void UFlecsAbilityDefinition::RefreshEditorBools()
 {
 	bIsKineticBlast = (AbilityType == EAbilityType::KineticBlast);
+	bIsTelekinesis = (AbilityType == EAbilityType::Telekinesis);
 }
 
 #endif

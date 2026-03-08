@@ -327,6 +327,7 @@ void UFlecsArtillerySubsystem::PrepareCharacterStep(float RealDT, float DilatedD
 		bool bSliding = AbilityResults.bSlideActive;
 		Bridge.StateAtomics->SlideActive.Write(bSliding);
 		Bridge.StateAtomics->BlinkAiming.Write(AbilityResults.bBlinkAiming);
+		Bridge.StateAtomics->TelekinesisActive.Write(AbilityResults.bTelekinesisActive);
 
 		if (AbilityResults.bBlinkTeleported)
 		{

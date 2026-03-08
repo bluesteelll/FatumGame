@@ -485,6 +485,15 @@ protected:
 	/** Ability 2 pressed (kinetic blast) */
 	void OnAbility2Started(const FInputActionValue& Value);
 
+	/** Ability 3 pressed (telekinesis toggle) */
+	void OnTelekinesisToggle(const FInputActionValue& Value);
+
+	/** Telekinesis throw */
+	void OnTelekinesisThrow(const FInputActionValue& Value);
+
+	/** Telekinesis scroll (hold distance) */
+	void OnTelekinesisScroll(const FInputActionValue& Value);
+
 	/** Called by UFatumMovementComponent::OnPostureChanged delegate */
 	void HandlePostureChanged(ECharacterPosture NewPosture);
 

@@ -351,6 +351,14 @@ public:
 	// @param LinearDamping - Velocity damping: 0.0 = no drag, higher = more drag (Jolt default 0.05)
 	FBarrageKey CreateBouncingSphere(FBSphereParams& ToCreate, uint16 Layer, float Restitution = 0.8f, float Friction = 0.2f, float LinearDamping = 0.0f);
 
+	/**
+	 * Create a small kinematic sensor sphere on DEBRIS layer (no gameplay collision).
+	 * Used as an invisible anchor/pivot for constraint-based grab systems.
+	 * Move with MoveKinematicBody(). Destroy with FinalizeReleasePrimitive().
+	 * Returns invalid key if body limit reached.
+	 */
+	FBarrageKey CreateKinematicPivot(const FVector& Position);
+
 	//Under normal circumstances, you will _not_ want to set the layer and movement to anything else.
 	//the use of static mesh colliders is quite slow, and primitive shapes or compound primitives work for most purposes
 	//The exception is non-moving static mesh colliders, which are well optimized in Jolt. However, you may wish to have specialized
@@ -450,6 +458,22 @@ public:
 	}
 
 	/**
+	 * Move a kinematic body toward a target position over DeltaTime.
+	 * Sets velocity = (target - current) / dt so the constraint solver sees the motion.
+	 * Use instead of SetBodyPositionDirect for kinematic bodies that drive constraints.
+	 */
+	void MoveKinematicBody(FBarrageKey BarrageKey, const FVector& TargetPosition, float InDeltaTime)
+	{
+		if (!body_interface) return;
+
+		JPH::BodyID BodyID;
+		if (!BarrageToJoltMapping->find(BarrageKey, BodyID) || BodyID.IsInvalid()) return;
+
+		JPH::RVec3 JoltTarget = CoordinateUtils::ToJoltCoordinates(FVector3d(TargetPosition));
+		body_interface->MoveKinematic(BodyID, JoltTarget, JPH::Quat::sIdentity(), InDeltaTime);
+	}
+
+	/**
 	 * Synchronously set a body's rotation via body_interface (NOT queued).
 	 * Use from sim thread when rotation must be committed before creating constraints.
 	 */
@@ -501,6 +525,47 @@ public:
 		JPH::MassProperties msp = JoltBody.GetShape()->GetMassProperties();
 		msp.ScaleToMass(MassKg);
 		JoltBody.GetMotionProperties()->SetMassProperties(JPH::EAllowedDOFs::All, msp);
+	}
+
+	/**
+	 * Synchronously read a body's mass (kg). Returns 0 for non-dynamic bodies.
+	 * Use from sim thread.
+	 */
+	float GetBodyMass(FBarrageKey BarrageKey)
+	{
+		if (!body_interface) return 0.f;
+
+		JPH::BodyID BodyID;
+		if (!BarrageToJoltMapping->find(BarrageKey, BodyID) || BodyID.IsInvalid()) return 0.f;
+
+		JPH::BodyLockRead lock(physics_system->GetBodyLockInterface(), BodyID);
+		if (!lock.Succeeded()) return 0.f;
+
+		const JPH::Body& JoltBody = lock.GetBody();
+		if (!JoltBody.IsDynamic()) return 0.f;
+
+		float InverseMass = JoltBody.GetMotionProperties()->GetInverseMass();
+		return InverseMass > 0.f ? 1.f / InverseMass : 0.f;
+	}
+
+	/**
+	 * Read gravity factor from a dynamic body. Returns 1.0 if body not found or not dynamic.
+	 * Use from sim thread.
+	 */
+	float GetBodyGravityFactor(FBarrageKey BarrageKey)
+	{
+		if (!body_interface) return 1.f;
+
+		JPH::BodyID BodyID;
+		if (!BarrageToJoltMapping->find(BarrageKey, BodyID) || BodyID.IsInvalid()) return 1.f;
+
+		JPH::BodyLockRead lock(physics_system->GetBodyLockInterface(), BodyID);
+		if (!lock.Succeeded()) return 1.f;
+
+		const JPH::Body& JoltBody = lock.GetBody();
+		if (!JoltBody.IsDynamic()) return 1.f;
+
+		return JoltBody.GetMotionProperties()->GetGravityFactor();
 	}
 
 	/**

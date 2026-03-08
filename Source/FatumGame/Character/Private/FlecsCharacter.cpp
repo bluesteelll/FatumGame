@@ -242,6 +242,7 @@ void AFlecsCharacter::InitECSRegistration()
 		Entity.set<FSlideState>(FSlideState{});
 		Entity.set<FBlinkState>(FBlinkState{});
 		Entity.set<FMantleState>(FMantleState{});
+		{ FTelekinesisState TKState; Entity.set<FTelekinesisState>(TKState); }
 
 		FlecsWorld->defer_end();
 
@@ -328,14 +329,14 @@ void AFlecsCharacter::Tick(float DeltaTime)
 	Super::Tick(DeltaTime);
 
 	ReadAndApplyBarragePosition(DeltaTime);  // 1. Jolt → lerp → SetActorLocation (before CameraManager)
-	WriteCameraAtomics();                     // 2. Camera pos/dir → sim thread (blink, mantle)
-	ConsumeTeleportSnap();                    // 3. Sim teleport → reset lerp buffers
-	TickTimeDilation(DeltaTime);              // 4. Blink aim push/remove, stack tick, sim atomics
-	TickPostureAndResnap(DeltaTime);          // 5. Posture effects, FeetToActorOffset re-snap
-	CheckHealthChanges();                     // 6. Health change detection
-	UpdateResourceUI();                       // 6b. Resource pool display
-	TickInteractionStateMachine(DeltaTime);   // 7. Focus/Hold state machine
-	UpdateCamera();                           // 8. FP position + rotation + FOV
+	ConsumeTeleportSnap();                    // 2. Sim teleport → reset lerp buffers
+	TickTimeDilation(DeltaTime);              // 3. Blink aim push/remove, stack tick, sim atomics
+	TickPostureAndResnap(DeltaTime);          // 4. Posture effects, FeetToActorOffset re-snap
+	CheckHealthChanges();                     // 5. Health change detection
+	UpdateResourceUI();                       // 5b. Resource pool display
+	TickInteractionStateMachine(DeltaTime);   // 6. Focus/Hold state machine
+	UpdateCamera();                           // 7. FP position + rotation + FOV
+	WriteCameraAtomics();                     // 8. Camera pos/dir → sim thread (AFTER UpdateCamera for fresh data)
 	SyncMovementStateToECS();                 // 9. Posture → Flecs (on change)
 	ProcessPendingWeaponEquip();              // 10. Sim→game weapon attach
 	WriteAimDirection();                      // 11. LateSyncBridge FAimDirection

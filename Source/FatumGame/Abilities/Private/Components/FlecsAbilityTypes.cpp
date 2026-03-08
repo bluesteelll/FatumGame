@@ -30,6 +30,16 @@ FAbilitySystem FAbilitySystem::FromLoadout(const UFlecsAbilityLoadout* Loadout)
 		{
 			FMemory::Memcpy(Slot.ConfigData, &Def->KineticBlastConfig, sizeof(FKineticBlastConfig));
 		}
+		else if (Def->AbilityType == EAbilityType::Telekinesis)
+		{
+			FTelekinesisSlotData SlotData;
+			SlotData.Config = &Def->TelekinesisConfig;
+			SlotData.CurrentHoldDistance = Def->TelekinesisConfig.HoldDistance;
+			SlotData.MinHoldDistance = Def->TelekinesisConfig.MinHoldDistance;
+			SlotData.MaxHoldDistance = Def->TelekinesisConfig.MaxHoldDistance;
+			SlotData.ScrollSpeed = Def->TelekinesisConfig.ScrollSpeed;
+			FMemory::Memcpy(Slot.ConfigData, &SlotData, sizeof(FTelekinesisSlotData));
+		}
 
 		// Activation costs
 		{

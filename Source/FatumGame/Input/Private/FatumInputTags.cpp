@@ -15,3 +15,6 @@ UE_DEFINE_GAMEPLAY_TAG(TAG_Input_Crouch,    "InputTag.Crouch");
 UE_DEFINE_GAMEPLAY_TAG(TAG_Input_Prone,     "InputTag.Prone");
 UE_DEFINE_GAMEPLAY_TAG(TAG_Input_Ability1,  "InputTag.Ability1");
 UE_DEFINE_GAMEPLAY_TAG(TAG_Input_Ability2,  "InputTag.Ability2");
+UE_DEFINE_GAMEPLAY_TAG(TAG_Input_Ability3,  "InputTag.Ability3");
+UE_DEFINE_GAMEPLAY_TAG(TAG_Input_TKThrow,   "InputTag.TKThrow");
+UE_DEFINE_GAMEPLAY_TAG(TAG_Input_TKScroll,  "InputTag.TKScroll");

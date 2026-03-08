@@ -77,3 +77,6 @@ struct FTagDoor {};
 
 /** Entity is a trigger that can unlock/toggle a door */
 struct FTagDoorTrigger {};
+
+/** Entity is currently held by telekinesis (prevents double-grab) */
+struct FTagTelekinesisHeld {};

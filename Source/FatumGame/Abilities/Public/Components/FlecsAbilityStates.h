@@ -3,6 +3,10 @@
 
 #pragma once
 
+#include "SkeletonTypes.h"
+#include "FBarrageKey.h"
+#include "FBConstraintParams.h"
+
 struct FSlideState
 {
 	float CurrentSpeed = 0.f;   // decelerating speed (cm/s)
@@ -48,5 +52,34 @@ struct FMantleState
 		PullEndX = PullEndY = PullEndZ = 0.f;
 		PullDuration = LandDuration = 0.f;
 		Phase = 0; MantleType = 0; bCanPullUp = false;
+	}
+};
+
+struct FTelekinesisState
+{
+	FSkeletonKey GrabbedKey;              // skeleton key of grabbed object
+	FBarrageKey GrabbedBarrageKey;        // barrage key (cached for physics ops)
+	FBarrageKey PivotBarrageKey;          // kinematic pivot body (constraint anchor)
+	FBarrageConstraintKey ConstraintKey;  // point constraint between pivot and object
+	float OriginalGravityFactor = 1.f;    // restore on release
+	float GrabbedMass = 0.f;              // kg, cached at grab time
+	float StuckTimer = 0.f;               // accumulates when object can't reach hold point
+	float AcquireTimer = 0.f;             // time since grab started
+	float SmoothedX = 0.f, SmoothedY = 0.f, SmoothedZ = 0.f; // smoothed hold point (prevents pivot velocity spikes)
+	bool bSmoothedInit = false;           // false until first hold point is computed
+	uint8 Phase = 0;                      // 0=Idle, 1=Acquiring, 2=Holding
+
+	void Reset()
+	{
+		GrabbedKey = FSkeletonKey();
+		GrabbedBarrageKey = FBarrageKey();
+		PivotBarrageKey = FBarrageKey();
+		ConstraintKey = FBarrageConstraintKey();
+		OriginalGravityFactor = 1.f;
+		GrabbedMass = 0.f;
+		StuckTimer = AcquireTimer = 0.f;
+		SmoothedX = SmoothedY = SmoothedZ = 0.f;
+		bSmoothedInit = false;
+		Phase = 0;
 	}
 };

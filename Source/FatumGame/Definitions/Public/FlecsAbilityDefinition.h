@@ -20,6 +20,7 @@ enum class EAbilityType : uint8
 	Blink = 2,
 	Mantle = 3,
 	KineticBlast = 4,
+	Telekinesis = 5,
 	MAX UMETA(Hidden)
 };
 
@@ -56,6 +57,71 @@ static_assert(sizeof(FKineticBlastConfig) <= ABILITY_CONFIG_SIZE,
 	"FKineticBlastConfig must fit in FAbilitySlot::ConfigData");
 static_assert(alignof(FKineticBlastConfig) <= 8,
 	"FKineticBlastConfig alignment exceeds ConfigData alignas(8)");
+
+USTRUCT(BlueprintType)
+struct FTelekinesisConfig
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, Category = "Grab", meta = (ClampMin = "100", ClampMax = "5000"))
+	float MaxGrabRange = 1500.f;           // cm
+
+	UPROPERTY(EditAnywhere, Category = "Hold", meta = (ClampMin = "50", ClampMax = "1000"))
+	float HoldDistance = 300.f;            // cm, default hold distance
+
+	UPROPERTY(EditAnywhere, Category = "Hold", meta = (ClampMin = "50", ClampMax = "500"))
+	float MinHoldDistance = 150.f;         // cm
+
+	UPROPERTY(EditAnywhere, Category = "Hold", meta = (ClampMin = "200", ClampMax = "2000"))
+	float MaxHoldDistance = 600.f;         // cm
+
+	UPROPERTY(EditAnywhere, Category = "Hold", meta = (ClampMin = "10", ClampMax = "200"))
+	float ScrollSpeed = 50.f;             // cm per scroll tick
+
+	UPROPERTY(EditAnywhere, Category = "Hold", meta = (ClampMin = "-100", ClampMax = "100"))
+	float VerticalHoldOffset = -30.f;     // cm below crosshair
+
+	UPROPERTY(EditAnywhere, Category = "Grab", meta = (ClampMin = "1", ClampMax = "10000"))
+	float MaxGrabbableMass = 200.f;       // kg
+
+	UPROPERTY(EditAnywhere, Category = "Physics", meta = (ClampMin = "0", ClampMax = "20"))
+	float AngularDamping = 5.f;           // s^-1, damps spinning while held
+
+	UPROPERTY(EditAnywhere, Category = "Mana", meta = (ClampMin = "0.1", ClampMax = "50"))
+	float BaseDrainRate = 8.f;            // mana/sec at reference mass
+
+	UPROPERTY(EditAnywhere, Category = "Mana", meta = (ClampMin = "0.1", ClampMax = "100"))
+	float ReferenceMass = 10.f;           // kg, mass at which multiplier = 1.0
+
+	UPROPERTY(EditAnywhere, Category = "Mana", meta = (ClampMin = "0.1", ClampMax = "2"))
+	float MassExponent = 0.5f;            // sqrt: lighter = cheaper, heavier = costlier
+
+	UPROPERTY(EditAnywhere, Category = "Throw", meta = (ClampMin = "500", ClampMax = "10000"))
+	float ThrowSpeed = 3000.f;            // cm/s
+
+	UPROPERTY(EditAnywhere, Category = "Safety", meta = (ClampMin = "0.5", ClampMax = "10"))
+	float MaxStuckTime = 2.f;             // seconds before auto-release
+
+	UPROPERTY(EditAnywhere, Category = "Safety", meta = (ClampMin = "0.5", ClampMax = "5"))
+	float AcquireTimeout = 1.f;           // seconds to reach hold point
+};
+
+// FTelekinesisConfig lives on the DA (any size). Only mutable runtime data goes into ConfigData.
+// Also caches a const pointer to the DA config for sim-thread read access.
+struct FTelekinesisSlotData
+{
+	const FTelekinesisConfig* Config = nullptr; // 8 bytes — immutable DA pointer
+	float CurrentHoldDistance = 300.f;
+	float MinHoldDistance = 150.f;
+	float MaxHoldDistance = 600.f;
+	float ScrollSpeed = 50.f;
+	// = 24 bytes total
+};
+
+static_assert(sizeof(FTelekinesisSlotData) <= ABILITY_CONFIG_SIZE,
+	"FTelekinesisSlotData must fit in FAbilitySlot::ConfigData");
+static_assert(alignof(FTelekinesisSlotData) <= 8,
+	"FTelekinesisSlotData alignment exceeds ConfigData alignas(8)");
 
 // ── Ability Definition Data Asset ──
 
@@ -114,6 +180,10 @@ public:
 		meta = (EditCondition = "bIsKineticBlast", EditConditionHides))
 	FKineticBlastConfig KineticBlastConfig;
 
+	UPROPERTY(EditAnywhere, Category = "Telekinesis",
+		meta = (EditCondition = "bIsTelekinesis", EditConditionHides))
+	FTelekinesisConfig TelekinesisConfig;
+
 #if WITH_EDITORONLY_DATA
 private:
 	// Helper bools for EditCondition (enum == comparison is unreliable in UE meta).
@@ -121,6 +191,9 @@ private:
 
 	UPROPERTY(Transient, meta = (HideInDetailPanel))
 	bool bIsKineticBlast = false;
+
+	UPROPERTY(Transient, meta = (HideInDetailPanel))
+	bool bIsTelekinesis = false;
 
 public:
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;

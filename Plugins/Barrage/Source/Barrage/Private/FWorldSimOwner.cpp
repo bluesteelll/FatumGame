@@ -473,6 +473,29 @@ FBarrageKey FWorldSimOwner::CreateBouncingSphere(FBSphereParams& ToCreate, uint1
 	return FBK;
 }
 
+FBarrageKey FWorldSimOwner::CreateKinematicPivot(const FVector& Position)
+{
+	// Tiny kinematic sphere on DEBRIS layer — no gameplay collision.
+	// Kinematic bodies have MotionProperties in Jolt (only Static lacks them).
+	constexpr float PivotRadius = 0.01f; // 1cm in Jolt meters
+	BodyCreationSettings settings(new SphereShape(PivotRadius),
+		CoordinateUtils::ToJoltCoordinates(FVector3d(Position)),
+		Quat::sIdentity(),
+		EMotionType::Kinematic,
+		Layers::DEBRIS);
+	settings.mIsSensor = true; // no contact events
+	settings.mAllowSleeping = false;
+
+	Body* NewBody = body_interface->CreateBody(settings);
+	if (!NewBody) return FBarrageKey(); // body limit reached
+
+	BodyID BodyIDTemp = NewBody->GetID();
+	AddInternalQueuing(BodyIDTemp, 0);
+	FBarrageKey FBK = GenerateBarrageKeyFromBodyId(BodyIDTemp);
+	BarrageToJoltMapping->insert(FBK, BodyIDTemp);
+	return FBK;
+}
+
 //If you set layer to nonmoving, you should set movement type to nonmoving as well or you're going to have
 //a really terrible time. It's not technically wrong to do this, so we don't throw, but there's no good
 //reason I can think of. At this API level, intended for extremely advanced users,
