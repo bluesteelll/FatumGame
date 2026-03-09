@@ -35,7 +35,7 @@ static FVector ComputeHoldPoint(const FVector& CamLoc, const FVector& CamDir,
 
 /** Exponentially smooth the hold point to prevent pivot velocity spikes.
  *  On first call (bSmoothedInit=false), snaps to target. */
-static FVector SmoothHoldPoint(FTelekinesisState& State, const FVector& Target, float DT)
+static FVector SmoothHoldPoint(FTelekinesisState& State, const FVector& Target, float DT, float InterpSpeed)
 {
 	if (!State.bSmoothedInit)
 	{
@@ -46,7 +46,6 @@ static FVector SmoothHoldPoint(FTelekinesisState& State, const FVector& Target, 
 		return Target;
 	}
 
-	constexpr float InterpSpeed = 20.f; // higher = more responsive, lower = smoother
 	const float Alpha = FMath::Clamp(1.f - FMath::Exp(-InterpSpeed * DT), 0.f, 1.f);
 	State.SmoothedX = FMath::Lerp(State.SmoothedX, static_cast<float>(Target.X), Alpha);
 	State.SmoothedY = FMath::Lerp(State.SmoothedY, static_cast<float>(Target.Y), Alpha);
@@ -375,7 +374,7 @@ EAbilityTickResult TickTelekinesis(FAbilityTickContext& Ctx, FAbilitySlot& Slot)
 		const FVector ObjPos(FBarragePrimitive::GetPosition(Prim));
 		const FVector ClampedPoint = ClampHoldPointByRaycast(Ctx.Barrage,
 			ObjPos, DesiredHoldPoint, State->GrabbedBarrageKey);
-		const FVector HoldPoint = SmoothHoldPoint(*State, ClampedPoint, DT);
+		const FVector HoldPoint = SmoothHoldPoint(*State, ClampedPoint, DT, Config->HoldPointInterpSpeed);
 
 		// Move pivot toward smoothed+clamped hold point — no velocity spikes
 		Ctx.Barrage->MoveKinematicBody(State->PivotBarrageKey, HoldPoint, DT);
@@ -437,7 +436,7 @@ EAbilityTickResult TickTelekinesis(FAbilityTickContext& Ctx, FAbilitySlot& Slot)
 		const FVector ObjPos(FBarragePrimitive::GetPosition(Prim));
 		const FVector ClampedPoint = ClampHoldPointByRaycast(Ctx.Barrage,
 			ObjPos, DesiredHoldPoint, State->GrabbedBarrageKey);
-		const FVector HoldPoint = SmoothHoldPoint(*State, ClampedPoint, DT);
+		const FVector HoldPoint = SmoothHoldPoint(*State, ClampedPoint, DT, Config->HoldPointInterpSpeed);
 
 		// Move pivot — smoothed+clamped so no velocity spikes and no wall penetration
 		Ctx.Barrage->MoveKinematicBody(State->PivotBarrageKey, HoldPoint, DT);

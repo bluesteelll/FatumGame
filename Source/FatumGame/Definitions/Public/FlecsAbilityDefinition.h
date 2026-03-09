@@ -104,6 +104,9 @@ struct FTelekinesisConfig
 
 	UPROPERTY(EditAnywhere, Category = "Safety", meta = (ClampMin = "0.5", ClampMax = "5"))
 	float AcquireTimeout = 1.f;           // seconds to reach hold point
+
+	UPROPERTY(EditAnywhere, Category = "Physics", meta = (ClampMin = "1", ClampMax = "100"))
+	float HoldPointInterpSpeed = 20.f;    // higher = more responsive, lower = smoother (prevents pivot jitter)
 };
 
 // FTelekinesisConfig lives on the DA (any size). Only mutable runtime data goes into ConfigData.
