@@ -77,6 +77,7 @@ struct FCharacterStateAtomics
 	FAtomicOneShot              Teleported;    // sim fires, game consumes → position snap
 	TAtomicLatestWins<uint8>    MantleType;    // 0=Vault, 1=Mantle, 2=LedgeGrab
 	FAtomicState                TelekinesisActive; // sim→game: holding an object
+	FAtomicState                ClimbActive;       // sim→game: climbing a ladder
 };
 
 // ═══════════════════════════════════════════════════════════════════════════

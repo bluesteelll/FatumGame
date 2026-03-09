@@ -25,6 +25,8 @@
 #include "FlecsAbilityLoadout.h"
 #include "FlecsResourceTypes.h"
 #include "FlecsResourcePoolProfile.h"
+#include "FlecsClimbProfile.h"
+#include "FlecsClimbableComponents.h"
 
 // ═══════════════════════════════════════════════════════════════
 // ENTITY PREFAB REGISTRY IMPLEMENTATION
@@ -100,6 +102,22 @@ flecs::entity UFlecsArtillerySubsystem::GetOrCreateEntityPrefab(UFlecsEntityDefi
 	if (EntityDefinition->ResourcePoolProfile)
 		Prefab.set<FResourcePools>(FResourcePools::FromProfile(EntityDefinition->ResourcePoolProfile));
 
+	if (UFlecsClimbProfile* ClimbProf = EntityDefinition->ClimbProfile)
+	{
+		FClimbableStatic CS;
+		CS.Height = ClimbProf->LadderHeight / 100.f;  // cm → Jolt meters
+		CS.StandoffDist = ClimbProf->StandoffDistance / 100.f;
+		CS.ClimbSpeed = ClimbProf->ClimbSpeed / 100.f;
+		CS.ClimbSpeedDown = ClimbProf->ClimbSpeedDown / 100.f;
+		CS.JumpOffHorizontalSpeed = ClimbProf->JumpOffHorizontalSpeed / 100.f;
+		CS.JumpOffVerticalSpeed = ClimbProf->JumpOffVerticalSpeed / 100.f;
+		CS.EnterLerpDuration = ClimbProf->EnterLerpDuration;
+		CS.TopDismountDuration = ClimbProf->TopDismountDuration;
+		CS.TopDismountForwardDist = ClimbProf->TopDismountForwardDistance / 100.f;
+		Prefab.set<FClimbableStatic>(CS);
+		Prefab.add<FTagClimbable>();
+	}
+
 	// FHealthInstance on prefab: inherited by instances via is_a().
 	// First get_mut<FHealthInstance>() creates per-entity mutable copy (copy-on-write).
 	// All mutation paths (DamageObserver, HealEntity) MUST use get_mut/try_get_mut.
@@ -116,7 +134,7 @@ flecs::entity UFlecsArtillerySubsystem::GetOrCreateEntityPrefab(UFlecsEntityDefi
 	// Store in registry
 	EntityPrefabs.Add(EntityDefinition, Prefab);
 
-	UE_LOG(LogTemp, Log, TEXT("Created entity prefab: '%s' (Health=%d, Damage=%d, Projectile=%d, Container=%d, Item=%d, Weapon=%d, Interaction=%d, Destructible=%d, Door=%d, Movement=%d, Ability=%d, Resources=%d)"),
+	UE_LOG(LogTemp, Log, TEXT("Created entity prefab: '%s' (Health=%d, Damage=%d, Projectile=%d, Container=%d, Item=%d, Weapon=%d, Interaction=%d, Destructible=%d, Door=%d, Movement=%d, Ability=%d, Resources=%d, Climb=%d)"),
 		*EntityDefinition->GetName(),
 		EntityDefinition->HealthProfile != nullptr,
 		EntityDefinition->DamageProfile != nullptr,
@@ -129,7 +147,8 @@ flecs::entity UFlecsArtillerySubsystem::GetOrCreateEntityPrefab(UFlecsEntityDefi
 		EntityDefinition->DoorProfile != nullptr,
 		EntityDefinition->MovementProfile != nullptr,
 		EntityDefinition->AbilityLoadout != nullptr,
-		EntityDefinition->ResourcePoolProfile != nullptr);
+		EntityDefinition->ResourcePoolProfile != nullptr,
+		EntityDefinition->ClimbProfile != nullptr);
 
 	return Prefab;
 }

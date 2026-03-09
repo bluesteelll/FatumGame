@@ -76,6 +76,9 @@ struct FMovementStatic
 	float BlinkMinLedgeDepth = 15.f;         // cm, min ledge depth for wall snap
 	bool bBlinkAllowAirTarget = true;        // allow teleport into air
 	float BlinkAimTimeDilation = 0.3f;       // time scale during aim
+	// Climb detection
+	float LadderGrabRadius = 30.f;           // cm, SphereCast radius
+	float LadderGrabReach = 80.f;            // cm, SphereCast distance
 };
 
 // INSTANCE component: per character, mutable state set via EnqueueCommand from game thread.

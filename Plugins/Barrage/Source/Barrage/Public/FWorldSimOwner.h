@@ -695,6 +695,22 @@ public:
 		body_interface->ActivateBodiesInAABox(Bounds, JPH::BroadPhaseLayerFilter(), JPH::ObjectLayerFilter());
 	}
 	
+	bool GetBodyWorldBoundsJolt(FBarrageKey BarrageKey, JPH::Vec3& OutMin, JPH::Vec3& OutMax) const
+	{
+		if (!body_interface || !physics_system) return false;
+
+		JPH::BodyID BodyID;
+		if (!GetBodyIDOrDefault(BarrageKey, BodyID) || BodyID.IsInvalid()) return false;
+
+		JPH::BodyLockRead lock(physics_system->GetBodyLockInterfaceNoLock(), BodyID);
+		if (!lock.Succeeded()) return false;
+
+		JPH::AABox Bounds = lock.GetBody().GetWorldSpaceBounds();
+		OutMin = Bounds.mMin;
+		OutMax = Bounds.mMax;
+		return true;
+	}
+
 	FBarrageKey GenerateBarrageKeyFromBodyId(const JPH::BodyID& Input) const;
 	FBarrageKey GenerateBarrageKeyFromBodyId(const uint32 RawIndexAndSequenceNumberInput) const;
 	~FWorldSimOwner();

@@ -35,6 +35,7 @@ void InitAbilityTickFunctions()
 	GAbilityTickFunctions[static_cast<int32>(EAbilityTypeId::Mantle)] = &TickMantle;
 	GAbilityTickFunctions[static_cast<int32>(EAbilityTypeId::KineticBlast)] = &TickKineticBlast;
 	GAbilityTickFunctions[static_cast<int32>(EAbilityTypeId::Telekinesis)] = &TickTelekinesis;
+	GAbilityTickFunctions[static_cast<int32>(EAbilityTypeId::Climb)] = &TickClimb;
 }
 
 // ═══════════════════════════════════════════════════════════════

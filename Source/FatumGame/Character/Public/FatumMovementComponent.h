@@ -97,7 +97,7 @@ public:
 	/** Tick posture, capsule management, and camera effects.
 	 *  Called from AFlecsCharacter::Tick() AFTER velocity/GS are fed, BEFORE camera update.
 	 *  Ability state bools come from sim-thread atomics (read by AFlecsCharacter). */
-	void TickPostureAndEffects(float DeltaTime, bool bSliding, bool bMantling, bool bHanging, uint8 MantleType);
+	void TickPostureAndEffects(float DeltaTime, bool bSliding, bool bMantling, bool bHanging, uint8 MantleType, bool bClimbing = false);
 
 	/** Access PostureSM for external posture queries. */
 	FPostureStateMachine& GetPostureSM() { return PostureSM; }

@@ -492,6 +492,15 @@ void UBarrageDispatch::ActivateBodiesAroundBody(FBarrageKey BodyKey, float Expan
 	}
 }
 
+bool UBarrageDispatch::GetBodyWorldBoundsJolt(FBarrageKey BarrageKey, JPH::Vec3& OutMin, JPH::Vec3& OutMax) const
+{
+	if (JoltGameSim)
+	{
+		return JoltGameSim->GetBodyWorldBoundsJolt(BarrageKey, OutMin, OutMax);
+	}
+	return false;
+}
+
 // ============================================================
 // Constraint API Implementation
 // ============================================================

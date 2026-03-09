@@ -243,6 +243,7 @@ void AFlecsCharacter::InitECSRegistration()
 		Entity.set<FBlinkState>(FBlinkState{});
 		Entity.set<FMantleState>(FMantleState{});
 		{ FTelekinesisState TKState; Entity.set<FTelekinesisState>(TKState); }
+		Entity.set<FClimbState>(FClimbState{});
 
 		FlecsWorld->defer_end();
 
@@ -428,7 +429,8 @@ void AFlecsCharacter::TickPostureAndResnap(float DeltaTime)
 		StateAtomics->SlideActive.Read(),
 		StateAtomics->MantleActive.Read(),
 		StateAtomics->Hanging.Read(),
-		StateAtomics->MantleType.Read());
+		StateAtomics->MantleType.Read(),
+		StateAtomics->ClimbActive.Read());
 
 	// If posture changed capsule while grounded, re-snap FeetToActorOffset
 	// and re-set actor location (step 1 used pre-posture capsule HH).

@@ -83,3 +83,58 @@ struct FTelekinesisState
 		Phase = 0;
 	}
 };
+
+struct FClimbState
+{
+	// Ladder geometry (Jolt coords, Y=up, meters)
+	float LadderBottomY = 0.f;
+	float LadderTopY = 0.f;
+	float LadderX = 0.f;
+	float LadderZ = 0.f;
+	float FaceNormalX = 0.f;
+	float FaceNormalZ = 1.f;
+	float StandoffDist = 0.35f;
+	float ClimbSpeed = 2.0f;
+	float ClimbSpeedDown = 2.5f;
+	float JumpOffHSpeed = 4.0f;
+	float JumpOffVSpeed = 3.5f;
+	float TopDismountDuration = 0.2f;
+	float TopDismountForwardDist = 0.5f;
+
+	// Runtime state
+	uint8 Phase = 0;        // 0=Enter, 1=Active, 2=JumpOff, 3=TopDismount
+	float PhaseTimer = 0.f;
+	float EnterLerpDuration = 0.15f;
+	float CurrentY = 0.f;   // current height on ladder (Jolt Y)
+
+	// Enter lerp start position (Jolt coords)
+	float EnterStartX = 0.f;
+	float EnterStartY = 0.f;
+	float EnterStartZ = 0.f;
+
+	// Top dismount start/end (Jolt coords)
+	float DismountStartX = 0.f;
+	float DismountStartY = 0.f;
+	float DismountStartZ = 0.f;
+	float DismountEndX = 0.f;
+	float DismountEndY = 0.f;
+	float DismountEndZ = 0.f;
+
+	void Reset()
+	{
+		Phase = 0;
+		PhaseTimer = 0.f;
+		CurrentY = 0.f;
+		LadderBottomY = LadderTopY = 0.f;
+		LadderX = LadderZ = 0.f;
+		FaceNormalX = 0.f; FaceNormalZ = 1.f;
+		StandoffDist = 0.35f;
+		ClimbSpeed = 2.0f; ClimbSpeedDown = 2.5f;
+		JumpOffHSpeed = 4.0f; JumpOffVSpeed = 3.5f;
+		TopDismountDuration = 0.2f; TopDismountForwardDist = 0.5f;
+		EnterLerpDuration = 0.15f;
+		EnterStartX = EnterStartY = EnterStartZ = 0.f;
+		DismountStartX = DismountStartY = DismountStartZ = 0.f;
+		DismountEndX = DismountEndY = DismountEndZ = 0.f;
+	}
+};

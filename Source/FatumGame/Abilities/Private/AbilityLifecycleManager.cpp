@@ -57,6 +57,9 @@ static void DispatchSlotTick(FAbilityTickContext& Ctx, FAbilitySystem* AbilSys, 
 						ReleaseTelekinesisObject(*TK, Ctx, false, SD ? SD->Config : nullptr, &Slot);
 					}
 					break;
+				case EAbilityTypeId::Climb:
+					if (auto* CS = Ctx.Entity.try_get_mut<FClimbState>()) CS->Reset();
+					break;
 				default: break;
 				}
 				AbilSys->DeactivateSlot(i);
@@ -270,6 +273,14 @@ FAbilityTickResults TickAbilities(
 			{
 				Results.bTelekinesisActive = true;
 			}
+		}
+	}
+	{
+		int32 ClimbIdx = AbilSys->FindSlotByType(EAbilityTypeId::Climb);
+		if (ClimbIdx != INDEX_NONE && AbilSys->IsSlotActive(ClimbIdx))
+		{
+			Results.bClimbing = true;
+			Results.bAnyMovementAbility = true;
 		}
 	}
 

@@ -21,6 +21,7 @@ class UFlecsDoorProfile;
 class UFlecsMovementProfile;
 class UFlecsAbilityLoadout;
 class UFlecsResourcePoolProfile;
+class UFlecsClimbProfile;
 
 /**
  * Unified entity definition - a preset combining multiple profiles.
@@ -129,6 +130,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Instanced, Category = "Profiles")
 	TObjectPtr<UFlecsResourcePoolProfile> ResourcePoolProfile;
 
+	/** Climb profile — makes entity climbable (ladder, vine) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Instanced, Category = "Profiles")
+	TObjectPtr<UFlecsClimbProfile> ClimbProfile;
+
 	// ═══════════════════════════════════════════════════════════════
 	// DEFAULT TAGS
 	// ═══════════════════════════════════════════════════════════════
@@ -182,7 +187,8 @@ public:
 			|| DoorProfile != nullptr
 			|| MovementProfile != nullptr
 			|| AbilityLoadout != nullptr
-			|| ResourcePoolProfile != nullptr;
+			|| ResourcePoolProfile != nullptr
+			|| ClimbProfile != nullptr;
 	}
 
 	/** Check if this will create a world entity (physics or render) */
@@ -211,6 +217,9 @@ public:
 
 	/** Check if this is a door */
 	bool IsDoor() const { return DoorProfile != nullptr; }
+
+	/** Check if this is climbable */
+	bool IsClimbable() const { return ClimbProfile != nullptr; }
 
 	virtual FPrimaryAssetId GetPrimaryAssetId() const override
 	{

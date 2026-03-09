@@ -146,6 +146,9 @@ public:
 	/** Synchronously zero both linear and angular velocity. Use from sim thread for pool body reset. */
 	void ResetBodyVelocities(FBarrageKey BarrageKey);
 
+	/** Get body AABB in Jolt coordinates (meters, Y-up). Returns false if body not found. */
+	bool GetBodyWorldBoundsJolt(FBarrageKey BarrageKey, JPH::Vec3& OutMin, JPH::Vec3& OutMax) const;
+
 	/** Get angular velocity (Jolt rad/s, Jolt axes). Use from sim thread. */
 	FVector3d GetBodyAngularVelocity(FBarrageKey BarrageKey);
 

@@ -43,6 +43,7 @@
 #include "FlecsAbilityStates.h"
 #include "FlecsResourceTypes.h"
 #include "AbilityTickFunctions.h"
+#include "FlecsClimbableComponents.h"
 
 // ═══════════════════════════════════════════════════════════════
 // COMPONENT REGISTRATION
@@ -132,6 +133,7 @@ void UFlecsArtillerySubsystem::RegisterFlecsComponents()
 	World.component<FBlinkState>();
 	World.component<FMantleState>();
 	World.component<FTelekinesisState>();
+	World.component<FClimbState>();
 	World.component<FResourcePools>();
 	World.component<FTagTelekinesisHeld>();
 
@@ -167,6 +169,12 @@ void UFlecsArtillerySubsystem::RegisterFlecsComponents()
 	World.component<FDoorTriggerLink>();
 	World.component<FTagDoor>();
 	World.component<FTagDoorTrigger>();
+
+	// ─────────────────────────────────────────────────────────
+	// CLIMBING COMPONENTS
+	// ─────────────────────────────────────────────────────────
+	World.component<FClimbableStatic>();
+	World.component<FTagClimbable>();
 }
 
 // ═══════════════════════════════════════════════════════════════

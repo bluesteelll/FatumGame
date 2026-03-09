@@ -53,7 +53,7 @@ void UFatumMovementComponent::TickComponent(float DeltaTime, ELevelTick TickType
 // ═══════════════════════════════════════════════════════════════════════════
 
 void UFatumMovementComponent::TickPostureAndEffects(float DeltaTime,
-	bool bSliding, bool bMantling, bool bHanging, uint8 MantleType)
+	bool bSliding, bool bMantling, bool bHanging, uint8 MantleType, bool bClimbing)
 {
 	if (!MovementProfile) return;
 
@@ -66,7 +66,7 @@ void UFatumMovementComponent::TickPostureAndEffects(float DeltaTime,
 	ACharacter* Char = GetCharacterOwner();
 	if (!Char) return;
 
-	const bool bAbilityOwnsPosture = bSliding || bMantling;
+	const bool bAbilityOwnsPosture = bSliding || bMantling || bClimbing;
 
 	// ── Slide capsule management ──
 	if (bSliding && !bPrevSliding)

@@ -24,6 +24,7 @@
 #include "FlecsAbilityTypes.h"
 #include "FlecsAbilityStates.h"
 #include "FlecsResourceTypes.h"
+#include "FlecsClimbableComponents.h"
 
 // ═══════════════════════════════════════════════════════════════
 // CHARACTER PHYSICS BRIDGE
@@ -215,6 +216,159 @@ static bool TryActivateMantle(flecs::entity Entity, FBCharacterBase* FBChar,
 }
 
 // ═══════════════════════════════════════════════════════════════
+// CLIMB ACTIVATION HELPERS (sim thread)
+// ═══════════════════════════════════════════════════════════════
+
+/** Try to activate climb on sim thread. SphereCasts forward for a climbable entity,
+ *  populates FClimbState, activates Climb ability slot.
+ *  Returns true if climb was activated. */
+static bool TryActivateClimb(flecs::entity Entity, FBCharacterBase* FBChar,
+                              const FMovementStatic* MS, const FCharacterInputAtomics* Input,
+                              UBarrageDispatch* Barrage, FSkeletonKey CharKey)
+{
+	// Check if climb slot exists and is inactive
+	FAbilitySystem* AbilSys = Entity.try_get_mut<FAbilitySystem>();
+	if (!AbilSys) return false;
+	int32 ClimbIdx = AbilSys->FindSlotByType(EAbilityTypeId::Climb);
+	if (ClimbIdx == INDEX_NONE) return false;
+	if (AbilSys->IsSlotActive(ClimbIdx)) return false;
+
+	// Resource cost check
+	FAbilitySlot& ClimbSlot = AbilSys->Slots[ClimbIdx];
+	if (ClimbSlot.HasActivationCosts())
+	{
+		FResourcePools* Pools = Entity.try_get_mut<FResourcePools>();
+		if (!Pools || !CheckActivationCosts(*Pools, ClimbSlot)) return false;
+	}
+
+	// Read camera direction from atomics for SphereCast direction
+	FVector CamDir(
+		Input->CamDirX.Read(),
+		Input->CamDirY.Read(),
+		Input->CamDirZ.Read());
+	FVector HorizFwd = FVector(CamDir.X, CamDir.Y, 0.f).GetSafeNormal();
+	if (HorizFwd.IsNearlyZero()) return false;
+
+	// Get character chest position (UE coords for SphereCast API)
+	JPH::Vec3 JoltPos = FBChar->mCharacter->GetPosition();
+	FVector3d FeetPosD = CoordinateUtils::FromJoltCoordinatesD(JoltPos);
+	FVector FeetPos(FeetPosD);
+	FVector ChestPos = FeetPos + FVector(0, 0, MS->StandingEyeHeight);
+
+	// SphereCast forward from chest
+	double JoltSphereR = MS->LadderGrabRadius / 100.0; // cm -> Jolt meters
+	FastIncludeObjectLayerFilter ObjFilter({EPhysicsLayer::NON_MOVING, EPhysicsLayer::MOVING});
+	auto BPFilter = Barrage->GetDefaultBroadPhaseLayerFilter(Layers::CAST_QUERY);
+	FBarrageKey BodyKey = Barrage->GetBarrageKeyFromSkeletonKey(CharKey);
+	auto BodyFilter = Barrage->GetFilterToIgnoreSingleBody(BodyKey);
+
+	TSharedPtr<FHitResult> Hit = MakeShared<FHitResult>();
+	Barrage->SphereCast(JoltSphereR, MS->LadderGrabReach, ChestPos, HorizFwd,
+	                    Hit, BPFilter, ObjFilter, BodyFilter);
+
+	if (!Hit->bBlockingHit) return false;
+
+	// Resolve hit to Flecs entity via Barrage key
+	FBarrageKey HitBarrageKey = Barrage->GetBarrageKeyFromFHitResult(Hit);
+	if (HitBarrageKey.KeyIntoBarrage == 0) return false;
+
+	FBLet Prim = Barrage->GetShapeRef(HitBarrageKey);
+	if (!FBarragePrimitive::IsNotNull(Prim)) return false;
+
+	uint64 FlecsId = Prim->GetFlecsEntity();
+	if (FlecsId == 0) return false;
+
+	flecs::world World = Entity.world();
+	flecs::entity HitEntity = World.entity(FlecsId);
+	if (!HitEntity.is_alive()) return false;
+	if (!HitEntity.has<FTagClimbable>()) return false;
+
+	const FClimbableStatic* Ladder = HitEntity.try_get<FClimbableStatic>();
+	if (!Ladder) return false;
+
+	// Compute ladder geometry from physics body AABB + hit normal
+	// AABB auto-detects ladder height from actual physics body bounds
+	JPH::Vec3 AABBMin, AABBMax;
+	if (!Barrage->GetBodyWorldBoundsJolt(HitBarrageKey, AABBMin, AABBMax))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("TryActivateClimb: Failed to get body AABB"));
+		return false;
+	}
+
+	float LadderBottomY = AABBMin.GetY();
+	float LadderTopY = AABBMax.GetY();
+	float LadderCenterX = (AABBMin.GetX() + AABBMax.GetX()) * 0.5f;
+	float LadderCenterZ = (AABBMin.GetZ() + AABBMax.GetZ()) * 0.5f;
+
+	// Offset bottom up by character half-height so capsule center stays above floor
+	float CharHalfHeightJolt = MS->StandingHalfHeight / 100.f;
+	LadderBottomY += CharHalfHeightJolt;
+
+	// Offset top down slightly so character doesn't overshoot
+	LadderTopY -= 0.05f;
+
+	UE_LOG(LogTemp, Log, TEXT("TryActivateClimb: Found ladder! AABB Y=[%.2f, %.2f] CharHH=%.2f -> ClimbRange=[%.2f, %.2f]"),
+		AABBMin.GetY(), AABBMax.GetY(), CharHalfHeightJolt, LadderBottomY, LadderTopY);
+
+	if (LadderTopY <= LadderBottomY)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("TryActivateClimb: Ladder too short after offsets"));
+		return false;
+	}
+
+	// Face normal: SphereCast ImpactNormal points from ladder surface toward character (UE coords)
+	// Project to horizontal and convert UE→Jolt (UE X→Jolt X, UE Y→Jolt Z)
+	FVector HitNormal2D = FVector(Hit->ImpactNormal.X, Hit->ImpactNormal.Y, 0.f).GetSafeNormal();
+	if (HitNormal2D.IsNearlyZero()) return false;
+	float FaceNX = static_cast<float>(HitNormal2D.X);  // UE X → Jolt X
+	float FaceNZ = static_cast<float>(HitNormal2D.Y);  // UE Y → Jolt Z
+
+	// Populate FClimbState (permanent component)
+	FClimbState* Climb = Entity.try_get_mut<FClimbState>();
+	checkf(Climb, TEXT("TryActivateClimb: FClimbState missing on entity"));
+
+	Climb->LadderBottomY = LadderBottomY;
+	Climb->LadderTopY = LadderTopY;
+	Climb->LadderX = LadderCenterX;
+	Climb->LadderZ = LadderCenterZ;
+	Climb->FaceNormalX = FaceNX;
+	Climb->FaceNormalZ = FaceNZ;
+	Climb->StandoffDist = Ladder->StandoffDist;
+	Climb->ClimbSpeed = Ladder->ClimbSpeed;
+	Climb->ClimbSpeedDown = Ladder->ClimbSpeedDown;
+	Climb->JumpOffHSpeed = Ladder->JumpOffHorizontalSpeed;
+	Climb->JumpOffVSpeed = Ladder->JumpOffVerticalSpeed;
+	Climb->EnterLerpDuration = Ladder->EnterLerpDuration;
+	Climb->TopDismountDuration = Ladder->TopDismountDuration;
+	Climb->TopDismountForwardDist = Ladder->TopDismountForwardDist;
+
+	// Enter lerp start = current Jolt position
+	Climb->EnterStartX = JoltPos.GetX();
+	Climb->EnterStartY = JoltPos.GetY();
+	Climb->EnterStartZ = JoltPos.GetZ();
+
+	// Start climb at current Y position, clamped to ladder range
+	Climb->CurrentY = FMath::Clamp(JoltPos.GetY(), LadderBottomY, LadderTopY);
+
+	Climb->Phase = 0; // Enter
+	Climb->PhaseTimer = 0.f;
+
+	// Zero velocity before entering climb
+	FBChar->mCharacter->SetLinearVelocity(JPH::Vec3::sZero());
+	FBChar->mLocomotionUpdate = JPH::Vec3::sZero();
+
+	// Commit resource costs
+	if (ClimbSlot.HasActivationCosts())
+	{
+		FResourcePools* Pools = Entity.try_get_mut<FResourcePools>();
+		if (Pools) CommitActivationCosts(*Pools, ClimbSlot);
+	}
+
+	AbilSys->ActivateSlot(ClimbIdx);
+	return true;
+}
+
+// ═══════════════════════════════════════════════════════════════
 // PREPARE CHARACTER STEP (sim thread, before StackUp)
 // ═══════════════════════════════════════════════════════════════
 
@@ -328,6 +482,7 @@ void UFlecsArtillerySubsystem::PrepareCharacterStep(float RealDT, float DilatedD
 		Bridge.StateAtomics->SlideActive.Write(bSliding);
 		Bridge.StateAtomics->BlinkAiming.Write(AbilityResults.bBlinkAiming);
 		Bridge.StateAtomics->TelekinesisActive.Write(AbilityResults.bTelekinesisActive);
+		Bridge.StateAtomics->ClimbActive.Write(AbilityResults.bClimbing);
 
 		if (AbilityResults.bBlinkTeleported)
 		{
@@ -339,13 +494,31 @@ void UFlecsArtillerySubsystem::PrepareCharacterStep(float RealDT, float DilatedD
 			bJumpPressed = false;
 
 		// ── 4. Skip to timers if any movement ability is active ──
-		if (AbilityResults.bMantling || bSliding || AbilityResults.bBlinkTeleported)
+		if (AbilityResults.bMantling || bSliding || AbilityResults.bBlinkTeleported
+			|| AbilityResults.bClimbing || AbilityResults.bBlinkAiming)
 			goto TickTimers;
 
 		{
 			// ── 5. No movement ability active — check activations ──
 
-			// 5a. Jump → try mantle detection → if found → activate mantle slot
+			// 5a. Climb detection: walk/jump into a ladder → auto-grab
+			// Activates when moving forward with input (ground or airborne)
+			{
+				float InputLen = FMath::Sqrt(DirX * DirX + DirZ * DirZ);
+				if (InputLen > 0.3f && CachedBarrageDispatch)
+				{
+					bool bClimbCreated = TryActivateClimb(Bridge.Entity, FBChar, MS,
+					                                      Input, CachedBarrageDispatch,
+					                                      Bridge.CharacterKey);
+					if (bClimbCreated)
+					{
+						Bridge.StateAtomics->ClimbActive.Write(true);
+						goto TickTimers;
+					}
+				}
+			}
+
+			// 5b. Jump → try mantle detection → if found → activate mantle slot
 			if (bJumpPressed)
 			{
 				bool bMantleCreated = false;
@@ -364,7 +537,7 @@ void UFlecsArtillerySubsystem::PrepareCharacterStep(float RealDT, float DilatedD
 					goto TickTimers;
 				}
 
-				// 5b. No mantle → normal jump (with coyote time)
+				// 5c. No mantle → normal jump (with coyote time)
 				if (SimState && (bOnGround || SimState->CoyoteTimer > 0.f))
 				{
 					float JumpVel = (State && State->Posture == 1) ? MS->CrouchJumpVelocity : MS->JumpVelocity;
@@ -381,7 +554,7 @@ void UFlecsArtillerySubsystem::PrepareCharacterStep(float RealDT, float DilatedD
 				}
 			}
 
-			// 5c. Crouch press + sprint + ground + speed → slide activation (via AbilitySystem)
+			// 5d. Crouch press + sprint + ground + speed → slide activation (via AbilitySystem)
 			{
 				FAbilitySystem* AbilSys = Bridge.Entity.try_get_mut<FAbilitySystem>();
 				if (AbilSys && bCrouchEdge && bSprinting && bOnGround)
