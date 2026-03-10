@@ -138,3 +138,64 @@ struct FClimbState
 		DismountEndX = DismountEndY = DismountEndZ = 0.f;
 	}
 };
+
+struct FRopeSwingState
+{
+	// Anchor point (Jolt coords, Y=up, meters)
+	float AnchorX = 0.f;
+	float AnchorY = 0.f;
+	float AnchorZ = 0.f;
+
+	// Rope length limits and current (Jolt meters)
+	float CurrentRopeLength = 4.f;
+	float MaxRopeLength = 4.f;
+	float MinGrabLength = 0.5f;
+
+	// Character velocity (Jolt m/s) — maintained manually for pendulum sim
+	float VelX = 0.f;
+	float VelY = 0.f;
+	float VelZ = 0.f;
+
+	// Cached profile params (Jolt units)
+	float SwingGravityMultiplier = 1.5f;
+	float SwingInputStrength = 10.f;
+	float AirDragCoefficient = 0.3f;
+	float ClimbDragMultiplier = 3.f;
+	float ClimbSpeedUp = 1.5f;
+	float ClimbSpeedDown = 2.f;
+	float JumpOffBoost = 3.5f;
+	float EnterLerpDuration = 0.12f;
+	float TopDismountDuration = 0.2f;
+
+	// Enter lerp start position (Jolt coords)
+	float EnterStartX = 0.f;
+	float EnterStartY = 0.f;
+	float EnterStartZ = 0.f;
+
+	// Runtime state
+	uint8 Phase = 0;        // 0=Enter, 1=Swing, 3=TopDismount
+	float PhaseTimer = 0.f;
+	bool bClimbing = false;  // true when vertical input > threshold (extra drag applied)
+
+	void Reset()
+	{
+		AnchorX = AnchorY = AnchorZ = 0.f;
+		CurrentRopeLength = 4.f;
+		MaxRopeLength = 4.f;
+		MinGrabLength = 0.5f;
+		VelX = VelY = VelZ = 0.f;
+		SwingGravityMultiplier = 1.5f;
+		SwingInputStrength = 10.f;
+		AirDragCoefficient = 0.3f;
+		ClimbDragMultiplier = 3.f;
+		ClimbSpeedUp = 1.5f;
+		ClimbSpeedDown = 2.f;
+		JumpOffBoost = 3.5f;
+		EnterLerpDuration = 0.12f;
+		TopDismountDuration = 0.2f;
+		EnterStartX = EnterStartY = EnterStartZ = 0.f;
+		Phase = 0;
+		PhaseTimer = 0.f;
+		bClimbing = false;
+	}
+};

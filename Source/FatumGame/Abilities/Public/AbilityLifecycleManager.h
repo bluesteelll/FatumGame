@@ -25,6 +25,7 @@ struct FAbilityTickResults
 	uint8 MantleType = 0;             // 0=Vault, 1=Mantle, 2=LedgeGrab
 	bool bTelekinesisActive = false;   // telekinesis holding an object
 	bool bClimbing = false;            // climbing a ladder
+	bool bRopeSwinging = false;        // swinging on a rope
 };
 
 FAbilityTickResults TickAbilities(

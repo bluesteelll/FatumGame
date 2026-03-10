@@ -44,6 +44,7 @@
 #include "FlecsResourceTypes.h"
 #include "AbilityTickFunctions.h"
 #include "FlecsClimbableComponents.h"
+#include "FlecsSwingableComponents.h"
 
 // ═══════════════════════════════════════════════════════════════
 // COMPONENT REGISTRATION
@@ -134,6 +135,7 @@ void UFlecsArtillerySubsystem::RegisterFlecsComponents()
 	World.component<FMantleState>();
 	World.component<FTelekinesisState>();
 	World.component<FClimbState>();
+	World.component<FRopeSwingState>();
 	World.component<FResourcePools>();
 	World.component<FTagTelekinesisHeld>();
 
@@ -175,6 +177,12 @@ void UFlecsArtillerySubsystem::RegisterFlecsComponents()
 	// ─────────────────────────────────────────────────────────
 	World.component<FClimbableStatic>();
 	World.component<FTagClimbable>();
+
+	// ─────────────────────────────────────────────────────────
+	// SWINGABLE COMPONENTS
+	// ─────────────────────────────────────────────────────────
+	World.component<FSwingableStatic>();
+	World.component<FTagSwingable>();
 }
 
 // ═══════════════════════════════════════════════════════════════

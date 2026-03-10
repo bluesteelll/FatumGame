@@ -25,6 +25,7 @@
 #include "FlecsAbilityStates.h"
 #include "FlecsResourceTypes.h"
 #include "FlecsClimbableComponents.h"
+#include "FlecsSwingableComponents.h"
 
 // ═══════════════════════════════════════════════════════════════
 // CHARACTER PHYSICS BRIDGE
@@ -369,6 +370,160 @@ static bool TryActivateClimb(flecs::entity Entity, FBCharacterBase* FBChar,
 }
 
 // ═══════════════════════════════════════════════════════════════
+// ROPE SWING ACTIVATION (sim thread)
+// ═══════════════════════════════════════════════════════════════
+
+/** Try to activate rope swing on sim thread. SphereCasts forward for a swingable entity,
+ *  populates FRopeSwingState, activates RopeSwing ability slot.
+ *  Returns true if swing was activated. */
+static bool TryActivateRopeSwing(flecs::entity Entity, FBCharacterBase* FBChar,
+                                  const FMovementStatic* MS, const FCharacterInputAtomics* Input,
+                                  UBarrageDispatch* Barrage, FSkeletonKey CharKey)
+{
+	// Check if swing slot exists and is inactive
+	FAbilitySystem* AbilSys = Entity.try_get_mut<FAbilitySystem>();
+	if (!AbilSys) { UE_LOG(LogTemp, Warning, TEXT("TryActivateRopeSwing: No AbilitySystem")); return false; }
+	int32 SwingIdx = AbilSys->FindSlotByType(EAbilityTypeId::RopeSwing);
+	if (SwingIdx == INDEX_NONE) { UE_LOG(LogTemp, Warning, TEXT("TryActivateRopeSwing: No RopeSwing slot in loadout (SlotCount=%d)"), AbilSys->SlotCount); return false; }
+	if (AbilSys->IsSlotActive(SwingIdx)) return false;
+
+	// Resource cost check
+	FAbilitySlot& SwingSlot = AbilSys->Slots[SwingIdx];
+	if (SwingSlot.HasActivationCosts())
+	{
+		FResourcePools* Pools = Entity.try_get_mut<FResourcePools>();
+		if (!Pools || !CheckActivationCosts(*Pools, SwingSlot)) return false;
+	}
+
+	// Read camera direction from atomics for SphereCast direction
+	FVector CamDir(
+		Input->CamDirX.Read(),
+		Input->CamDirY.Read(),
+		Input->CamDirZ.Read());
+	FVector CamLoc(
+		Input->CamLocX.Read(),
+		Input->CamLocY.Read(),
+		Input->CamLocZ.Read());
+	if (CamDir.IsNearlyZero()) return false;
+	CamDir.Normalize();
+
+	// SphereCast from camera position in look direction
+	// Use same grab radius/reach as ladders
+	double JoltSphereR = MS->LadderGrabRadius / 100.0;
+	FastIncludeObjectLayerFilter ObjFilter({EPhysicsLayer::NON_MOVING, EPhysicsLayer::MOVING});
+	auto BPFilter = Barrage->GetDefaultBroadPhaseLayerFilter(Layers::CAST_QUERY);
+	FBarrageKey BodyKey = Barrage->GetBarrageKeyFromSkeletonKey(CharKey);
+	auto BodyFilter = Barrage->GetFilterToIgnoreSingleBody(BodyKey);
+
+	// Longer reach for ropes than ladders (ropes can be grabbed from further away)
+	float SwingGrabReach = MS->LadderGrabReach * 3.f;
+
+	TSharedPtr<FHitResult> Hit = MakeShared<FHitResult>();
+	Barrage->SphereCast(JoltSphereR, SwingGrabReach, CamLoc, CamDir,
+	                    Hit, BPFilter, ObjFilter, BodyFilter);
+
+	if (!Hit->bBlockingHit)
+	{
+		UE_LOG(LogTemp, Log, TEXT("TryActivateRopeSwing: SphereCast miss (Reach=%.0f, Radius=%.1f, CamDir=[%.2f,%.2f,%.2f])"),
+			SwingGrabReach, JoltSphereR * 100.0, CamDir.X, CamDir.Y, CamDir.Z);
+		return false;
+	}
+
+	// Resolve hit to Flecs entity via Barrage key
+	FBarrageKey HitBarrageKey = Barrage->GetBarrageKeyFromFHitResult(Hit);
+	if (HitBarrageKey.KeyIntoBarrage == 0) { UE_LOG(LogTemp, Log, TEXT("TryActivateRopeSwing: Hit but no BarrageKey")); return false; }
+
+	FBLet Prim = Barrage->GetShapeRef(HitBarrageKey);
+	if (!FBarragePrimitive::IsNotNull(Prim)) { UE_LOG(LogTemp, Log, TEXT("TryActivateRopeSwing: Hit but no Prim")); return false; }
+
+	uint64 FlecsId = Prim->GetFlecsEntity();
+	if (FlecsId == 0) { UE_LOG(LogTemp, Log, TEXT("TryActivateRopeSwing: Hit body has no Flecs entity")); return false; }
+
+	flecs::world World = Entity.world();
+	flecs::entity HitEntity = World.entity(FlecsId);
+	if (!HitEntity.is_alive()) { UE_LOG(LogTemp, Log, TEXT("TryActivateRopeSwing: Hit entity not alive")); return false; }
+	if (!HitEntity.has<FTagSwingable>())
+	{
+		UE_LOG(LogTemp, Log, TEXT("TryActivateRopeSwing: Hit entity %llu but no FTagSwingable (has FTagClimbable=%d)"),
+			FlecsId, HitEntity.has<FTagClimbable>());
+		return false;
+	}
+
+	const FSwingableStatic* SwingStatic = HitEntity.try_get<FSwingableStatic>();
+	if (!SwingStatic) { UE_LOG(LogTemp, Log, TEXT("TryActivateRopeSwing: Has tag but no FSwingableStatic")); return false; }
+
+	// Get anchor point from physics body position (top of body = anchor)
+	JPH::Vec3 AABBMin, AABBMax;
+	if (!Barrage->GetBodyWorldBoundsJolt(HitBarrageKey, AABBMin, AABBMax))
+		return false;
+
+	// Anchor = top center of the swingable body
+	float AnchorX = (AABBMin.GetX() + AABBMax.GetX()) * 0.5f;
+	float AnchorY = AABBMax.GetY(); // top in Jolt Y-up
+	float AnchorZ = (AABBMin.GetZ() + AABBMax.GetZ()) * 0.5f;
+
+	// Character current position
+	JPH::Vec3 JoltPos = FBChar->mCharacter->GetPosition();
+
+	// Compute initial rope length = distance from anchor to character
+	float DX = JoltPos.GetX() - AnchorX;
+	float DY = JoltPos.GetY() - AnchorY;
+	float DZ = JoltPos.GetZ() - AnchorZ;
+	float InitialLength = FMath::Sqrt(DX * DX + DY * DY + DZ * DZ);
+
+	// Clamp rope length to profile limits
+	InitialLength = FMath::Clamp(InitialLength, SwingStatic->MinGrabLength, SwingStatic->MaxRopeLength);
+
+	// Populate FRopeSwingState
+	FRopeSwingState* Swing = Entity.try_get_mut<FRopeSwingState>();
+	checkf(Swing, TEXT("TryActivateRopeSwing: FRopeSwingState missing on entity"));
+
+	Swing->AnchorX = AnchorX;
+	Swing->AnchorY = AnchorY;
+	Swing->AnchorZ = AnchorZ;
+	Swing->CurrentRopeLength = InitialLength;
+	Swing->MaxRopeLength = SwingStatic->MaxRopeLength;
+	Swing->MinGrabLength = SwingStatic->MinGrabLength;
+
+	// Copy profile params
+	Swing->SwingGravityMultiplier = SwingStatic->SwingGravityMultiplier;
+	Swing->SwingInputStrength = SwingStatic->SwingInputStrength;
+	Swing->AirDragCoefficient = SwingStatic->AirDragCoefficient;
+	Swing->ClimbDragMultiplier = SwingStatic->ClimbDragMultiplier;
+	Swing->ClimbSpeedUp = SwingStatic->ClimbSpeedUp;
+	Swing->ClimbSpeedDown = SwingStatic->ClimbSpeedDown;
+	Swing->JumpOffBoost = SwingStatic->JumpOffBoost;
+	Swing->EnterLerpDuration = SwingStatic->EnterLerpDuration;
+	Swing->TopDismountDuration = SwingStatic->TopDismountDuration;
+
+	// Enter lerp start = current Jolt position
+	Swing->EnterStartX = JoltPos.GetX();
+	Swing->EnterStartY = JoltPos.GetY();
+	Swing->EnterStartZ = JoltPos.GetZ();
+
+	Swing->Phase = 0; // Enter
+	Swing->PhaseTimer = 0.f;
+	Swing->VelX = Swing->VelY = Swing->VelZ = 0.f;
+	Swing->bClimbing = false;
+
+	// Zero velocity before entering swing
+	FBChar->mCharacter->SetLinearVelocity(JPH::Vec3::sZero());
+	FBChar->mLocomotionUpdate = JPH::Vec3::sZero();
+
+	// Commit resource costs
+	if (SwingSlot.HasActivationCosts())
+	{
+		FResourcePools* Pools = Entity.try_get_mut<FResourcePools>();
+		if (Pools) CommitActivationCosts(*Pools, SwingSlot);
+	}
+
+	AbilSys->ActivateSlot(SwingIdx);
+	UE_LOG(LogTemp, Log, TEXT("TryActivateRopeSwing: SUCCESS! Anchor=[%.2f,%.2f,%.2f] RopeLen=%.2f"),
+		AnchorX, AnchorY, AnchorZ, InitialLength);
+	return true;
+}
+
+// ═══════════════════════════════════════════════════════════════
 // PREPARE CHARACTER STEP (sim thread, before StackUp)
 // ═══════════════════════════════════════════════════════════════
 
@@ -483,6 +638,7 @@ void UFlecsArtillerySubsystem::PrepareCharacterStep(float RealDT, float DilatedD
 		Bridge.StateAtomics->BlinkAiming.Write(AbilityResults.bBlinkAiming);
 		Bridge.StateAtomics->TelekinesisActive.Write(AbilityResults.bTelekinesisActive);
 		Bridge.StateAtomics->ClimbActive.Write(AbilityResults.bClimbing);
+		Bridge.StateAtomics->RopeSwingActive.Write(AbilityResults.bRopeSwinging);
 
 		if (AbilityResults.bBlinkTeleported)
 		{
@@ -495,7 +651,7 @@ void UFlecsArtillerySubsystem::PrepareCharacterStep(float RealDT, float DilatedD
 
 		// ── 4. Skip to timers if any movement ability is active ──
 		if (AbilityResults.bMantling || bSliding || AbilityResults.bBlinkTeleported
-			|| AbilityResults.bClimbing || AbilityResults.bBlinkAiming)
+			|| AbilityResults.bClimbing || AbilityResults.bRopeSwinging || AbilityResults.bBlinkAiming)
 			goto TickTimers;
 
 		{
@@ -518,9 +674,23 @@ void UFlecsArtillerySubsystem::PrepareCharacterStep(float RealDT, float DilatedD
 				}
 			}
 
-			// 5b. Jump → try mantle detection → if found → activate mantle slot
+			// 5b. Jump → try rope swing → try mantle → normal jump
 			if (bJumpPressed)
 			{
+				// 5b-i. Rope swing: SPACE while looking at swingable entity
+				if (CachedBarrageDispatch)
+				{
+					bool bSwingCreated = TryActivateRopeSwing(Bridge.Entity, FBChar, MS,
+					                                           Input, CachedBarrageDispatch,
+					                                           Bridge.CharacterKey);
+					if (bSwingCreated)
+					{
+						Bridge.StateAtomics->RopeSwingActive.Write(true);
+						goto TickTimers;
+					}
+				}
+
+				// 5b-ii. Mantle detection
 				bool bMantleCreated = false;
 				if (SimState && CachedBarrageDispatch)
 				{

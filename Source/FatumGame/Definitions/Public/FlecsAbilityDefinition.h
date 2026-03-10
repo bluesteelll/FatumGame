@@ -22,6 +22,7 @@ enum class EAbilityType : uint8
 	KineticBlast = 4,
 	Telekinesis = 5,
 	Climb = 6,
+	RopeSwing = 7,
 	MAX UMETA(Hidden)
 };
 

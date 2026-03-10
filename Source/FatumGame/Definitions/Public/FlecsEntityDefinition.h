@@ -22,6 +22,7 @@ class UFlecsMovementProfile;
 class UFlecsAbilityLoadout;
 class UFlecsResourcePoolProfile;
 class UFlecsClimbProfile;
+class UFlecsRopeSwingProfile;
 
 /**
  * Unified entity definition - a preset combining multiple profiles.
@@ -134,6 +135,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Instanced, Category = "Profiles")
 	TObjectPtr<UFlecsClimbProfile> ClimbProfile;
 
+	/** Rope swing profile — makes entity swingable (rope, chain, vine) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Instanced, Category = "Profiles")
+	TObjectPtr<UFlecsRopeSwingProfile> RopeSwingProfile;
+
 	// ═══════════════════════════════════════════════════════════════
 	// DEFAULT TAGS
 	// ═══════════════════════════════════════════════════════════════
@@ -188,7 +193,8 @@ public:
 			|| MovementProfile != nullptr
 			|| AbilityLoadout != nullptr
 			|| ResourcePoolProfile != nullptr
-			|| ClimbProfile != nullptr;
+			|| ClimbProfile != nullptr
+			|| RopeSwingProfile != nullptr;
 	}
 
 	/** Check if this will create a world entity (physics or render) */
@@ -220,6 +226,9 @@ public:
 
 	/** Check if this is climbable */
 	bool IsClimbable() const { return ClimbProfile != nullptr; }
+
+	/** Check if this is swingable */
+	bool IsSwingable() const { return RopeSwingProfile != nullptr; }
 
 	virtual FPrimaryAssetId GetPrimaryAssetId() const override
 	{

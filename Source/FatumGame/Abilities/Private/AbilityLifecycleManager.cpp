@@ -60,6 +60,9 @@ static void DispatchSlotTick(FAbilityTickContext& Ctx, FAbilitySystem* AbilSys, 
 				case EAbilityTypeId::Climb:
 					if (auto* CS = Ctx.Entity.try_get_mut<FClimbState>()) CS->Reset();
 					break;
+				case EAbilityTypeId::RopeSwing:
+					if (auto* RS = Ctx.Entity.try_get_mut<FRopeSwingState>()) RS->Reset();
+					break;
 				default: break;
 				}
 				AbilSys->DeactivateSlot(i);
@@ -280,6 +283,14 @@ FAbilityTickResults TickAbilities(
 		if (ClimbIdx != INDEX_NONE && AbilSys->IsSlotActive(ClimbIdx))
 		{
 			Results.bClimbing = true;
+			Results.bAnyMovementAbility = true;
+		}
+	}
+	{
+		int32 SwingIdx = AbilSys->FindSlotByType(EAbilityTypeId::RopeSwing);
+		if (SwingIdx != INDEX_NONE && AbilSys->IsSlotActive(SwingIdx))
+		{
+			Results.bRopeSwinging = true;
 			Results.bAnyMovementAbility = true;
 		}
 	}

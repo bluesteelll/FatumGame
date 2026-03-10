@@ -27,6 +27,8 @@
 #include "FlecsResourcePoolProfile.h"
 #include "FlecsClimbProfile.h"
 #include "FlecsClimbableComponents.h"
+#include "FlecsRopeSwingProfile.h"
+#include "FlecsSwingableComponents.h"
 
 // ═══════════════════════════════════════════════════════════════
 // ENTITY PREFAB REGISTRY IMPLEMENTATION
@@ -118,6 +120,26 @@ flecs::entity UFlecsArtillerySubsystem::GetOrCreateEntityPrefab(UFlecsEntityDefi
 		Prefab.add<FTagClimbable>();
 	}
 
+	if (UFlecsRopeSwingProfile* SwingProf = EntityDefinition->RopeSwingProfile)
+	{
+		FSwingableStatic SS;
+		SS.MaxRopeLength = SwingProf->MaxRopeLength / 100.f;
+		SS.MinGrabLength = SwingProf->MinGrabLength / 100.f;
+		SS.SwingGravityMultiplier = SwingProf->SwingGravityMultiplier;
+		SS.SwingInputStrength = SwingProf->SwingInputStrength / 100.f;
+		SS.AirDragCoefficient = SwingProf->AirDragCoefficient;
+		SS.ClimbDragMultiplier = SwingProf->ClimbDragMultiplier;
+		SS.ClimbSpeedUp = SwingProf->ClimbSpeedUp / 100.f;
+		SS.ClimbSpeedDown = SwingProf->ClimbSpeedDown / 100.f;
+		SS.JumpOffBoost = SwingProf->JumpOffVerticalBoost / 100.f;
+		SS.EnterLerpDuration = SwingProf->EnterLerpDuration;
+		SS.TopDismountDuration = SwingProf->TopDismountDuration;
+		SS.SwingClimbThreshold = SwingProf->SwingClimbThreshold;
+		SS.VerletSegments = SwingProf->VerletSegments;
+		Prefab.set<FSwingableStatic>(SS);
+		Prefab.add<FTagSwingable>();
+	}
+
 	// FHealthInstance on prefab: inherited by instances via is_a().
 	// First get_mut<FHealthInstance>() creates per-entity mutable copy (copy-on-write).
 	// All mutation paths (DamageObserver, HealEntity) MUST use get_mut/try_get_mut.
@@ -134,7 +156,7 @@ flecs::entity UFlecsArtillerySubsystem::GetOrCreateEntityPrefab(UFlecsEntityDefi
 	// Store in registry
 	EntityPrefabs.Add(EntityDefinition, Prefab);
 
-	UE_LOG(LogTemp, Log, TEXT("Created entity prefab: '%s' (Health=%d, Damage=%d, Projectile=%d, Container=%d, Item=%d, Weapon=%d, Interaction=%d, Destructible=%d, Door=%d, Movement=%d, Ability=%d, Resources=%d, Climb=%d)"),
+	UE_LOG(LogTemp, Log, TEXT("Created entity prefab: '%s' (Health=%d, Damage=%d, Projectile=%d, Container=%d, Item=%d, Weapon=%d, Interaction=%d, Destructible=%d, Door=%d, Movement=%d, Ability=%d, Resources=%d, Climb=%d, Swing=%d)"),
 		*EntityDefinition->GetName(),
 		EntityDefinition->HealthProfile != nullptr,
 		EntityDefinition->DamageProfile != nullptr,
@@ -148,7 +170,8 @@ flecs::entity UFlecsArtillerySubsystem::GetOrCreateEntityPrefab(UFlecsEntityDefi
 		EntityDefinition->MovementProfile != nullptr,
 		EntityDefinition->AbilityLoadout != nullptr,
 		EntityDefinition->ResourcePoolProfile != nullptr,
-		EntityDefinition->ClimbProfile != nullptr);
+		EntityDefinition->ClimbProfile != nullptr,
+		EntityDefinition->RopeSwingProfile != nullptr);
 
 	return Prefab;
 }

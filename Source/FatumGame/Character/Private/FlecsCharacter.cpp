@@ -244,6 +244,7 @@ void AFlecsCharacter::InitECSRegistration()
 		Entity.set<FMantleState>(FMantleState{});
 		{ FTelekinesisState TKState; Entity.set<FTelekinesisState>(TKState); }
 		Entity.set<FClimbState>(FClimbState{});
+		Entity.set<FRopeSwingState>(FRopeSwingState{});
 
 		FlecsWorld->defer_end();
 
