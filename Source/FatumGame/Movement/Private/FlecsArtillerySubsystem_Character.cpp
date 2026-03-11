@@ -43,6 +43,7 @@ void UFlecsArtillerySubsystem::RegisterCharacterBridge(AFlecsCharacter* Characte
 	Bridge.InputAtomics = Character->InputAtomics;
 	Bridge.CharacterKey = Character->CharacterKey;
 	Bridge.StateAtomics = Character->StateAtomics;
+	Bridge.RopeVisualAtomics = Character->RopeVisualAtomics;
 
 	// Resolve Flecs entity for this character (bidirectional binding already set)
 	Bridge.Entity = GetEntityForBarrageKey(Character->CharacterKey);
@@ -495,6 +496,12 @@ static bool TryActivateRopeSwing(flecs::entity Entity, FBCharacterBase* FBChar,
 	Swing->JumpOffBoost = SwingStatic->JumpOffBoost;
 	Swing->EnterLerpDuration = SwingStatic->EnterLerpDuration;
 	Swing->TopDismountDuration = SwingStatic->TopDismountDuration;
+	Swing->VerletSegments = SwingStatic->VerletSegments;
+	Swing->VisualDamping = SwingStatic->VisualDamping;
+	Swing->ConstraintIterations = SwingStatic->ConstraintIterations;
+	Swing->RopeWidthBase = SwingStatic->RopeWidthBase;
+	Swing->RopeWidthTip = SwingStatic->RopeWidthTip;
+	Swing->NiagaraSystem = SwingStatic->NiagaraSystem;
 
 	// Enter lerp start = current Jolt position
 	Swing->EnterStartX = JoltPos.GetX();
@@ -638,7 +645,33 @@ void UFlecsArtillerySubsystem::PrepareCharacterStep(float RealDT, float DilatedD
 		Bridge.StateAtomics->BlinkAiming.Write(AbilityResults.bBlinkAiming);
 		Bridge.StateAtomics->TelekinesisActive.Write(AbilityResults.bTelekinesisActive);
 		Bridge.StateAtomics->ClimbActive.Write(AbilityResults.bClimbing);
-		Bridge.StateAtomics->RopeSwingActive.Write(AbilityResults.bRopeSwinging);
+
+		// ── 3.6. Rope visual atomics (sim→game for Verlet rendering) ──
+		if (Bridge.RopeVisualAtomics)
+		{
+			Bridge.RopeVisualAtomics->bActive.Write(AbilityResults.bRopeSwinging);
+			if (AbilityResults.bRopeSwinging)
+			{
+				const FRopeSwingState* RS = Bridge.Entity.try_get<FRopeSwingState>();
+				if (RS)
+				{
+					// Convert Jolt coords (Y=up, meters) → UE coords (Z=up, cm)
+					// Same as CoordinateUtils::FromJoltCoordinatesD: UE(X,Y,Z) = Jolt(X,Z,Y) * 100
+					Bridge.RopeVisualAtomics->AnchorX.Write(RS->AnchorX * 100.f);
+					Bridge.RopeVisualAtomics->AnchorY.Write(RS->AnchorZ * 100.f);
+					Bridge.RopeVisualAtomics->AnchorZ.Write(RS->AnchorY * 100.f);
+					Bridge.RopeVisualAtomics->RopeLength.Write(RS->CurrentRopeLength * 100.f);
+					Bridge.RopeVisualAtomics->VelX.Write(RS->VelX * 100.f);
+					Bridge.RopeVisualAtomics->VelY.Write(RS->VelZ * 100.f);
+					Bridge.RopeVisualAtomics->VelZ.Write(RS->VelY * 100.f);
+					Bridge.RopeVisualAtomics->Phase.Write(RS->Phase);
+					Bridge.RopeVisualAtomics->SegmentCount.Write(RS->VerletSegments);
+					Bridge.RopeVisualAtomics->VisualDamping.Write(RS->VisualDamping);
+					Bridge.RopeVisualAtomics->ConstraintIterations.Write(RS->ConstraintIterations);
+					Bridge.RopeVisualAtomics->NiagaraSystemPtr.store(RS->NiagaraSystem, std::memory_order_relaxed);
+				}
+			}
+		}
 
 		if (AbilityResults.bBlinkTeleported)
 		{
@@ -685,7 +718,8 @@ void UFlecsArtillerySubsystem::PrepareCharacterStep(float RealDT, float DilatedD
 					                                           Bridge.CharacterKey);
 					if (bSwingCreated)
 					{
-						Bridge.StateAtomics->RopeSwingActive.Write(true);
+						if (Bridge.RopeVisualAtomics)
+							Bridge.RopeVisualAtomics->bActive.Write(true);
 						goto TickTimers;
 					}
 				}

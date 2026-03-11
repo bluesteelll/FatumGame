@@ -25,6 +25,8 @@ class USpringArmComponent;
 class UCameraComponent;
 struct FInputActionValue;
 class FBarragePrimitive;
+struct FRopeVisualAtomics;
+class FRopeVisualRenderer;
 
 /**
  * Character fully integrated with Flecs ECS.
@@ -47,6 +49,7 @@ class FATUMGAME_API AFlecsCharacter : public ACharacter
 
 public:
 	AFlecsCharacter(const FObjectInitializer& ObjectInitializer);
+	virtual ~AFlecsCharacter() override;
 
 	// ═══════════════════════════════════════════════════════════════
 	// COMPONENTS
@@ -555,6 +558,12 @@ private:
 	void ApplyBarrageSync(const FVector& FeetPos, uint8 GroundState, const FVector& Velocity);
 
 	friend class UFlecsArtillerySubsystem;
+
+	// ─────────────────────────────────────────────────────────
+	// ROPE VISUAL (sim→game via FRopeVisualAtomics, rendered in Tick)
+	// ─────────────────────────────────────────────────────────
+	TSharedPtr<FRopeVisualAtomics> RopeVisualAtomics;
+	FRopeVisualRenderer* RopeRenderer = nullptr;
 
 	// ─────────────────────────────────────────────────────────
 	// PENDING WEAPON EQUIP (sim→game via atomics, processed in Tick)

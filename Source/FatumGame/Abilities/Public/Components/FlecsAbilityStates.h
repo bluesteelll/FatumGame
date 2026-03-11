@@ -172,6 +172,14 @@ struct FRopeSwingState
 	float EnterStartY = 0.f;
 	float EnterStartZ = 0.f;
 
+	// Visual params (cached from FSwingableStatic for atomics write)
+	int32 VerletSegments = 8;
+	float VisualDamping = 0.97f;
+	int32 ConstraintIterations = 3;
+	float RopeWidthBase = 4.f;
+	float RopeWidthTip = 2.5f;
+	void* NiagaraSystem = nullptr; // UNiagaraSystem* from rope's DA (GC-rooted by DA)
+
 	// Runtime state
 	uint8 Phase = 0;        // 0=Enter, 1=Swing, 3=TopDismount
 	float PhaseTimer = 0.f;
@@ -194,6 +202,12 @@ struct FRopeSwingState
 		EnterLerpDuration = 0.12f;
 		TopDismountDuration = 0.2f;
 		EnterStartX = EnterStartY = EnterStartZ = 0.f;
+		VerletSegments = 8;
+		VisualDamping = 0.97f;
+		ConstraintIterations = 3;
+		RopeWidthBase = 4.f;
+		RopeWidthTip = 2.5f;
+		NiagaraSystem = nullptr;
 		Phase = 0;
 		PhaseTimer = 0.f;
 		bClimbing = false;

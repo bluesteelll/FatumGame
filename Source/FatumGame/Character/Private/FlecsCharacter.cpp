@@ -39,6 +39,8 @@
 #include "FlecsResourceTypes.h"
 #include "FlecsResourcePoolProfile.h"
 #include "FlecsHealthProfile.h"
+#include "FlecsSwingableComponents.h"
+#include "FRopeVisualRenderer.h"
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONSTRUCTOR
@@ -70,6 +72,12 @@ AFlecsCharacter::AFlecsCharacter(const FObjectInitializer& ObjectInitializer)
 	WeaponMeshComponent->SetVisibility(false);
 
 	PrimaryActorTick.bCanEverTick = true;
+}
+
+AFlecsCharacter::~AFlecsCharacter()
+{
+	delete RopeRenderer;
+	RopeRenderer = nullptr;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -153,6 +161,9 @@ void AFlecsCharacter::InitECSRegistration()
 	// Allocate shared atomics (game thread ownership, shared with bridge).
 	InputAtomics = MakeShared<FCharacterInputAtomics, ESPMode::ThreadSafe>();
 	StateAtomics = MakeShared<FCharacterStateAtomics, ESPMode::ThreadSafe>();
+	RopeVisualAtomics = MakeShared<FRopeVisualAtomics>();
+	RopeRenderer = new FRopeVisualRenderer();
+	RopeRenderer->Activate(GetRootComponent(), RopeVisualAtomics.Get());
 	PosState.FeetToActorOffset = GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
 
 	// Cache initial health for game-thread change detection.
@@ -334,6 +345,7 @@ void AFlecsCharacter::Tick(float DeltaTime)
 	ConsumeTeleportSnap();                    // 2. Sim teleport → reset lerp buffers
 	TickTimeDilation(DeltaTime);              // 3. Blink aim push/remove, stack tick, sim atomics
 	TickPostureAndResnap(DeltaTime);          // 4. Posture effects, FeetToActorOffset re-snap
+	if (RopeRenderer) { RopeRenderer->Update(DeltaTime, GetWorld(), GetActorLocation()); } // 4b. Rope Verlet + Niagara
 	CheckHealthChanges();                     // 5. Health change detection
 	UpdateResourceUI();                       // 5b. Resource pool display
 	TickInteractionStateMachine(DeltaTime);   // 6. Focus/Hold state machine

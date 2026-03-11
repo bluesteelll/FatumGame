@@ -5,6 +5,7 @@
 
 #include "CoreMinimal.h"
 #include "Engine/DataAsset.h"
+#include "NiagaraSystem.h"
 #include "FlecsRopeSwingProfile.generated.h"
 
 UCLASS(BlueprintType, EditInlineNew)
@@ -65,4 +66,20 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Visual", meta = (ClampMin = "3", ClampMax = "16"))
 	int32 VerletSegments = 8;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Visual", meta = (ClampMin = "0.8", ClampMax = "0.99"))
+	float VisualDamping = 0.97f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Visual", meta = (ClampMin = "1", ClampMax = "8"))
+	int32 ConstraintIterations = 3;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Visual", meta = (ClampMin = "1.0", ClampMax = "10.0"))
+	float RopeWidthBase = 4.f; // cm, thickness at anchor
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Visual", meta = (ClampMin = "0.5", ClampMax = "10.0"))
+	float RopeWidthTip = 2.5f; // cm, thickness at character hand
+
+	/** Niagara system for rope ribbon rendering (Ribbon + RopePositions array DI). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Visual")
+	TObjectPtr<UNiagaraSystem> RopeNiagaraSystem;
 };

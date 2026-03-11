@@ -136,6 +136,11 @@ flecs::entity UFlecsArtillerySubsystem::GetOrCreateEntityPrefab(UFlecsEntityDefi
 		SS.TopDismountDuration = SwingProf->TopDismountDuration;
 		SS.SwingClimbThreshold = SwingProf->SwingClimbThreshold;
 		SS.VerletSegments = SwingProf->VerletSegments;
+		SS.VisualDamping = SwingProf->VisualDamping;
+		SS.ConstraintIterations = SwingProf->ConstraintIterations;
+		SS.RopeWidthBase = SwingProf->RopeWidthBase;
+		SS.RopeWidthTip = SwingProf->RopeWidthTip;
+		SS.NiagaraSystem = SwingProf->RopeNiagaraSystem.Get();
 		Prefab.set<FSwingableStatic>(SS);
 		Prefab.add<FTagSwingable>();
 	}

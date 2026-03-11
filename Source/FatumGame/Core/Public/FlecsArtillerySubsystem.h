@@ -27,6 +27,7 @@ class FDebrisPool;
 class AFlecsCharacter;
 class FBarragePrimitive;
 class FBCharacterBase;
+struct FRopeVisualAtomics;
 
 /** Lightweight bridge for character physics (sim-thread-only after registration).
  *  PrepareCharacterStep reads InputAtomics, writes StateAtomics.
@@ -46,6 +47,9 @@ struct FCharacterPhysBridge
 	// ── Time dilation: base gravity for player compensation (Jolt Y, lazy-captured) ──
 	float BaseGravityJoltY = 0.f;
 	bool bBaseGravityCaptured = false;
+
+	// ── Rope visual bridge (sim→game, owned by AFlecsCharacter) ──
+	TSharedPtr<FRopeVisualAtomics> RopeVisualAtomics;
 };
 
 /**
