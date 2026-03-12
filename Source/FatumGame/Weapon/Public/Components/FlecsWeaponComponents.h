@@ -152,6 +152,18 @@ struct FWeaponStatic
 	/** Equip animation montage */
 	UAnimMontage* EquipMontage = nullptr;
 
+	// ─────────────────────────────────────────────────────────
+	// BLOOM (Spread)
+	// ─────────────────────────────────────────────────────────
+
+	float BaseSpread = 0.f;
+	float SpreadPerShot = 0.5f;
+	float MaxSpread = 5.f;
+	float SpreadDecayRate = 10.f;
+	float SpreadRecoveryDelay = 0.1f;
+	float MovingSpreadAdd = 1.f;
+	float JumpingSpreadAdd = 2.f;
+
 	static FWeaponStatic FromProfile(const UFlecsWeaponProfile* Profile);
 };
 
@@ -208,6 +220,19 @@ struct FWeaponInstance
 
 	/** Reload time remaining in seconds */
 	float ReloadTimeRemaining = 0.f;
+
+	// ─────────────────────────────────────────────────────────
+	// BLOOM STATE
+	// ─────────────────────────────────────────────────────────
+
+	/** Current spread cone half-angle in degrees (grows on fire, decays over time) */
+	float CurrentSpread = 0.f;
+
+	/** Seconds since last successful fire (for recovery delay) */
+	float TimeSinceLastShot = 999.f;
+
+	/** Total shots fired since equip (monotonic, for pattern recoil indexing on game thread) */
+	int32 ShotsFiredTotal = 0;
 
 	// ─────────────────────────────────────────────────────────
 	// INPUT FLAGS (Game Thread → Simulation Thread)

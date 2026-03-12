@@ -42,6 +42,7 @@
 #include "FlecsSwingableComponents.h"
 #include "FRopeVisualRenderer.h"
 #include "FlecsStealthComponents.h"
+#include "FlecsWeaponProfile.h"
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONSTRUCTOR
@@ -346,12 +347,43 @@ void AFlecsCharacter::Tick(float DeltaTime)
 	ReadAndApplyBarragePosition(DeltaTime);  // 1. Jolt → lerp → SetActorLocation (before CameraManager)
 	ConsumeTeleportSnap();                    // 2. Sim teleport → reset lerp buffers
 	TickTimeDilation(DeltaTime);              // 3. Blink aim push/remove, stack tick, sim atomics
+
+	// 3b. Weapon recoil (BEFORE UpdateCamera, AFTER TickTimeDilation for correct DT)
+	{
+		// Compute recoil DT: wall-clock when bPlayerFullSpeed, dilated otherwise
+		float RecoilDT = DeltaTime;
+		if (DilationStack.IsActive() && DilationStack.IsPlayerFullSpeed())
+		{
+			if (auto* Sub = GetWorld()->GetSubsystem<UFlecsArtillerySubsystem>())
+			{
+				float PublishedScale = Sub->GetSimWorker().ActiveTimeScalePublished.load(std::memory_order_relaxed);
+				if (PublishedScale > 0.01f)
+					RecoilDT = DeltaTime / PublishedScale;
+			}
+		}
+
+		DrainShotEventsAndApplyRecoil();
+		TickKickRecovery(RecoilDT);
+		TickScreenShake(RecoilDT);
+
+		// Pattern reset timer
+		if (RecoilState.CachedProfile && RecoilState.ShotIndex > 0)
+		{
+			RecoilState.PatternResetTimer += RecoilDT;
+			if (RecoilState.PatternResetTimer >= RecoilState.CachedProfile->PatternResetTime)
+			{
+				RecoilState.ShotIndex = 0;
+				RecoilState.PatternResetTimer = 0.f;
+			}
+		}
+	}
+
 	TickPostureAndResnap(DeltaTime);          // 4. Posture effects, FeetToActorOffset re-snap
 	if (RopeRenderer) { RopeRenderer->Update(DeltaTime, GetWorld(), GetActorLocation()); } // 4b. Rope Verlet + Niagara
 	CheckHealthChanges();                     // 5. Health change detection
 	UpdateResourceUI();                       // 5b. Resource pool display
 	TickInteractionStateMachine(DeltaTime);   // 6. Focus/Hold state machine
-	UpdateCamera();                           // 7. FP position + rotation + FOV
+	UpdateCamera();                           // 7. FP position + rotation + FOV + screen shake
 	WriteCameraAtomics();                     // 8. Camera pos/dir → sim thread (AFTER UpdateCamera for fresh data)
 	SyncMovementStateToECS();                 // 9. Posture → Flecs (on change)
 	ProcessPendingWeaponEquip();              // 10. Sim→game weapon attach
@@ -367,7 +399,8 @@ void AFlecsCharacter::WriteCameraAtomics()
 	if (InputAtomics.IsValid() && FollowCamera)
 	{
 		FVector CamLoc = FollowCamera->GetComponentLocation();
-		FVector CamDir = FollowCamera->GetForwardVector();
+		// Use control rotation to avoid contamination from screen shake (AddLocalRotation)
+		FVector CamDir = GetControlRotation().Vector();
 		InputAtomics->CamLocX.Write(static_cast<float>(CamLoc.X));
 		InputAtomics->CamLocY.Write(static_cast<float>(CamLoc.Y));
 		InputAtomics->CamLocZ.Write(static_cast<float>(CamLoc.Z));
@@ -486,6 +519,12 @@ void AFlecsCharacter::UpdateCamera()
 		FRotator ControlRot = GetControlRotation();
 		FollowCamera->SetWorldRotation(
 			FRotator(ControlRot.Pitch, ControlRot.Yaw, FatumMovement->GetSlideTiltAngle()));
+
+		// Screen shake: visual-only additive rotation (does NOT affect GetControlRotation)
+		if (RecoilState.ShakeOffset.SizeSquared() > 0.0001f)
+		{
+			FollowCamera->AddLocalRotation(FRotator(RecoilState.ShakeOffset.X, RecoilState.ShakeOffset.Y, 0.f));
+		}
 	}
 }
 
@@ -497,6 +536,12 @@ void AFlecsCharacter::ProcessPendingWeaponEquip()
 	int64 WeaponId = PendingWeaponEquip.WeaponId.load(std::memory_order_acquire);
 
 	TestWeaponEntityId = WeaponId;
+
+	// Cache weapon profile for recoil processing and reset recoil state
+	RecoilState.Reset();
+	RecoilState.CachedProfile = (TestWeaponDefinition && TestWeaponDefinition->WeaponProfile)
+		? TestWeaponDefinition->WeaponProfile.Get() : nullptr;
+
 	if (HUDWidget)
 	{
 		HUDWidget->SetWeaponEntityId(WeaponId);

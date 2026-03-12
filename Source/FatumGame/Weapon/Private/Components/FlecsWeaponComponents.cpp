@@ -43,5 +43,14 @@ FWeaponStatic FWeaponStatic::FromProfile(const UFlecsWeaponProfile* Profile)
 	S.ReloadMontage = Profile->ReloadMontage;
 	S.EquipMontage = Profile->EquipMontage;
 
+	// Bloom
+	S.BaseSpread = Profile->BaseSpread;
+	S.SpreadPerShot = Profile->SpreadPerShot;
+	S.MaxSpread = Profile->MaxSpread;
+	S.SpreadDecayRate = Profile->SpreadDecayRate;
+	S.SpreadRecoveryDelay = Profile->SpreadRecoveryDelay;
+	S.MovingSpreadAdd = Profile->MovingSpreadAdd;
+	S.JumpingSpreadAdd = Profile->JumpingSpreadAdd;
+
 	return S;
 }

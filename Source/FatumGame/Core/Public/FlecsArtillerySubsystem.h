@@ -13,6 +13,7 @@
 #include "FSimStateCache.h"
 #include <atomic>
 #include "FlecsCharacterTypes.h"
+#include "FlecsRecoilTypes.h"  // FShotFiredEvent — full type needed for TQueue
 #include "FlecsArtillerySubsystem.generated.h"
 
 class UBarrageDispatch;
@@ -334,6 +335,9 @@ public:
 	 */
 	TQueue<FPendingProjectileSpawn, EQueueMode::Mpsc>& GetPendingProjectileSpawns() { return PendingProjectileSpawns; }
 
+	/** Get shot-fired event queue for game-thread recoil processing. */
+	TQueue<FShotFiredEvent, EQueueMode::Mpsc>& GetPendingShotEvents() { return PendingShotEvents; }
+
 	// ═══════════════════════════════════════════════════════════════
 	// DESTRUCTIBLE SYSTEM API
 	// Fragment spawns from FragmentationSystem, debris pool.
@@ -501,6 +505,10 @@ private:
 
 	/** Queue of projectile spawns from weapon fire. Sim → Game thread. */
 	TQueue<FPendingProjectileSpawn, EQueueMode::Mpsc> PendingProjectileSpawns;
+
+	/** Queue of shot-fired events for game-thread recoil feedback. Sim → Game thread.
+	 *  One event per trigger pull (not per pellet). Drained by AFlecsCharacter::Tick(). */
+	TQueue<FShotFiredEvent, EQueueMode::Mpsc> PendingShotEvents;
 
 	// ═══════════════════════════════════════════════════════════════
 	// DESTRUCTIBLE SYSTEM

@@ -395,6 +395,7 @@ void AFlecsCharacter::SpawnAndEquipTestWeapon()
 			FWeaponInstance Instance;
 			Instance.CurrentAmmo = Static->MagazineSize;
 			Instance.ReserveAmmo = Static->MaxReserveAmmo;
+			Instance.CurrentSpread = Static->BaseSpread;
 			WeaponEntity.set<FWeaponInstance>(Instance);
 		}
 

@@ -23,6 +23,8 @@
 #include "FlecsUIMessages.h"
 #include "EPhysicsLayer.h"
 #include "PhysicsFilters/FastObjectLayerFilters.h"
+#include "FlecsRecoilTypes.h"
+#include "FlecsMovementStatic.h"
 
 void UFlecsArtillerySubsystem::SetupWeaponSystems()
 {
@@ -55,6 +57,22 @@ void UFlecsArtillerySubsystem::SetupWeaponSystems()
 			if (!Weapon.bFireRequested && Weapon.bHasFiredSincePress)
 			{
 				Weapon.bHasFiredSincePress = false;
+			}
+
+			// Bloom decay
+			const FWeaponStatic* Static = Entity.try_get<FWeaponStatic>();
+			if (Static)
+			{
+				Weapon.TimeSinceLastShot += DeltaTime;
+				if (Weapon.TimeSinceLastShot > Static->SpreadRecoveryDelay
+					&& Weapon.CurrentSpread > Static->BaseSpread)
+				{
+					Weapon.CurrentSpread -= Static->SpreadDecayRate * DeltaTime;
+					if (Weapon.CurrentSpread < Static->BaseSpread)
+					{
+						Weapon.CurrentSpread = Static->BaseSpread;
+					}
+				}
 			}
 		});
 
@@ -299,7 +317,36 @@ void UFlecsArtillerySubsystem::SetupWeaponSystems()
 			}
 
 			float Speed = ProjProfile->DefaultSpeed * Static->ProjectileSpeedMultiplier;
-			FVector Velocity = SpawnDirection * Speed;
+
+			// ─────────────────────────────────────────────────────
+			// BLOOM: compute effective spread (base + movement penalties)
+			// ─────────────────────────────────────────────────────
+			float EffectiveSpread = Weapon.CurrentSpread;
+			{
+				// Movement penalties: check velocity for moving, Z velocity for airborne
+				// CharBody already validated above (line ~186)
+				if (CharBody && CharBody->IsValid())
+				{
+					FBLet CharPrimRef = CachedBarrageDispatch->GetShapeRef(CharBody->BarrageKey);
+					if (FBarragePrimitive::IsNotNull(CharPrimRef))
+					{
+						FVector CharVel(FBarragePrimitive::GetVelocity(CharPrimRef));
+						float HorizSpeedSq = CharVel.X * CharVel.X + CharVel.Y * CharVel.Y;
+						constexpr float MovingThresholdSq = 50.f * 50.f; // 50 cm/s
+						if (HorizSpeedSq > MovingThresholdSq)
+						{
+							EffectiveSpread += Static->MovingSpreadAdd;
+						}
+						constexpr float AirborneThreshold = 50.f; // cm/s vertical
+						if (FMath::Abs(CharVel.Z) > AirborneThreshold)
+						{
+							EffectiveSpread += Static->JumpingSpreadAdd;
+						}
+					}
+				}
+				EffectiveSpread = FMath::Min(EffectiveSpread, Static->MaxSpread);
+			}
+			const float SpreadRadians = FMath::DegreesToRadians(EffectiveSpread);
 
 			for (int32 i = 0; i < Static->ProjectilesPerShot; ++i)
 			{
@@ -329,7 +376,15 @@ void UFlecsArtillerySubsystem::SetupWeaponSystems()
 					continue;
 				}
 
-				FBarragePrimitive::SetVelocity(Velocity, Body);
+				// Apply bloom: perturb direction per pellet
+				FVector PelletDirection = SpawnDirection;
+				if (SpreadRadians > KINDA_SMALL_NUMBER)
+				{
+					PelletDirection = FMath::VRandCone(SpawnDirection, SpreadRadians);
+				}
+				FVector PelletVelocity = PelletDirection * Speed;
+
+				FBarragePrimitive::SetVelocity(PelletVelocity, Body);
 				FBarragePrimitive::SetGravityFactor(GravityFactor, Body);
 
 				// Create Flecs entity with components (no prefab — avoids deferred timing issues)
@@ -370,7 +425,7 @@ void UFlecsArtillerySubsystem::SetupWeaponSystems()
 					RenderSpawn.Material = RenderProfile->MaterialOverride;
 					RenderSpawn.Scale = RenderProfile->Scale;
 					RenderSpawn.RotationOffset = RenderProfile->RotationOffset;
-					RenderSpawn.SpawnDirection = SpawnDirection;
+					RenderSpawn.SpawnDirection = PelletDirection;
 					RenderSpawn.SimComputedLocation = MuzzleLocation;
 					RenderSpawn.EntityKey = ProjectileKey;
 
@@ -410,9 +465,21 @@ void UFlecsArtillerySubsystem::SetupWeaponSystems()
 				Weapon.CurrentAmmo = FMath::Max(0, Weapon.CurrentAmmo);
 			}
 
-			UE_LOG(LogTemp, Log, TEXT("WEAPON: FIRED! Ammo=%d->%d, Auto=%d, Burst=%d"),
+			// Increment bloom
+			Weapon.CurrentSpread = FMath::Min(Weapon.CurrentSpread + Static->SpreadPerShot, Static->MaxSpread);
+			Weapon.TimeSinceLastShot = 0.f;
+
+			// Enqueue shot-fired event for game thread recoil
+			{
+				FShotFiredEvent ShotEvent;
+				ShotEvent.WeaponEntityId = static_cast<int64>(WeaponEntity.id());
+				ShotEvent.ShotIndex = Weapon.ShotsFiredTotal++;
+				PendingShotEvents.Enqueue(ShotEvent);
+			}
+
+			UE_LOG(LogTemp, Log, TEXT("WEAPON: FIRED! Ammo=%d->%d, Auto=%d, Burst=%d, Spread=%.2f"),
 				AmmoBefore, Weapon.CurrentAmmo,
-				Static->bIsAutomatic, Static->bIsBurst);
+				Static->bIsAutomatic, Static->bIsBurst, Weapon.CurrentSpread);
 
 			// Broadcast ammo change to message system (sim→game thread)
 			if (auto* MsgSub = UFlecsMessageSubsystem::SelfPtr)

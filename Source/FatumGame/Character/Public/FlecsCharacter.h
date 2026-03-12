@@ -8,6 +8,7 @@
 #include "FlecsInteractionTypes.h"
 #include "FlecsCharacterTypes.h"
 #include "FTimeDilationStack.h"
+#include "FlecsRecoilState.h"
 #include "FlecsCharacter.generated.h"
 
 class UFlecsArtillerySubsystem;
@@ -649,6 +650,20 @@ private:
 	bool GetEntityWorldPosition(FSkeletonKey EntityKey, FVector& OutPosition) const;
 	void OpenFocusPanel();
 	void CloseFocusPanel();
+
+	// ─────────────────────────────────────────────────────────
+	// WEAPON RECOIL (game thread only, FlecsCharacter_Recoil.cpp)
+	// ─────────────────────────────────────────────────────────
+	FWeaponRecoilState RecoilState;
+
+	/** Drain MPSC shot events from sim thread, apply pattern + kick + shake impulses. */
+	void DrainShotEventsAndApplyRecoil();
+
+	/** Spring-damper recovery for kick offset. */
+	void TickKickRecovery(float DeltaTime);
+
+	/** Compute visual shake offset (does NOT affect control rotation). */
+	void TickScreenShake(float DeltaTime);
 
 	// ─────────────────────────────────────────────────────────
 	// TICK HELPERS (implemented in FlecsCharacter.cpp)
