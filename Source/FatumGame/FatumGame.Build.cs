@@ -40,7 +40,9 @@ public class FatumGame : ModuleRules
 				"FatumGame/Input/Public",
 				"FatumGame/Utils/Public",
 				"FatumGame/Climbing/Public",
-				"FatumGame/Climbing/Public/Components"
+				"FatumGame/Climbing/Public/Components",
+				"FatumGame/Stealth/Public",
+				"FatumGame/Stealth/Public/Components"
 			}
 		);
 
@@ -76,7 +78,10 @@ public class FatumGame : ModuleRules
 				"FatumGame/UI/Private",
 				"FatumGame/Input/Private",
 				"FatumGame/Utils/Private",
-				"FatumGame/Climbing/Private"
+				"FatumGame/Climbing/Private",
+				"FatumGame/Stealth/Private",
+				"FatumGame/Stealth/Private/Components",
+				"FatumGame/Stealth/Private/Systems"
 			}
 		);
 

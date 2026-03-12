@@ -45,6 +45,7 @@
 #include "AbilityTickFunctions.h"
 #include "FlecsClimbableComponents.h"
 #include "FlecsSwingableComponents.h"
+#include "FlecsStealthComponents.h"
 
 // ═══════════════════════════════════════════════════════════════
 // COMPONENT REGISTRATION
@@ -183,6 +184,16 @@ void UFlecsArtillerySubsystem::RegisterFlecsComponents()
 	// ─────────────────────────────────────────────────────────
 	World.component<FSwingableStatic>();
 	World.component<FTagSwingable>();
+
+	// ─────────────────────────────────────────────────────────
+	// STEALTH COMPONENTS
+	// ─────────────────────────────────────────────────────────
+	World.component<FWorldPosition>();
+	World.component<FStealthLightStatic>();
+	World.component<FNoiseZoneStatic>();
+	World.component<FStealthInstance>();
+	World.component<FTagStealthLight>();
+	World.component<FTagNoiseZone>();
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -534,6 +545,7 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 	SetupFragmentationSystems(); // ConstraintBreak, Fragmentation
 	SetupWeaponSystems();        // WeaponTick, WeaponReload, WeaponFire
 	SetupDoorSystems();          // TriggerUnlock, DoorTick
+	SetupStealthSystems();       // StealthUpdateSystem
 
 	// ═══════════════════════════════════════════════════════════════
 	// CLEANUP SYSTEMS

@@ -28,6 +28,7 @@ class AFlecsCharacter;
 class FBarragePrimitive;
 class FBCharacterBase;
 struct FRopeVisualAtomics;
+struct FNoiseEvent;
 
 /** Lightweight bridge for character physics (sim-thread-only after registration).
  *  PrepareCharacterStep reads InputAtomics, writes StateAtomics.
@@ -385,6 +386,16 @@ public:
 	UE_DEPRECATED(5.7, "Use HasEntityForBarrageKey instead")
 	bool HasFlecsEntityForBarrageKey(FSkeletonKey BarrageKey) const;
 
+	// ═══════════════════════════════════════════════════════════════
+	// STEALTH SYSTEM API
+	// ═══════════════════════════════════════════════════════════════
+
+	/** Set the ambient light level for stealth. Thread-safe (enqueues to sim thread). */
+	void SetAmbientLightLevel(float Level);
+
+	/** Queue a noise event on a character entity. Call from game thread. */
+	void QueueNoiseEvent(FSkeletonKey CharacterKey, const FNoiseEvent& Event);
+
 protected:
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void OnWorldBeginPlay(UWorld& InWorld) override;
@@ -429,6 +440,12 @@ private:
 
 	/** Door trigger unlock + door state machine. */
 	void SetupDoorSystems();
+
+	/** Stealth light + noise computation for characters. */
+	void SetupStealthSystems();
+
+	/** Ambient light level for stealth (sim thread only, written via EnqueueCommand). */
+	float AmbientLightLevel = 0.1f;
 
 	/** Subscribe to Barrage collision events. */
 	void SubscribeToBarrageEvents();

@@ -41,6 +41,7 @@
 #include "FlecsHealthProfile.h"
 #include "FlecsSwingableComponents.h"
 #include "FRopeVisualRenderer.h"
+#include "FlecsStealthComponents.h"
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONSTRUCTOR
@@ -256,6 +257,7 @@ void AFlecsCharacter::InitECSRegistration()
 		{ FTelekinesisState TKState; Entity.set<FTelekinesisState>(TKState); }
 		Entity.set<FClimbState>(FClimbState{});
 		Entity.set<FRopeSwingState>(FRopeSwingState{});
+		Entity.set<FStealthInstance>(FStealthInstance{});
 
 		FlecsWorld->defer_end();
 

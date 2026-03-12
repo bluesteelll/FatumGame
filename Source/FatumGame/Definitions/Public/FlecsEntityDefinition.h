@@ -23,6 +23,8 @@ class UFlecsAbilityLoadout;
 class UFlecsResourcePoolProfile;
 class UFlecsClimbProfile;
 class UFlecsRopeSwingProfile;
+class UFlecsStealthLightProfile;
+class UFlecsNoiseZoneProfile;
 
 /**
  * Unified entity definition - a preset combining multiple profiles.
@@ -139,6 +141,14 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Instanced, Category = "Profiles")
 	TObjectPtr<UFlecsRopeSwingProfile> RopeSwingProfile;
 
+	/** Stealth light — makes entity a gameplay light source for stealth detection */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Instanced, Category = "Profiles")
+	TObjectPtr<UFlecsStealthLightProfile> StealthLightProfile;
+
+	/** Noise zone — makes entity a surface noise modifier zone */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Instanced, Category = "Profiles")
+	TObjectPtr<UFlecsNoiseZoneProfile> NoiseZoneProfile;
+
 	// ═══════════════════════════════════════════════════════════════
 	// DEFAULT TAGS
 	// ═══════════════════════════════════════════════════════════════
@@ -194,7 +204,9 @@ public:
 			|| AbilityLoadout != nullptr
 			|| ResourcePoolProfile != nullptr
 			|| ClimbProfile != nullptr
-			|| RopeSwingProfile != nullptr;
+			|| RopeSwingProfile != nullptr
+			|| StealthLightProfile != nullptr
+			|| NoiseZoneProfile != nullptr;
 	}
 
 	/** Check if this will create a world entity (physics or render) */
@@ -229,6 +241,12 @@ public:
 
 	/** Check if this is swingable */
 	bool IsSwingable() const { return RopeSwingProfile != nullptr; }
+
+	/** Check if this is a stealth light */
+	bool IsStealthLight() const { return StealthLightProfile != nullptr; }
+
+	/** Check if this is a noise zone */
+	bool IsNoiseZone() const { return NoiseZoneProfile != nullptr; }
 
 	virtual FPrimaryAssetId GetPrimaryAssetId() const override
 	{

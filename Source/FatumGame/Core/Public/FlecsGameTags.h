@@ -80,3 +80,9 @@ struct FTagDoorTrigger {};
 
 /** Entity is currently held by telekinesis (prevents double-grab) */
 struct FTagTelekinesisHeld {};
+
+/** Entity is a stealth light source (gameplay-only, not rendering) */
+struct FTagStealthLight {};
+
+/** Entity is a noise zone (modifies footstep noise by surface type) */
+struct FTagNoiseZone {};

@@ -29,6 +29,9 @@
 #include "FlecsClimbableComponents.h"
 #include "FlecsRopeSwingProfile.h"
 #include "FlecsSwingableComponents.h"
+#include "FlecsStealthLightProfile.h"
+#include "FlecsNoiseZoneProfile.h"
+#include "FlecsStealthComponents.h"
 
 // ═══════════════════════════════════════════════════════════════
 // ENTITY PREFAB REGISTRY IMPLEMENTATION
@@ -145,6 +148,18 @@ flecs::entity UFlecsArtillerySubsystem::GetOrCreateEntityPrefab(UFlecsEntityDefi
 		Prefab.add<FTagSwingable>();
 	}
 
+	if (EntityDefinition->StealthLightProfile)
+	{
+		Prefab.set<FStealthLightStatic>(FStealthLightStatic::FromProfile(EntityDefinition->StealthLightProfile));
+		Prefab.add<FTagStealthLight>();
+	}
+
+	if (EntityDefinition->NoiseZoneProfile)
+	{
+		Prefab.set<FNoiseZoneStatic>(FNoiseZoneStatic::FromProfile(EntityDefinition->NoiseZoneProfile));
+		Prefab.add<FTagNoiseZone>();
+	}
+
 	// FHealthInstance on prefab: inherited by instances via is_a().
 	// First get_mut<FHealthInstance>() creates per-entity mutable copy (copy-on-write).
 	// All mutation paths (DamageObserver, HealEntity) MUST use get_mut/try_get_mut.
@@ -161,7 +176,7 @@ flecs::entity UFlecsArtillerySubsystem::GetOrCreateEntityPrefab(UFlecsEntityDefi
 	// Store in registry
 	EntityPrefabs.Add(EntityDefinition, Prefab);
 
-	UE_LOG(LogTemp, Log, TEXT("Created entity prefab: '%s' (Health=%d, Damage=%d, Projectile=%d, Container=%d, Item=%d, Weapon=%d, Interaction=%d, Destructible=%d, Door=%d, Movement=%d, Ability=%d, Resources=%d, Climb=%d, Swing=%d)"),
+	UE_LOG(LogTemp, Log, TEXT("Created entity prefab: '%s' (Health=%d, Damage=%d, Projectile=%d, Container=%d, Item=%d, Weapon=%d, Interaction=%d, Destructible=%d, Door=%d, Movement=%d, Ability=%d, Resources=%d, Climb=%d, Swing=%d, StealthLight=%d, NoiseZone=%d)"),
 		*EntityDefinition->GetName(),
 		EntityDefinition->HealthProfile != nullptr,
 		EntityDefinition->DamageProfile != nullptr,
@@ -176,7 +191,9 @@ flecs::entity UFlecsArtillerySubsystem::GetOrCreateEntityPrefab(UFlecsEntityDefi
 		EntityDefinition->AbilityLoadout != nullptr,
 		EntityDefinition->ResourcePoolProfile != nullptr,
 		EntityDefinition->ClimbProfile != nullptr,
-		EntityDefinition->RopeSwingProfile != nullptr);
+		EntityDefinition->RopeSwingProfile != nullptr,
+		EntityDefinition->StealthLightProfile != nullptr,
+		EntityDefinition->NoiseZoneProfile != nullptr);
 
 	return Prefab;
 }

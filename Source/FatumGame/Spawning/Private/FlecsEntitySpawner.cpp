@@ -20,6 +20,7 @@
 #include "FlecsEntityComponents.h"
 #include "FlecsInteractionComponents.h"
 #include "FlecsDestructibleComponents.h"
+#include "FlecsStealthComponents.h"
 #include "BarrageDispatch.h"
 #include "BarrageConstraintSystem.h"
 #include "FBarragePrimitive.h"
@@ -426,6 +427,10 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 		bool bHasDeathEffect;
 		UNiagaraSystem* DeathEffect;
 		float DeathEffectScale;
+
+		// Spawn location/rotation (UE world coords, for non-physics entities that need FWorldPosition)
+		FVector SpawnLocation;
+		FRotator SpawnRotation;
 	};
 
 	FSpawnData Data;
@@ -477,6 +482,9 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 	Data.bHasDeathEffect = EffectiveNiagara && EffectiveNiagara->HasDeathEffect();
 	Data.DeathEffect = Data.bHasDeathEffect ? EffectiveNiagara->DeathEffect.Get() : nullptr;
 	Data.DeathEffectScale = Data.bHasDeathEffect ? EffectiveNiagara->DeathEffectScale : 1.0f;
+
+	Data.SpawnLocation = Request.Location;
+	Data.SpawnRotation = Request.Rotation;
 
 	// Enqueue Flecs entity creation
 	FlecsSubsystem->EnqueueCommand([FlecsSubsystem, Data]()
@@ -689,6 +697,27 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 			DeathVFX.Effect = Data.DeathEffect;
 			DeathVFX.Scale = Data.DeathEffectScale;
 			Entity.set<FNiagaraDeathEffect>(DeathVFX);
+		}
+
+		// Store world position for non-physics entities (stealth lights, noise zones)
+		// Physics entities get position from Barrage body; these have no body.
+		if (!Data.bHasPhysics)
+		{
+			if (Entity.has<FStealthLightStatic>() || Entity.has<FNoiseZoneStatic>())
+			{
+				FWorldPosition WP;
+				WP.Position = Data.SpawnLocation;
+				Entity.set<FWorldPosition>(WP);
+			}
+
+			// Spot lights need direction from actor rotation (prefab has ForwardVector default)
+			const FStealthLightStatic* LightStatic = Entity.try_get<FStealthLightStatic>();
+			if (LightStatic && LightStatic->Type == EStealthLightType::Spot)
+			{
+				FStealthLightStatic LightOverride = *LightStatic;
+				LightOverride.Direction = Data.SpawnRotation.Vector();
+				Entity.set<FStealthLightStatic>(LightOverride);
+			}
 		}
 
 		// ─────────────────────────────────────────────────────────
