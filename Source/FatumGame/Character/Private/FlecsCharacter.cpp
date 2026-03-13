@@ -548,13 +548,17 @@ void AFlecsCharacter::UpdateCamera()
 			FollowCamera->AddLocalRotation(FRotator(RecoilState.ShakeOffset.X, RecoilState.ShakeOffset.Y, RecoilState.ShakeOffset.Z));
 		}
 
-		// Weapon inertia: reset to base transform, then apply inertia rotation
+		// Weapon inertia: reset to base transform, then apply rotation + positional offset
 		if (WeaponMeshComponent && WeaponMeshComponent->IsVisible())
 		{
 			WeaponMeshComponent->SetRelativeTransform(BaseWeaponTransform);
 			if (!RecoilState.InertiaOffset.IsNearlyZero(0.001f))
 			{
 				WeaponMeshComponent->AddLocalRotation(FRotator(RecoilState.InertiaOffset.X, RecoilState.InertiaOffset.Y, 0.f));
+			}
+			if (!RecoilState.InertiaPositionOffset.IsNearlyZero(0.001f))
+			{
+				WeaponMeshComponent->AddLocalOffset(RecoilState.InertiaPositionOffset);
 			}
 		}
 	}

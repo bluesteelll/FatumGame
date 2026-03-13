@@ -296,6 +296,27 @@ public:
 	bool bSwayFadeDuringMouse = false;
 
 	// ═══════════════════════════════════════════════════════════════
+	// POSITIONAL INERTIA — weapon mesh shifts on screen ("heavy hands" / Unrecord-style)
+	// Mouse yaw right → weapon shifts left. Mouse pitch up → weapon shifts down.
+	// ═══════════════════════════════════════════════════════════════
+
+	/** How many cm the weapon shifts per degree of mouse input. Higher = more visible displacement. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Positional Inertia", meta = (ClampMin = "0", ClampMax = "2"))
+	float InertiaPositionScale = 0.3f;
+
+	/** Positional spring stiffness. Lower = heavier hands, longer return time. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Positional Inertia", meta = (ClampMin = "5", ClampMax = "500"))
+	float InertiaPositionStiffness = 80.f;
+
+	/** Positional damping ratio. <1 = overshoot, 1 = no oscillation. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Positional Inertia", meta = (ClampMin = "0.1", ClampMax = "2.0"))
+	float InertiaPositionDamping = 0.6f;
+
+	/** Maximum positional offset (cm). Clamps extreme displacements. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Positional Inertia", meta = (ClampMin = "0", ClampMax = "20"))
+	float MaxInertiaPositionOffset = 5.f;
+
+	// ═══════════════════════════════════════════════════════════════
 	// HELPERS
 	// ═══════════════════════════════════════════════════════════════
 

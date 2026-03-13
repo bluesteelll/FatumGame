@@ -215,6 +215,46 @@ void AFlecsCharacter::TickWeaponInertia(float DeltaTime, const FVector2D& AimDel
 		RecoilState.InertiaVelocity = FVector2D::ZeroVector;
 	}
 
+	// ── Positional inertia (weapon mesh displacement — "heavy hands") ──
+	if (Profile->InertiaPositionScale > 0.f)
+	{
+		// Mouse input → positional displacement (yaw → local X, pitch → local Z)
+		const float PosScale = Profile->InertiaPositionScale;
+		RecoilState.InertiaPositionOffset.X += AimDelta.Y * PosScale;  // yaw → lateral shift
+		RecoilState.InertiaPositionOffset.Z += AimDelta.X * PosScale;  // pitch → vertical shift
+
+		// Spring-damper for position
+		const float pk = Profile->InertiaPositionStiffness;
+		const float pc = 2.f * Profile->InertiaPositionDamping * FMath::Sqrt(pk);
+
+		FVector PosAccel;
+		PosAccel.X = -pk * RecoilState.InertiaPositionOffset.X - pc * RecoilState.InertiaPositionVelocity.X;
+		PosAccel.Y = 0.f;
+		PosAccel.Z = -pk * RecoilState.InertiaPositionOffset.Z - pc * RecoilState.InertiaPositionVelocity.Z;
+
+		RecoilState.InertiaPositionVelocity += PosAccel * DeltaTime;
+		RecoilState.InertiaPositionOffset += RecoilState.InertiaPositionVelocity * DeltaTime;
+
+		// Clamp max positional offset
+		const float MaxPosOff = Profile->MaxInertiaPositionOffset;
+		if (MaxPosOff > 0.f)
+		{
+			RecoilState.InertiaPositionOffset.X = FMath::Clamp(RecoilState.InertiaPositionOffset.X, -MaxPosOff, MaxPosOff);
+			RecoilState.InertiaPositionOffset.Z = FMath::Clamp(RecoilState.InertiaPositionOffset.Z, -MaxPosOff, MaxPosOff);
+			if (FMath::Abs(RecoilState.InertiaPositionOffset.X) >= MaxPosOff - KINDA_SMALL_NUMBER)
+				RecoilState.InertiaPositionVelocity.X = 0.f;
+			if (FMath::Abs(RecoilState.InertiaPositionOffset.Z) >= MaxPosOff - KINDA_SMALL_NUMBER)
+				RecoilState.InertiaPositionVelocity.Z = 0.f;
+		}
+
+		// Snap to zero
+		if (RecoilState.InertiaPositionOffset.SizeSquared() < 0.0001f && RecoilState.InertiaPositionVelocity.SizeSquared() < 0.01f)
+		{
+			RecoilState.InertiaPositionOffset = FVector::ZeroVector;
+			RecoilState.InertiaPositionVelocity = FVector::ZeroVector;
+		}
+	}
+
 	// ── Idle Sway (synchronized with crosshair via AddControllerInput) ──
 	if (Profile->IdleSwayAmplitude > 0.f)
 	{

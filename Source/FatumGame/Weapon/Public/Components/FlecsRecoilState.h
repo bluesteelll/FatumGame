@@ -26,9 +26,13 @@ struct FWeaponRecoilState
 	// ── Raw mouse delta (captured in Look(), consumed by TickWeaponInertia) ──
 	FVector2D RawMouseDelta = FVector2D::ZeroVector;  // pure mouse input, no recoil contamination
 
-	// ── Weapon Inertia (spring-damper lag behind crosshair) ──
+	// ── Weapon Inertia — rotational (spring-damper lag behind crosshair) ──
 	FVector2D InertiaOffset = FVector2D::ZeroVector;    // current offset from crosshair (pitch, yaw degrees)
 	FVector2D InertiaVelocity = FVector2D::ZeroVector;  // angular velocity of weapon lag (deg/s)
+
+	// ── Weapon Inertia — positional (mesh shifts on screen, "heavy hands" effect) ──
+	FVector InertiaPositionOffset = FVector::ZeroVector;    // local-space displacement (cm)
+	FVector InertiaPositionVelocity = FVector::ZeroVector;  // velocity (cm/s)
 
 	// ── Idle Sway (synchronized with crosshair) ──
 	float IdleSwayPhase = 0.f;
@@ -50,6 +54,8 @@ struct FWeaponRecoilState
 		RawMouseDelta = FVector2D::ZeroVector;
 		InertiaOffset = FVector2D::ZeroVector;
 		InertiaVelocity = FVector2D::ZeroVector;
+		InertiaPositionOffset = FVector::ZeroVector;
+		InertiaPositionVelocity = FVector::ZeroVector;
 		IdleSwayPhase = 0.f;
 		PrevSwayValue = FVector2D::ZeroVector;
 		TimeSinceLastMouseMove = 0.f;
