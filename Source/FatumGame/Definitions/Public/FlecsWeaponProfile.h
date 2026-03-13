@@ -11,6 +11,7 @@ class UFlecsEntityDefinition;
 class UStaticMesh;
 class USkeletalMesh;
 class UAnimMontage;
+class UCurveVector;
 
 /**
  * Weapon firing mode.
@@ -234,10 +235,11 @@ public:
 	// Player pulls mouse to counter. Does NOT auto-recover.
 	// ═══════════════════════════════════════════════════════════════
 
-	/** Per-shot recoil pattern. Each FVector2D = (Pitch, Yaw) in degrees.
-	 *  Index 0 = first shot. Empty = no pattern recoil. */
+	/** Recoil pattern curve. X axis = shot index, channels: X=Pitch, Y=Yaw (degrees).
+	 *  Create via Content Browser → Miscellaneous → Curve Vector.
+	 *  nullptr = no pattern recoil. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Pattern Recoil")
-	TArray<FVector2D> RecoilPattern;
+	TObjectPtr<UCurveVector> RecoilPatternCurve;
 
 	/** Global multiplier on all pattern deltas. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Pattern Recoil", meta = (ClampMin = "0", ClampMax = "5"))

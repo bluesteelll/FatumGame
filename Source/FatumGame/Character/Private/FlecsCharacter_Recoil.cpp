@@ -6,6 +6,7 @@
 #include "FlecsRecoilTypes.h"
 #include "FlecsRecoilState.h"
 #include "FlecsWeaponProfile.h"
+#include "Curves/CurveVector.h"
 
 // ═══════════════════════════════════════════════════════════════════════════
 // DRAIN SHOT EVENTS & APPLY RECOIL IMPULSES
@@ -30,27 +31,28 @@ void AFlecsCharacter::DrainShotEventsAndApplyRecoil()
 		if (Event.WeaponEntityId != TestWeaponEntityId) continue;
 
 		// ── Pattern Recoil (permanent control rotation delta) ──
-		if (Profile->RecoilPattern.Num() > 0)
+		if (Profile->RecoilPatternCurve)
 		{
 			// Use sim-thread shot counter as ground truth for pattern indexing
-			int32 PatIdx = Event.ShotIndex;
-			const int32 PatternLen = Profile->RecoilPattern.Num();
+			float PatTime = static_cast<float>(Event.ShotIndex);
 
-			if (PatIdx >= PatternLen)
+			// Handle looping: if past curve end, wrap from PatternLoopStartIndex
+			float MinTime, MaxTime;
+			Profile->RecoilPatternCurve->GetTimeRange(MinTime, MaxTime);
+
+			if (PatTime > MaxTime && MaxTime > MinTime)
 			{
-				// Past end: loop from PatternLoopStartIndex or clamp to last
-				if (Profile->PatternLoopStartIndex >= 0 && Profile->PatternLoopStartIndex < PatternLen)
+				if (Profile->PatternLoopStartIndex >= 0 && static_cast<float>(Profile->PatternLoopStartIndex) < MaxTime)
 				{
-					int32 LoopRange = PatternLen - Profile->PatternLoopStartIndex;
-					PatIdx = Profile->PatternLoopStartIndex + ((PatIdx - Profile->PatternLoopStartIndex) % LoopRange);
+					float LoopStart = static_cast<float>(Profile->PatternLoopStartIndex);
+					float LoopRange = MaxTime - LoopStart;
+					PatTime = LoopStart + FMath::Fmod(PatTime - LoopStart, LoopRange);
 				}
-				else
-				{
-					PatIdx = PatternLen - 1;
-				}
+				// else: clamp — UCurveVector does this automatically
 			}
 
-			FVector2D PatternDelta = Profile->RecoilPattern[PatIdx] * Profile->PatternScale;
+			FVector CurveDelta = Profile->RecoilPatternCurve->GetVectorValue(PatTime);
+			FVector2D PatternDelta(CurveDelta.X * Profile->PatternScale, CurveDelta.Y * Profile->PatternScale);
 
 			// Add random perturbation
 			PatternDelta.X += FMath::FRandRange(-Profile->PatternRandomPitch, Profile->PatternRandomPitch);
