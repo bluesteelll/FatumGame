@@ -23,6 +23,18 @@ struct FWeaponRecoilState
 	float ShakePhase = 0.f;          // oscillation phase (radians)
 	FVector ShakeOffset = FVector::ZeroVector;  // computed this frame (pitch, yaw, roll)
 
+	// ── Raw mouse delta (captured in Look(), consumed by TickWeaponInertia) ──
+	FVector2D RawMouseDelta = FVector2D::ZeroVector;  // pure mouse input, no recoil contamination
+
+	// ── Weapon Inertia (spring-damper lag behind crosshair) ──
+	FVector2D InertiaOffset = FVector2D::ZeroVector;    // current offset from crosshair (pitch, yaw degrees)
+	FVector2D InertiaVelocity = FVector2D::ZeroVector;  // angular velocity of weapon lag (deg/s)
+
+	// ── Idle Sway (synchronized with crosshair) ──
+	float IdleSwayPhase = 0.f;
+	FVector2D PrevSwayValue = FVector2D::ZeroVector;  // for delta-based application
+	float TimeSinceLastMouseMove = 0.f;  // used when bSwayFadeDuringMouse enabled
+
 	// ── Cached weapon profile (set on equip, read for tuning params) ──
 	const UFlecsWeaponProfile* CachedProfile = nullptr;
 
@@ -35,5 +47,11 @@ struct FWeaponRecoilState
 		ShakeIntensity = 0.f;
 		ShakePhase = 0.f;
 		ShakeOffset = FVector::ZeroVector;
+		RawMouseDelta = FVector2D::ZeroVector;
+		InertiaOffset = FVector2D::ZeroVector;
+		InertiaVelocity = FVector2D::ZeroVector;
+		IdleSwayPhase = 0.f;
+		PrevSwayValue = FVector2D::ZeroVector;
+		TimeSinceLastMouseMove = 0.f;
 	}
 };

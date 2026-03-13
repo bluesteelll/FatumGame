@@ -28,6 +28,7 @@ struct FInputActionValue;
 class FBarragePrimitive;
 struct FRopeVisualAtomics;
 class FRopeVisualRenderer;
+class UCanvas;
 
 /**
  * Character fully integrated with Flecs ECS.
@@ -656,6 +657,9 @@ private:
 	// ─────────────────────────────────────────────────────────
 	FWeaponRecoilState RecoilState;
 
+	/** Base weapon transform cached from AttachWeaponVisual — reset target for inertia rotation. */
+	FTransform BaseWeaponTransform = FTransform::Identity;
+
 	/** Drain MPSC shot events from sim thread, apply pattern + kick + shake impulses. */
 	void DrainShotEventsAndApplyRecoil();
 
@@ -664,6 +668,16 @@ private:
 
 	/** Compute visual shake offset (does NOT affect control rotation). */
 	void TickScreenShake(float DeltaTime);
+
+	/** Weapon inertia: spring-damper lag behind crosshair + idle sway.
+	 *  @param AimDelta Mouse-only control rotation delta this frame (excludes recoil). */
+	void TickWeaponInertia(float DeltaTime, const FVector2D& AimDelta);
+
+#if !UE_BUILD_SHIPPING
+	/** Debug canvas callback: draws blue dot at weapon's actual aim point (2D screen-space). */
+	void DrawInertiaDebug(UCanvas* Canvas, APlayerController* PC);
+	FDelegateHandle InertiaDebugDrawHandle;
+#endif
 
 	// ─────────────────────────────────────────────────────────
 	// TICK HELPERS (implemented in FlecsCharacter.cpp)

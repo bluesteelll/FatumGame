@@ -266,6 +266,36 @@ public:
 	int32 PatternLoopStartIndex = -1;
 
 	// ═══════════════════════════════════════════════════════════════
+	// WEAPON INERTIA (Weapon Lag)
+	// Heavy weapons lag behind crosshair via spring-damper with overshoot.
+	// Bullets fire where the weapon points, NOT where the crosshair is.
+	// ═══════════════════════════════════════════════════════════════
+
+	/** Spring stiffness. Higher = weapon catches up faster. Pistol~400, LMG~100. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Inertia", meta = (ClampMin = "10", ClampMax = "1000"))
+	float InertiaStiffness = 200.f;
+
+	/** Damping ratio. <1 = overshoot (momentum carry), 1 = critically damped, >1 = sluggish. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Inertia", meta = (ClampMin = "0.1", ClampMax = "2.0"))
+	float InertiaDamping = 0.7f;
+
+	/** Maximum angular offset from crosshair (degrees). Clamps extreme flicks. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Inertia", meta = (ClampMin = "0", ClampMax = "15"))
+	float MaxInertiaOffset = 3.f;
+
+	/** Idle sway amplitude (degrees). Weapon/crosshair drift when standing still. 0 = disabled. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Inertia", meta = (ClampMin = "0", ClampMax = "3"))
+	float IdleSwayAmplitude = 0.15f;
+
+	/** Idle sway frequency (Hz). How fast the weapon sways. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Inertia", meta = (ClampMin = "0.1", ClampMax = "3"))
+	float IdleSwayFrequency = 0.4f;
+
+	/** If true, sway fades out during mouse movement and fades in after 0.5s idle. If false, sway is always active. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Inertia")
+	bool bSwayFadeDuringMouse = false;
+
+	// ═══════════════════════════════════════════════════════════════
 	// HELPERS
 	// ═══════════════════════════════════════════════════════════════
 

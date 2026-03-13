@@ -315,6 +315,7 @@ void AFlecsCharacter::AttachWeaponVisual(USkeletalMesh* InMesh, const FTransform
 	check(WeaponMeshComponent);
 	WeaponMeshComponent->SetSkeletalMesh(InMesh);
 	WeaponMeshComponent->SetRelativeTransform(AttachOffset);
+	BaseWeaponTransform = AttachOffset;  // cache for inertia reset each frame
 	WeaponMeshComponent->SetVisibility(true);
 	UE_LOG(LogTemp, Log, TEXT("WEAPON VISUAL: Attached '%s'"), *InMesh->GetName());
 }

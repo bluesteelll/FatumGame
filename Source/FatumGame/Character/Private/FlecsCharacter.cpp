@@ -43,6 +43,9 @@
 #include "FRopeVisualRenderer.h"
 #include "FlecsStealthComponents.h"
 #include "FlecsWeaponProfile.h"
+#include "Engine/Canvas.h"
+#include "CanvasItem.h"
+#include "Debug/DebugDrawService.h"
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONSTRUCTOR
@@ -123,6 +126,12 @@ void AFlecsCharacter::BeginPlay()
 
 	InitInteractionTrace();  // _Interaction.cpp
 	InitUI();                // _UI.cpp
+
+#if !UE_BUILD_SHIPPING
+	InertiaDebugDrawHandle = UDebugDrawService::Register(
+		TEXT("Game"),
+		FDebugDrawDelegate::CreateUObject(this, &AFlecsCharacter::DrawInertiaDebug));
+#endif
 }
 
 void AFlecsCharacter::InitCamera()
@@ -305,6 +314,14 @@ void AFlecsCharacter::InitECSRegistration()
 
 void AFlecsCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+#if !UE_BUILD_SHIPPING
+	if (InertiaDebugDrawHandle.IsValid())
+	{
+		UDebugDrawService::Unregister(InertiaDebugDrawHandle);
+		InertiaDebugDrawHandle.Reset();
+	}
+#endif
+
 	CleanupUI();           // _UI.cpp
 	CleanupInteraction();  // _Interaction.cpp
 	DetachWeaponVisual();  // _Combat.cpp
@@ -348,7 +365,7 @@ void AFlecsCharacter::Tick(float DeltaTime)
 	ConsumeTeleportSnap();                    // 2. Sim teleport → reset lerp buffers
 	TickTimeDilation(DeltaTime);              // 3. Blink aim push/remove, stack tick, sim atomics
 
-	// 3b. Weapon recoil (BEFORE UpdateCamera, AFTER TickTimeDilation for correct DT)
+	// 3b. Weapon recoil + inertia (BEFORE UpdateCamera, AFTER TickTimeDilation for correct DT)
 	{
 		// Compute recoil DT: wall-clock when bPlayerFullSpeed, dilated otherwise
 		float RecoilDT = DeltaTime;
@@ -362,9 +379,14 @@ void AFlecsCharacter::Tick(float DeltaTime)
 			}
 		}
 
+		// Consume raw mouse delta captured in Look() — guaranteed recoil-free
+		FVector2D MouseOnlyDelta = RecoilState.RawMouseDelta;
+		RecoilState.RawMouseDelta = FVector2D::ZeroVector;
+
 		DrainShotEventsAndApplyRecoil();
 		TickKickRecovery(RecoilDT);
 		TickScreenShake(RecoilDT);
+		TickWeaponInertia(RecoilDT, MouseOnlyDelta);
 
 		// Pattern reset timer
 		if (RecoilState.CachedProfile && RecoilState.ShotIndex > 0)
@@ -525,6 +547,16 @@ void AFlecsCharacter::UpdateCamera()
 		{
 			FollowCamera->AddLocalRotation(FRotator(RecoilState.ShakeOffset.X, RecoilState.ShakeOffset.Y, RecoilState.ShakeOffset.Z));
 		}
+
+		// Weapon inertia: reset to base transform, then apply inertia rotation
+		if (WeaponMeshComponent && WeaponMeshComponent->IsVisible())
+		{
+			WeaponMeshComponent->SetRelativeTransform(BaseWeaponTransform);
+			if (!RecoilState.InertiaOffset.IsNearlyZero(0.001f))
+			{
+				WeaponMeshComponent->AddLocalRotation(FRotator(RecoilState.InertiaOffset.X, RecoilState.InertiaOffset.Y, 0.f));
+			}
+		}
 	}
 }
 
@@ -568,6 +600,15 @@ void AFlecsCharacter::WriteAimDirection()
 			FVector SpawnOrigin = FollowCamera ? FollowCamera->GetComponentLocation() : GetActorLocation();
 			FVector AimDir = GetFiringDirection();
 
+			// Apply weapon inertia offset: bullets go where the weapon points, not the crosshair
+			if (!RecoilState.InertiaOffset.IsNearlyZero(0.001f))
+			{
+				FRotator AimRot = AimDir.Rotation();
+				AimRot.Pitch += RecoilState.InertiaOffset.X;
+				AimRot.Yaw += RecoilState.InertiaOffset.Y;
+				AimDir = AimRot.Vector();
+			}
+
 			FAimDirection Aim;
 			Aim.Direction = AimDir;
 			Aim.CharacterPosition = SpawnOrigin;
@@ -606,5 +647,33 @@ int64 AFlecsCharacter::GetCharacterEntityId() const
 
 	return static_cast<int64>(CharEntity.id());
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DEBUG DRAW (2D screen-space weapon aim dot)
+// ═══════════════════════════════════════════════════════════════════════════
+
+#if !UE_BUILD_SHIPPING
+void AFlecsCharacter::DrawInertiaDebug(UCanvas* Canvas, APlayerController* PC)
+{
+	if (!PC || !FollowCamera || !Canvas) return;
+	if (!RecoilState.CachedProfile || RecoilState.CachedProfile->InertiaStiffness <= 0.f) return;
+	FRotator AimRot = GetControlRotation();
+	AimRot.Pitch += RecoilState.InertiaOffset.X;
+	AimRot.Yaw += RecoilState.InertiaOffset.Y;
+	FVector WorldPoint = FollowCamera->GetComponentLocation() + AimRot.Vector() * 10000.f;
+
+	FVector2D ScreenPos;
+	if (PC->ProjectWorldLocationToScreen(WorldPoint, ScreenPos))
+	{
+		const float DotSize = 4.f;
+		FCanvasTileItem TileItem(
+			FVector2D(ScreenPos.X - DotSize, ScreenPos.Y - DotSize),
+			FVector2D(DotSize * 2.f, DotSize * 2.f),
+			FLinearColor(0.2f, 0.47f, 1.f, 0.85f));
+		TileItem.BlendMode = SE_BLEND_Translucent;
+		Canvas->DrawItem(TileItem);
+	}
+}
+#endif
 
 // Input binding + handler methods: see FlecsCharacter_Input.cpp

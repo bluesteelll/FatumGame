@@ -88,6 +88,10 @@ void AFlecsCharacter::Look(const FInputActionValue& Value)
 	{
 		AddControllerYawInput(LookAxisVector.X);
 		AddControllerPitchInput(LookAxisVector.Y);
+
+		// Accumulate raw mouse delta for weapon inertia (recoil-free).
+		// Negate pitch: LookAxisVector.Y sign convention differs from ControlRotation.Pitch.
+		RecoilState.RawMouseDelta += FVector2D(-LookAxisVector.Y, LookAxisVector.X);  // (Pitch, Yaw)
 	}
 }
 
