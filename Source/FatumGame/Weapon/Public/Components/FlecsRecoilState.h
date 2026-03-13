@@ -21,7 +21,7 @@ struct FWeaponRecoilState
 	// ── Screen Shake (visual-only oscillation) ──
 	float ShakeIntensity = 0.f;      // current amplitude (decaying)
 	float ShakePhase = 0.f;          // oscillation phase (radians)
-	FVector2D ShakeOffset = FVector2D::ZeroVector;  // computed this frame (pitch, yaw)
+	FVector ShakeOffset = FVector::ZeroVector;  // computed this frame (pitch, yaw, roll)
 
 	// ── Cached weapon profile (set on equip, read for tuning params) ──
 	const UFlecsWeaponProfile* CachedProfile = nullptr;
@@ -34,6 +34,6 @@ struct FWeaponRecoilState
 		KickOffset = FVector2D::ZeroVector;
 		ShakeIntensity = 0.f;
 		ShakePhase = 0.f;
-		ShakeOffset = FVector2D::ZeroVector;
+		ShakeOffset = FVector::ZeroVector;
 	}
 };

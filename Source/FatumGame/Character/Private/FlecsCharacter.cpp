@@ -523,7 +523,7 @@ void AFlecsCharacter::UpdateCamera()
 		// Screen shake: visual-only additive rotation (does NOT affect GetControlRotation)
 		if (RecoilState.ShakeOffset.SizeSquared() > 0.0001f)
 		{
-			FollowCamera->AddLocalRotation(FRotator(RecoilState.ShakeOffset.X, RecoilState.ShakeOffset.Y, 0.f));
+			FollowCamera->AddLocalRotation(FRotator(RecoilState.ShakeOffset.X, RecoilState.ShakeOffset.Y, RecoilState.ShakeOffset.Z));
 		}
 	}
 }

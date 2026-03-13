@@ -199,6 +199,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Screen Shake", meta = (ClampMin = "1", ClampMax = "100"))
 	float ShakeDecaySpeed = 15.f;
 
+	/** Roll (camera tilt) amplitude per shot (degrees). Adds mechanical rattle feel. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Screen Shake", meta = (ClampMin = "0", ClampMax = "5"))
+	float ShakeRollAmplitude = 0.4f;
+
 	// ═══════════════════════════════════════════════════════════════
 	// KICK (View Punch) — Auto-Recovering
 	// Short random camera displacement that springs back to zero.

@@ -128,7 +128,7 @@ void AFlecsCharacter::TickScreenShake(float DeltaTime)
 {
 	if (RecoilState.ShakeIntensity < 0.001f)
 	{
-		RecoilState.ShakeOffset = FVector2D::ZeroVector;
+		RecoilState.ShakeOffset = FVector::ZeroVector;
 		return;
 	}
 
@@ -147,7 +147,10 @@ void AFlecsCharacter::TickScreenShake(float DeltaTime)
 	}
 
 	const float Amp = RecoilState.ShakeIntensity;
-	// Use different frequency multipliers for pitch/yaw to avoid 1:1 correlation
+	// Use different frequency multipliers for pitch/yaw/roll to avoid correlation
 	RecoilState.ShakeOffset.X = Amp * FMath::Sin(RecoilState.ShakePhase);
 	RecoilState.ShakeOffset.Y = Amp * FMath::Sin(RecoilState.ShakePhase * 1.37f);
+	// Roll: separate amplitude (mechanical rattle), phase offset for decorrelation
+	const float RollRatio = Profile->ShakeRollAmplitude / FMath::Max(Profile->ShakeAmplitude, 0.001f);
+	RecoilState.ShakeOffset.Z = Amp * RollRatio * FMath::Sin(RecoilState.ShakePhase * 0.83f + 1.7f);
 }
