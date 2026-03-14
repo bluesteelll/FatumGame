@@ -26,6 +26,7 @@ void AFlecsCharacter::TickWeaponMotion(float DeltaTime)
 
 	const bool bSprinting = FatumMovement->IsSprinting();
 	const bool bInAir = FatumMovement->IsFalling();
+	const float ADSAlpha = RecoilState.ADSAlpha;
 
 	// Accumulate position and rotation offsets from all systems
 	FVector TotalPosOffset = FVector::ZeroVector;
@@ -49,9 +50,10 @@ void AFlecsCharacter::TickWeaponMotion(float DeltaTime)
 			RecoilState.WalkBobPhase = FMath::Fmod(RecoilState.WalkBobPhase, UE_TWO_PI);
 
 		// Figure-8: horizontal = sin(phase), vertical = -|sin(phase)| (bounce per step)
-		float BobH = FMath::Sin(RecoilState.WalkBobPhase) * Profile->WalkBobAmplitudeH * SpeedRatio * BobMultiplier;
-		float BobV = -FMath::Abs(FMath::Sin(RecoilState.WalkBobPhase)) * Profile->WalkBobAmplitudeV * SpeedRatio * BobMultiplier;
-		float BobRoll = FMath::Sin(RecoilState.WalkBobPhase) * Profile->WalkBobRollAmplitude * SpeedRatio * BobMultiplier;
+		float ADSBobScale = FMath::Lerp(1.f, Profile->ADSBobMultiplier, ADSAlpha);
+		float BobH = FMath::Sin(RecoilState.WalkBobPhase) * Profile->WalkBobAmplitudeH * SpeedRatio * BobMultiplier * ADSBobScale;
+		float BobV = -FMath::Abs(FMath::Sin(RecoilState.WalkBobPhase)) * Profile->WalkBobAmplitudeV * SpeedRatio * BobMultiplier * ADSBobScale;
+		float BobRoll = FMath::Sin(RecoilState.WalkBobPhase) * Profile->WalkBobRollAmplitude * SpeedRatio * BobMultiplier * ADSBobScale;
 
 		TotalPosOffset.X += BobH;  // lateral
 		TotalPosOffset.Z += BobV;  // vertical
@@ -69,6 +71,7 @@ void AFlecsCharacter::TickWeaponMotion(float DeltaTime)
 			// Normalize lateral speed to [-1, 1] based on reference speed
 			float LateralRatio = FMath::Clamp(RightSpeed / Profile->WalkBobReferenceSpeed, -1.f, 1.f);
 			TargetTilt = LateralRatio * Profile->StrafeTiltAngle;
+			TargetTilt *= FMath::Lerp(1.f, Profile->ADSStrafeTiltMultiplier, ADSAlpha);
 		}
 
 		RecoilState.CurrentStrafeTilt = FMath::FInterpTo(
@@ -101,6 +104,7 @@ void AFlecsCharacter::TickWeaponMotion(float DeltaTime)
 			// TrackedFallSpeed is cm/s, convert to m/s for human-readable scale param
 			float FallSpeedMs = RecoilState.TrackedFallSpeed / 100.f;
 			float ImpulseVelocity = FallSpeedMs * Profile->LandingImpactScale;
+			ImpulseVelocity *= FMath::Lerp(1.f, Profile->ADSLandingMultiplier, ADSAlpha);
 			RecoilState.LandingImpactVelocity.Z -= ImpulseVelocity;
 			RecoilState.TrackedFallSpeed = 0.f;
 		}
@@ -157,7 +161,7 @@ void AFlecsCharacter::TickWeaponMotion(float DeltaTime)
 		FVector TargetOffset = FVector::ZeroVector;
 		if (!bInAir && HorizontalSpeed > 10.f)
 		{
-			const float MScale = Profile->MovementInertiaScale;
+			const float MScale = Profile->MovementInertiaScale * FMath::Lerp(1.f, Profile->ADSMovementInertiaMultiplier, ADSAlpha);
 			TargetOffset.X = -RightSpeed * MScale;    // strafe right → weapon shifts left
 			TargetOffset.Y = -ForwardSpeed * MScale;   // move forward → weapon shifts back
 		}
@@ -217,6 +221,7 @@ void AFlecsCharacter::TickWeaponMotion(float DeltaTime)
 		{
 			// Small downward impulse on landing spring
 			float StepIntensity = FMath::Clamp(HorizontalSpeed / Profile->WalkBobReferenceSpeed, 0.f, 1.f);
+			StepIntensity *= FMath::Lerp(1.f, Profile->ADSBobMultiplier, ADSAlpha);
 			float SprintMul = bSprinting ? Profile->SprintBobMultiplier : 1.f;
 			RecoilState.LandingImpactVelocity.Z -= 15.f * StepIntensity * SprintMul;
 

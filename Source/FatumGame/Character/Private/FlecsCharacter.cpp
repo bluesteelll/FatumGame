@@ -401,7 +401,8 @@ void AFlecsCharacter::Tick(float DeltaTime)
 	}
 
 	TickWeaponMotion(DeltaTime);              // 3c. Movement-based weapon motion (bob, tilt, landing, sprint)
-	TickWeaponCollision(DeltaTime);           // 3d. Weapon wall collision (raycast → ready pose blend)
+	TickADS(DeltaTime);                       // 3d. ADS alpha interpolation + blocking
+	TickWeaponCollision(DeltaTime);           // 3e. Weapon wall collision (raycast → ready pose blend)
 
 	TickPostureAndResnap(DeltaTime);          // 4. Posture effects, FeetToActorOffset re-snap
 	if (RopeRenderer) { RopeRenderer->Update(DeltaTime, GetWorld(), GetActorLocation()); } // 4b. Rope Verlet + Niagara
@@ -529,7 +530,10 @@ void AFlecsCharacter::UpdateCamera()
 
 	if (!FatumMovement || !FollowCamera || bFocusDrivingCamera) return;
 
-	FollowCamera->SetFieldOfView(BaseFOV + FatumMovement->GetCurrentFOVOffset());
+	float ADSFOVReduction = (RecoilState.CachedProfile && RecoilState.ADSAlpha > 0.f)
+		? FMath::Max(0.f, FMath::Lerp(0.f, BaseFOV - RecoilState.CachedProfile->ADSFOV, RecoilState.ADSAlpha))
+		: 0.f;
+	FollowCamera->SetFieldOfView(BaseFOV + FatumMovement->GetCurrentFOVOffset() - ADSFOVReduction);
 
 	if (bFirstPersonCamera)
 	{
@@ -554,7 +558,13 @@ void AFlecsCharacter::UpdateCamera()
 		// Weapon transform: reset to base, then layer all offsets
 		if (WeaponMeshComponent && WeaponMeshComponent->IsVisible())
 		{
-			WeaponMeshComponent->SetRelativeTransform(BaseWeaponTransform);
+			// Step 0: Blend between hip pose and ADS pose
+			FTransform EffectiveBase = BaseWeaponTransform;
+			if (RecoilState.ADSAlpha > 0.f && RecoilState.bADSTransformValid)
+			{
+				EffectiveBase.BlendWith(RecoilState.ADSWeaponTransform, RecoilState.ADSAlpha);
+			}
+			WeaponMeshComponent->SetRelativeTransform(EffectiveBase);
 
 			// Layer 1: Rotational inertia (aim lag)
 			if (!RecoilState.InertiaOffset.IsNearlyZero(0.001f))

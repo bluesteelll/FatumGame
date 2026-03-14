@@ -404,6 +404,90 @@ public:
 	float MaxMovementInertiaOffset = 3.f;
 
 	// ═══════════════════════════════════════════════════════════════
+	// ADS (Aim Down Sights)
+	// Weapon mesh transitions to sight-aligned pose, FOV narrows,
+	// motion effects attenuate. Socket-based sight alignment.
+	// ═══════════════════════════════════════════════════════════════
+
+	/** FOV when fully aimed (degrees). BaseFOV=90. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ADS", meta = (ClampMin = "10", ClampMax = "90"))
+	float ADSFOV = 70.f;
+
+	/** Transition speed entering ADS. 12=~250ms (AR), 8=~375ms (LMG), 15=~200ms (SMG). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ADS", meta = (ClampMin = "3", ClampMax = "30"))
+	float ADSTransitionInSpeed = 12.f;
+
+	/** Transition speed exiting ADS. Typically faster than in. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ADS", meta = (ClampMin = "3", ClampMax = "30"))
+	float ADSTransitionOutSpeed = 15.f;
+
+	/** Sensitivity multiplier during ADS. 0 = auto-compute from FOV ratio (recommended). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ADS", meta = (ClampMin = "0", ClampMax = "2"))
+	float ADSSensitivityMultiplier = 0.f;
+
+	/** Socket name on weapon mesh for sight alignment. Weapon translates so this socket centers on screen. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ADS")
+	FName SightAnchorSocket = TEXT("SightAnchor");
+
+	/** Manual ADS position override (local offset from hip pose). Zero = use socket-based auto-alignment. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ADS")
+	FVector ADSPositionOverride = FVector::ZeroVector;
+
+	/** Manual ADS rotation override (degrees). Zero = no rotation change. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ADS")
+	FRotator ADSRotationOverride = FRotator::ZeroRotator;
+
+	// ── ADS Attenuation Multipliers (1.0 = no change, 0.0 = fully suppressed) ──
+
+	/** Walk bob amplitude during ADS. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ADS|Attenuation", meta = (ClampMin = "0", ClampMax = "1"))
+	float ADSBobMultiplier = 0.25f;
+
+	/** Idle sway amplitude during ADS. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ADS|Attenuation", meta = (ClampMin = "0", ClampMax = "1"))
+	float ADSSwayMultiplier = 0.35f;
+
+	/** Positional inertia (heavy hands) during ADS. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ADS|Attenuation", meta = (ClampMin = "0", ClampMax = "1"))
+	float ADSPositionalInertiaMultiplier = 0.5f;
+
+	/** Rotational inertia (aim lag) during ADS. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ADS|Attenuation", meta = (ClampMin = "0", ClampMax = "1"))
+	float ADSRotationalInertiaMultiplier = 0.6f;
+
+	/** Movement inertia during ADS. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ADS|Attenuation", meta = (ClampMin = "0", ClampMax = "1"))
+	float ADSMovementInertiaMultiplier = 0.3f;
+
+	/** Strafe tilt during ADS. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ADS|Attenuation", meta = (ClampMin = "0", ClampMax = "1"))
+	float ADSStrafeTiltMultiplier = 0.3f;
+
+	/** Landing impact during ADS. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ADS|Attenuation", meta = (ClampMin = "0", ClampMax = "1"))
+	float ADSLandingMultiplier = 0.5f;
+
+	/** Kick (view punch) during ADS. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ADS|Attenuation", meta = (ClampMin = "0", ClampMax = "1"))
+	float ADSKickMultiplier = 0.75f;
+
+	/** Spread multiplier during ADS. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ADS|Attenuation", meta = (ClampMin = "0", ClampMax = "1"))
+	float ADSSpreadMultiplier = 0.6f;
+
+	/** Movement speed multiplier during ADS. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ADS|Attenuation", meta = (ClampMin = "0.3", ClampMax = "1"))
+	float ADSMoveSpeedMultiplier = 0.7f;
+
+	/** Block ADS while reloading. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ADS")
+	bool bBlockADSDuringReload = true;
+
+	/** ADS input cancels sprint. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ADS")
+	bool bADSCancelsSprint = true;
+
+	// ═══════════════════════════════════════════════════════════════
 	// WEAPON COLLISION (Wall Ready — weapon retracts near obstacles)
 	// 3 raycasts from camera detect nearby geometry (NON_MOVING only).
 	// Alpha drives smooth blend from hip pose to ready pose.

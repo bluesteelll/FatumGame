@@ -5,6 +5,7 @@
 #include "FatumInputComponent.h"
 #include "FatumInputTags.h"
 #include "FatumMovementComponent.h"
+#include "FlecsWeaponProfile.h"
 #include "FlecsEntityDefinition.h"
 #include "FlecsContainerLibrary.h"
 #include "FlecsItemDefinition.h"
@@ -38,6 +39,8 @@ void AFlecsCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 	FatumInput->BindNativeAction(InputConfig, TAG_Input_Cancel,    ETriggerEvent::Started,   this, &AFlecsCharacter::OnInteractCancel);
 	FatumInput->BindNativeAction(InputConfig, TAG_Input_Sprint,    ETriggerEvent::Started,   this, &AFlecsCharacter::OnSprintStarted);
 	FatumInput->BindNativeAction(InputConfig, TAG_Input_Sprint,    ETriggerEvent::Completed, this, &AFlecsCharacter::OnSprintCompleted);
+	FatumInput->BindNativeAction(InputConfig, TAG_Input_ADS,       ETriggerEvent::Started,   this, &AFlecsCharacter::OnADSStarted);
+	FatumInput->BindNativeAction(InputConfig, TAG_Input_ADS,       ETriggerEvent::Completed, this, &AFlecsCharacter::OnADSCompleted);
 	FatumInput->BindNativeAction(InputConfig, TAG_Input_Crouch,    ETriggerEvent::Started,   this, &AFlecsCharacter::OnCrouchStarted);
 	FatumInput->BindNativeAction(InputConfig, TAG_Input_Crouch,    ETriggerEvent::Completed, this, &AFlecsCharacter::OnCrouchCompleted);
 	FatumInput->BindNativeAction(InputConfig, TAG_Input_Prone,     ETriggerEvent::Started,   this, &AFlecsCharacter::OnProneStarted);
@@ -86,6 +89,22 @@ void AFlecsCharacter::Look(const FInputActionValue& Value)
 
 	if (Controller != nullptr)
 	{
+		// ADS sensitivity scaling
+		if (RecoilState.ADSAlpha > 0.f && RecoilState.CachedProfile)
+		{
+			float SensMul = RecoilState.CachedProfile->ADSSensitivityMultiplier;
+			if (SensMul <= 0.f)
+			{
+				// Auto-compute from FOV ratio (focal length formula)
+				float EffectiveBaseFOV = BaseFOV + (FatumMovement ? FatumMovement->GetCurrentFOVOffset() : 0.f);
+				float BaseFOVRad = FMath::DegreesToRadians(EffectiveBaseFOV * 0.5f);
+				float ADSFOVRad = FMath::DegreesToRadians(RecoilState.CachedProfile->ADSFOV * 0.5f);
+				SensMul = FMath::Tan(ADSFOVRad) / FMath::Tan(BaseFOVRad);
+			}
+			float EffectiveMul = FMath::Lerp(1.f, SensMul, RecoilState.ADSAlpha);
+			LookAxisVector *= EffectiveMul;
+		}
+
 		AddControllerYawInput(LookAxisVector.X);
 		AddControllerPitchInput(LookAxisVector.Y);
 
@@ -97,6 +116,10 @@ void AFlecsCharacter::Look(const FInputActionValue& Value)
 
 void AFlecsCharacter::OnSprintStarted(const FInputActionValue& Value)
 {
+	// Block sprint while ADS is active (ADS cancels sprint, so re-entering sprint during ADS is invalid)
+	if (RecoilState.ADSAlpha > 0.f && RecoilState.CachedProfile && RecoilState.CachedProfile->bADSCancelsSprint)
+		return;
+
 	if (InputAtomics) InputAtomics->Sprinting.Write(true);
 	if (FatumMovement) FatumMovement->RequestSprint(true);
 }

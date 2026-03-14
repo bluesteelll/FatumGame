@@ -231,6 +231,16 @@ public:
 	void ReloadTestWeapon();
 
 	// ═══════════════════════════════════════════════════════════════
+	// ADS QUERIES
+	// ═══════════════════════════════════════════════════════════════
+
+	UFUNCTION(BlueprintPure, Category = "Fatum|Weapon")
+	bool IsAimingDownSights() const { return RecoilState.ADSAlpha > 0.5f; }
+
+	UFUNCTION(BlueprintPure, Category = "Fatum|Weapon")
+	float GetADSAlpha() const { return RecoilState.ADSAlpha; }
+
+	// ═══════════════════════════════════════════════════════════════
 	// INVENTORY
 	// Pure ECS containers — no physics, no SkeletonKey.
 	// Defined via Data Assets, spawned on BeginPlay.
@@ -675,6 +685,16 @@ private:
 
 	/** Movement-based weapon motion: walk bob, strafe tilt, landing, sprint pose, movement inertia, footsteps. */
 	void TickWeaponMotion(float DeltaTime);
+
+	/** ADS input handlers */
+	void OnADSStarted(const FInputActionValue& Value);
+	void OnADSCompleted(const FInputActionValue& Value);
+
+	/** Tick ADS alpha interpolation, handle blocking conditions. */
+	void TickADS(float DeltaTime);
+
+	/** Compute ADS weapon transform from sight socket alignment. Called on weapon equip. */
+	void ComputeADSTransform();
 
 	/** Weapon collision: 3 raycasts detect nearby walls, drive retraction to ready pose. */
 	void TickWeaponCollision(float DeltaTime);

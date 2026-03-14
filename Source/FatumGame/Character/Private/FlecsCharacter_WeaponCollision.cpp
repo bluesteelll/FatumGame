@@ -30,7 +30,7 @@ void AFlecsCharacter::TickWeaponCollision(float DeltaTime)
 
 	const float TraceDistance = Profile->CollisionTraceDistance;
 
-	ensureMsgf(Profile->CollisionStartRetractDistance > Profile->CollisionFullRetractDistance,
+	checkf(Profile->CollisionStartRetractDistance > Profile->CollisionFullRetractDistance,
 		TEXT("WeaponProfile: CollisionStartRetractDistance (%.1f) must be > CollisionFullRetractDistance (%.1f)"),
 		Profile->CollisionStartRetractDistance, Profile->CollisionFullRetractDistance);
 
@@ -144,7 +144,8 @@ void AFlecsCharacter::TickWeaponCollision(float DeltaTime)
 		FQuat UpQuat = Profile->CollisionReadyPoseRotation.Quaternion();
 		FQuat DownQuat = Profile->CollisionReadyPoseRotationDown.Quaternion();
 		FQuat BlendedQuat = FQuat::Slerp(UpQuat, DownQuat, DirBlend);
-		RecoilState.CollisionRotationOffset = BlendedQuat.Rotator() * Alpha;
+		FQuat ScaledQuat = FQuat::Slerp(FQuat::Identity, BlendedQuat, Alpha);
+		RecoilState.CollisionRotationOffset = ScaledQuat.Rotator();
 	}
 	else
 	{

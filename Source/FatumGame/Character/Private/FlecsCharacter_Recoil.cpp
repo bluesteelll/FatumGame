@@ -68,6 +68,13 @@ void AFlecsCharacter::DrainShotEventsAndApplyRecoil()
 		// ── Kick Impulse (instant offset, spring-damper will recover) ──
 		float KickPitch = FMath::FRandRange(Profile->KickPitchMin, Profile->KickPitchMax);
 		float KickYaw = FMath::FRandRange(Profile->KickYawMin, Profile->KickYawMax);
+		// ADS attenuation: reduce kick during aim-down-sights
+		if (RecoilState.ADSAlpha > 0.f)
+		{
+			float KickAtten = FMath::Lerp(1.f, Profile->ADSKickMultiplier, RecoilState.ADSAlpha);
+			KickPitch *= KickAtten;
+			KickYaw *= KickAtten;
+		}
 		RecoilState.KickOffset += FVector2D(KickPitch, KickYaw);
 		// Apply impulse to controller NOW — recovery will undo it
 		AddControllerPitchInput(KickPitch);
@@ -168,10 +175,13 @@ void AFlecsCharacter::TickWeaponInertia(float DeltaTime, const FVector2D& AimDel
 	const UFlecsWeaponProfile* Profile = RecoilState.CachedProfile;
 	if (!Profile || Profile->InertiaStiffness <= 0.f) return;
 
+	const float ADSAlpha = RecoilState.ADSAlpha;
+
 	// ── Mouse-driven inertia ──
 	// AimDelta = how much crosshair moved this frame (mouse only, recoil excluded).
 	// Weapon didn't follow yet → offset grows by the delta.
-	RecoilState.InertiaOffset -= AimDelta;
+	float RotInertiaScale = FMath::Lerp(1.f, Profile->ADSRotationalInertiaMultiplier, ADSAlpha);
+	RecoilState.InertiaOffset -= AimDelta * RotInertiaScale;
 
 	// Track mouse activity for sway fade (when bSwayFadeDuringMouse enabled)
 	if (AimDelta.SizeSquared() > 0.01f)
@@ -219,7 +229,8 @@ void AFlecsCharacter::TickWeaponInertia(float DeltaTime, const FVector2D& AimDel
 	if (Profile->InertiaPositionScale > 0.f)
 	{
 		// Mouse input → positional displacement (yaw → local X, pitch → local Z)
-		const float PosScale = Profile->InertiaPositionScale;
+		const float PosInertiaADS = FMath::Lerp(1.f, Profile->ADSPositionalInertiaMultiplier, ADSAlpha);
+		const float PosScale = Profile->InertiaPositionScale * PosInertiaADS;
 		RecoilState.InertiaPositionOffset.X += AimDelta.Y * PosScale;  // yaw → lateral shift
 		RecoilState.InertiaPositionOffset.Z += AimDelta.X * PosScale;  // pitch → vertical shift
 
@@ -273,7 +284,8 @@ void AFlecsCharacter::TickWeaponInertia(float DeltaTime, const FVector2D& AimDel
 			if (RecoilState.IdleSwayPhase > UE_TWO_PI * 100.f)
 				RecoilState.IdleSwayPhase = FMath::Fmod(RecoilState.IdleSwayPhase, UE_TWO_PI);
 
-			const float Amp = Profile->IdleSwayAmplitude * SwayAlpha;
+			const float SwayADSScale = FMath::Lerp(1.f, Profile->ADSSwayMultiplier, ADSAlpha);
+			const float Amp = Profile->IdleSwayAmplitude * SwayAlpha * SwayADSScale;
 			FVector2D NewSway;
 			NewSway.X = Amp * FMath::Sin(RecoilState.IdleSwayPhase);
 			NewSway.Y = Amp * FMath::Sin(RecoilState.IdleSwayPhase * 1.3f + 0.7f);

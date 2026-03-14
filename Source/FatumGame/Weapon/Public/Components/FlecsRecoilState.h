@@ -70,6 +70,12 @@ struct FWeaponRecoilState
 	FVector CollisionPositionOffset = FVector::ZeroVector;   // interpolated position offset
 	FRotator CollisionRotationOffset = FRotator::ZeroRotator; // interpolated rotation offset
 
+	// ── ADS (Aim Down Sights) ──
+	float ADSAlpha = 0.f;          // smoothed 0-1 blend (0=hip, 1=ADS)
+	bool bWantsADS = false;        // input request
+	FTransform ADSWeaponTransform = FTransform::Identity;  // cached ADS pose (computed on equip)
+	bool bADSTransformValid = false;  // true after ComputeADSTransform succeeds
+
 	// ── Cached weapon profile (set on equip, read for tuning params) ──
 	const UFlecsWeaponProfile* CachedProfile = nullptr;
 
@@ -107,5 +113,10 @@ struct FWeaponRecoilState
 		CollisionCurrentDirectionBlend = 0.f;
 		CollisionPositionOffset = FVector::ZeroVector;
 		CollisionRotationOffset = FRotator::ZeroRotator;
+		ADSAlpha = 0.f;
+		bWantsADS = false;
+		ADSWeaponTransform = FTransform::Identity;
+		bADSTransformValid = false;
+		CachedProfile = nullptr;
 	}
 };
