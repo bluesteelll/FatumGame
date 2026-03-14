@@ -401,6 +401,7 @@ void AFlecsCharacter::Tick(float DeltaTime)
 	}
 
 	TickWeaponMotion(DeltaTime);              // 3c. Movement-based weapon motion (bob, tilt, landing, sprint)
+	TickWeaponCollision(DeltaTime);           // 3d. Weapon wall collision (raycast → ready pose blend)
 
 	TickPostureAndResnap(DeltaTime);          // 4. Posture effects, FeetToActorOffset re-snap
 	if (RopeRenderer) { RopeRenderer->Update(DeltaTime, GetWorld(), GetActorLocation()); } // 4b. Rope Verlet + Niagara
@@ -575,6 +576,13 @@ void AFlecsCharacter::UpdateCamera()
 			if (!RecoilState.MotionRotationOffset.IsNearlyZero(0.001f))
 			{
 				WeaponMeshComponent->AddLocalRotation(RecoilState.MotionRotationOffset);
+			}
+
+			// Layer 4: Wall collision — weapon retracts to ready pose near obstacles
+			if (RecoilState.CollisionCurrentAlpha > 0.f)
+			{
+				WeaponMeshComponent->AddLocalOffset(RecoilState.CollisionPositionOffset);
+				WeaponMeshComponent->AddLocalRotation(RecoilState.CollisionRotationOffset);
 			}
 		}
 	}

@@ -404,6 +404,64 @@ public:
 	float MaxMovementInertiaOffset = 3.f;
 
 	// ═══════════════════════════════════════════════════════════════
+	// WEAPON COLLISION (Wall Ready — weapon retracts near obstacles)
+	// 3 raycasts from camera detect nearby geometry (NON_MOVING only).
+	// Alpha drives smooth blend from hip pose to ready pose.
+	// ═══════════════════════════════════════════════════════════════
+
+	/** Maximum raycast distance for wall detection (cm). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon Collision", meta = (ClampMin = "10", ClampMax = "200"))
+	float CollisionTraceDistance = 80.f;
+
+	/** Weapon starts retracting when obstacle is closer than this (cm). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon Collision", meta = (ClampMin = "5", ClampMax = "200"))
+	float CollisionStartRetractDistance = 70.f;
+
+	/** Weapon is fully retracted when obstacle is this close (cm). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon Collision", meta = (ClampMin = "1", ClampMax = "100"))
+	float CollisionFullRetractDistance = 20.f;
+
+	/** Power curve exponent for alpha mapping (1=linear, 2=quadratic ease-in). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon Collision", meta = (ClampMin = "0.5", ClampMax = "4"))
+	float CollisionAlphaPower = 1.5f;
+
+	/** Weapon position in "ready" pose (local offset from base, cm). Typically raised up+back. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon Collision")
+	FVector CollisionReadyPoseOffset = FVector(-5.f, 0.f, 8.f);
+
+	/** Weapon rotation in "ready" pose when obstacle is below/ahead (degrees). Barrel tips up. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon Collision")
+	FRotator CollisionReadyPoseRotation = FRotator(45.f, 0.f, 0.f);
+
+	/** Weapon position in "low ready" pose (local offset, cm). Used when obstacle is above. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon Collision")
+	FVector CollisionReadyPoseOffsetDown = FVector(-5.f, 0.f, -8.f);
+
+	/** Weapon rotation in "low ready" pose (degrees). Barrel tips down. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon Collision")
+	FRotator CollisionReadyPoseRotationDown = FRotator(-30.f, 0.f, 0.f);
+
+	/** Vertical spread angle for up/down detection rays (degrees). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon Collision", meta = (ClampMin = "0", ClampMax = "45"))
+	float CollisionVerticalSpreadAngle = 15.f;
+
+	/** Speed at which weapon moves INTO ready pose (spring interp speed). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon Collision", meta = (ClampMin = "1", ClampMax = "30"))
+	float CollisionRetractSpeed = 12.f;
+
+	/** Speed at which weapon returns FROM ready pose (spring interp speed). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon Collision", meta = (ClampMin = "1", ClampMax = "30"))
+	float CollisionRestoreSpeed = 6.f;
+
+	/** Alpha threshold above which firing is blocked (0-1). 0 = never block. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon Collision", meta = (ClampMin = "0", ClampMax = "1"))
+	float CollisionFireBlockThreshold = 0.7f;
+
+	/** Ray spread half-angle (degrees). Side rays fan out by this amount. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon Collision", meta = (ClampMin = "0", ClampMax = "30"))
+	float CollisionRaySpreadAngle = 10.f;
+
+	// ═══════════════════════════════════════════════════════════════
 	// HELPERS
 	// ═══════════════════════════════════════════════════════════════
 

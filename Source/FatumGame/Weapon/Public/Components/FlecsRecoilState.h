@@ -62,6 +62,14 @@ struct FWeaponRecoilState
 	FVector MotionPositionOffset = FVector::ZeroVector;  // total positional offset from all motion systems
 	FRotator MotionRotationOffset = FRotator::ZeroRotator;  // total rotational offset from all motion systems
 
+	// ── Weapon Collision (wall ready pose) ──
+	float CollisionTargetAlpha = 0.f;   // raw alpha from raycasts (0=clear, 1=fully blocked)
+	float CollisionCurrentAlpha = 0.f;  // smoothed alpha (asymmetric spring: fast in, slow out)
+	float CollisionDirectionBlend = 0.f; // 0=up pose (wall/floor), 1=down pose (ceiling)
+	float CollisionCurrentDirectionBlend = 0.f; // smoothed direction blend
+	FVector CollisionPositionOffset = FVector::ZeroVector;   // interpolated position offset
+	FRotator CollisionRotationOffset = FRotator::ZeroRotator; // interpolated rotation offset
+
 	// ── Cached weapon profile (set on equip, read for tuning params) ──
 	const UFlecsWeaponProfile* CachedProfile = nullptr;
 
@@ -93,5 +101,11 @@ struct FWeaponRecoilState
 		MovementInertiaVelocity = FVector::ZeroVector;
 		MotionPositionOffset = FVector::ZeroVector;
 		MotionRotationOffset = FRotator::ZeroRotator;
+		CollisionTargetAlpha = 0.f;
+		CollisionCurrentAlpha = 0.f;
+		CollisionDirectionBlend = 0.f;
+		CollisionCurrentDirectionBlend = 0.f;
+		CollisionPositionOffset = FVector::ZeroVector;
+		CollisionRotationOffset = FRotator::ZeroRotator;
 	}
 };

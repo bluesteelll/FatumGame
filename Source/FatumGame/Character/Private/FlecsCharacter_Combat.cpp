@@ -439,6 +439,13 @@ void AFlecsCharacter::StartFiringWeapon()
 {
 	if (TestWeaponEntityId == 0) return;
 
+	// Block firing when weapon is retracted into wall-ready pose
+	if (RecoilState.CachedProfile && RecoilState.CachedProfile->CollisionFireBlockThreshold > 0.f)
+	{
+		if (RecoilState.CollisionCurrentAlpha >= RecoilState.CachedProfile->CollisionFireBlockThreshold)
+			return;
+	}
+
 	// Update aim direction via lock-free bridge (ensures fresh data for first shot)
 	if (auto* FlecsSubsystem = GetWorld()->GetSubsystem<UFlecsArtillerySubsystem>())
 	{
