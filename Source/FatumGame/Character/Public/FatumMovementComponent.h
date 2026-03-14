@@ -178,13 +178,13 @@ private:
 	// Landing detection (for camera compress)
 	bool bWasGroundedLastFrame = true;
 	float LandingFallSpeed = 0.f;
+	float LandingCooldown = 0.f;  // prevents rapid-fire landing impulses on uneven surfaces
 
 	// Camera effects
 	float CurrentFOVOffset = 0.f;
 	float TargetFOVOffset = 0.f;
-	float LandingCompressTimer = 0.f;
-	float LandingCompressOffset = 0.f;
-	float LandingCompressInitial = 0.f;
+	float LandingCompressOffset = 0.f;   // current spring displacement (cm)
+	float LandingCompressVelocity = 0.f; // spring velocity (cm/s)
 
 	// Head bob
 	float HeadBobTimer = 0.f;

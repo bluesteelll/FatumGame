@@ -12,7 +12,10 @@ JPH::BodyID FBCharacter::Create(JPH::CharacterVsCharacterCollision* CVCColliderS
 		if(World)
 		{
 			mGravity = Vec3(0, -9.80, 0);
-			mCharacterSettings.mMass = 1000;
+			// mMass controls ONLY the gravity impulse applied to ground body (line 1417 in CharacterVirtual.cpp).
+			// Mass=0 disables it entirely, preventing jitter when standing on dynamic objects.
+			// Lateral pushing (HandleContact) uses mMaxStrength instead, unaffected by mMass.
+			mCharacterSettings.mMass = 0;
 			Ref<Shape> capsule = new CapsuleShape(0.5f * mHeightStanding, mRadiusStanding);
 			Ref<Shape> capsuleB = new CapsuleShape(0.5f * mHeightStanding, mRadiusStanding);
 			mCharacterSettings.mEnhancedInternalEdgeRemoval = true;
@@ -21,7 +24,9 @@ JPH::BodyID FBCharacter::Create(JPH::CharacterVsCharacterCollision* CVCColliderS
 			// Configure supporting volume
 			mCharacterSettings.mSupportingVolume = Plane(Vec3::sAxisY(), -mHeightStanding);
 			mForcesUpdate = Vec3::sZero();
-			mCharacterSettings.mInnerBodyLayer = Layers::EJoltPhysicsLayer::MOVING;
+			// HITBOX layer: projectiles + raycasts hit the character, but inner body
+			// won't physically push MOVING-layer dynamic objects during StepSimulation.
+			mCharacterSettings.mInnerBodyLayer = Layers::EJoltPhysicsLayer::HITBOX;
 			auto SettingsForInnerShape = RotatedTranslatedShapeSettings(
 				Vec3(0, 0.5f * mHeightStanding + mRadiusStanding, 0), Quat::sIdentity(), capsuleB);
 			// Accept contacts that touch the lower sphere of the capsule

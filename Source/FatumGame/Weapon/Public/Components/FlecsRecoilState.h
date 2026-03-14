@@ -39,6 +39,29 @@ struct FWeaponRecoilState
 	FVector2D PrevSwayValue = FVector2D::ZeroVector;  // for delta-based application
 	float TimeSinceLastMouseMove = 0.f;  // used when bSwayFadeDuringMouse enabled
 
+	// ── Walk Bob ──
+	float WalkBobPhase = 0.f;
+
+	// ── Strafe Tilt ──
+	float CurrentStrafeTilt = 0.f;
+
+	// ── Landing Impact (spring-damper) ──
+	FVector LandingImpactOffset = FVector::ZeroVector;
+	FVector LandingImpactVelocity = FVector::ZeroVector;
+	bool bWasInAir = false;
+	float TrackedFallSpeed = 0.f;  // max downward speed while airborne (cm/s, positive = falling)
+
+	// ── Sprint Pose ──
+	float SprintPoseAlpha = 0.f;
+
+	// ── Movement Inertia (velocity-based spring offset) ──
+	FVector MovementInertiaOffset = FVector::ZeroVector;
+	FVector MovementInertiaVelocity = FVector::ZeroVector;
+
+	// ── Combined motion output (computed by TickWeaponMotion, applied in UpdateCamera) ──
+	FVector MotionPositionOffset = FVector::ZeroVector;  // total positional offset from all motion systems
+	FRotator MotionRotationOffset = FRotator::ZeroRotator;  // total rotational offset from all motion systems
+
 	// ── Cached weapon profile (set on equip, read for tuning params) ──
 	const UFlecsWeaponProfile* CachedProfile = nullptr;
 
@@ -59,5 +82,16 @@ struct FWeaponRecoilState
 		IdleSwayPhase = 0.f;
 		PrevSwayValue = FVector2D::ZeroVector;
 		TimeSinceLastMouseMove = 0.f;
+		WalkBobPhase = 0.f;
+		CurrentStrafeTilt = 0.f;
+		LandingImpactOffset = FVector::ZeroVector;
+		LandingImpactVelocity = FVector::ZeroVector;
+		bWasInAir = false;
+		TrackedFallSpeed = 0.f;
+		SprintPoseAlpha = 0.f;
+		MovementInertiaOffset = FVector::ZeroVector;
+		MovementInertiaVelocity = FVector::ZeroVector;
+		MotionPositionOffset = FVector::ZeroVector;
+		MotionRotationOffset = FRotator::ZeroRotator;
 	}
 };

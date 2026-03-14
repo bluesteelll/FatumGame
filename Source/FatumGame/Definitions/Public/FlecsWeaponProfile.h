@@ -317,6 +317,93 @@ public:
 	float MaxInertiaPositionOffset = 5.f;
 
 	// ═══════════════════════════════════════════════════════════════
+	// WEAPON MOTION — Movement-Based Effects (walk bob, strafe tilt, etc.)
+	// All effects layer additively on the weapon mesh transform.
+	// ═══════════════════════════════════════════════════════════════
+
+	// ── Walk Bob (figure-8 Lissajous pattern driven by movement speed) ──
+
+	/** Horizontal bob amplitude (cm). Side-to-side sway per step. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon Motion|Walk Bob", meta = (ClampMin = "0", ClampMax = "5"))
+	float WalkBobAmplitudeH = 0.8f;
+
+	/** Vertical bob amplitude (cm). Up-down bounce per step. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon Motion|Walk Bob", meta = (ClampMin = "0", ClampMax = "5"))
+	float WalkBobAmplitudeV = 0.5f;
+
+	/** Bob frequency at full walk speed (Hz). Steps per second. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon Motion|Walk Bob", meta = (ClampMin = "1", ClampMax = "20"))
+	float WalkBobFrequency = 10.f;
+
+	/** Roll rotation per step cycle (degrees). Adds weapon tilt during bob. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon Motion|Walk Bob", meta = (ClampMin = "0", ClampMax = "5"))
+	float WalkBobRollAmplitude = 0.5f;
+
+	/** Sprint bob multiplier. Amplifies bob during sprint. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon Motion|Walk Bob", meta = (ClampMin = "0", ClampMax = "3"))
+	float SprintBobMultiplier = 1.5f;
+
+	/** Character speed considered "full walk" for bob scaling (cm/s). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon Motion|Walk Bob", meta = (ClampMin = "50", ClampMax = "1000"))
+	float WalkBobReferenceSpeed = 300.f;
+
+	// ── Strafe Tilt (weapon rolls when moving laterally) ──
+
+	/** Maximum roll angle when strafing at full speed (degrees). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon Motion|Strafe Tilt", meta = (ClampMin = "0", ClampMax = "10"))
+	float StrafeTiltAngle = 2.f;
+
+	/** Interpolation speed toward target tilt. Higher = snappier. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon Motion|Strafe Tilt", meta = (ClampMin = "1", ClampMax = "30"))
+	float StrafeTiltSpeed = 8.f;
+
+	// ── Landing Impact (spring impulse on land, scales with fall speed) ──
+
+	/** Displacement per m/s of fall speed (cm). How much weapon drops on landing. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon Motion|Landing Impact", meta = (ClampMin = "0", ClampMax = "10"))
+	float LandingImpactScale = 3.f;
+
+	/** Landing spring stiffness. Lower = longer bounce. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon Motion|Landing Impact", meta = (ClampMin = "10", ClampMax = "500"))
+	float LandingSpringStiffness = 150.f;
+
+	/** Landing spring damping. <1 = overshoot bounce, 1 = no oscillation. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon Motion|Landing Impact", meta = (ClampMin = "0.1", ClampMax = "2.0"))
+	float LandingSpringDamping = 0.6f;
+
+	// ── Sprint Pose (weapon lowers and tilts during sprint) ──
+
+	/** Weapon position offset during sprint (local space, cm). Typically forward+down. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon Motion|Sprint Pose")
+	FVector SprintPoseOffset = FVector(5.f, 0.f, -3.f);
+
+	/** Weapon rotation offset during sprint (degrees). Typically tilt down + roll. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon Motion|Sprint Pose")
+	FRotator SprintPoseRotation = FRotator(-10.f, 5.f, 10.f);
+
+	/** Transition speed to/from sprint pose. Higher = snappier. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon Motion|Sprint Pose", meta = (ClampMin = "1", ClampMax = "20"))
+	float SprintTransitionSpeed = 6.f;
+
+	// ── Movement Inertia (weapon shifts based on character acceleration) ──
+
+	/** Displacement per cm/s of velocity. Higher = weapon shifts more during movement. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon Motion|Movement Inertia", meta = (ClampMin = "0", ClampMax = "0.05"))
+	float MovementInertiaScale = 0.005f;
+
+	/** Movement inertia spring stiffness. Lower = heavier weapon. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon Motion|Movement Inertia", meta = (ClampMin = "5", ClampMax = "300"))
+	float MovementInertiaStiffness = 80.f;
+
+	/** Movement inertia damping. <1 = overshoot on stop. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon Motion|Movement Inertia", meta = (ClampMin = "0.1", ClampMax = "2.0"))
+	float MovementInertiaDamping = 0.7f;
+
+	/** Maximum movement inertia offset (cm). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon Motion|Movement Inertia", meta = (ClampMin = "0", ClampMax = "10"))
+	float MaxMovementInertiaOffset = 3.f;
+
+	// ═══════════════════════════════════════════════════════════════
 	// HELPERS
 	// ═══════════════════════════════════════════════════════════════
 

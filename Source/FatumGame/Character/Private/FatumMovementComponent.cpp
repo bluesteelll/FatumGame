@@ -201,14 +201,17 @@ void UFatumMovementComponent::UpdateMovementLayer(float DeltaTime)
 	const bool bGrounded = IsMovingOnGround();
 
 	// Landing detection (for camera compress)
-	if (!bWasGroundedLastFrame && bGrounded)
+	// Landing cooldown (prevents rapid landing impulses on uneven surfaces)
+	if (LandingCooldown > 0.f) LandingCooldown -= DeltaTime;
+
+	if (!bWasGroundedLastFrame && bGrounded && LandingCooldown <= 0.f)
 	{
 		if (MovementProfile && LandingFallSpeed >= MovementProfile->LandingMinFallSpeed)
 		{
-			LandingCompressTimer = MovementProfile->LandingCameraCompressDuration;
-			float CompressScale = FMath::Clamp(LandingFallSpeed / 1000.f, 0.f, 1.f);
-			LandingCompressInitial = -MovementProfile->LandingCameraCompressAmount * CompressScale;
-			LandingCompressOffset = LandingCompressInitial;
+			// Spring impulse: scale by fall speed, apply as velocity on camera spring
+			float CompressScale = FMath::Clamp(LandingFallSpeed / 600.f, 0.f, 1.f);
+			LandingCompressVelocity -= MovementProfile->LandingCameraCompressAmount * CompressScale * 30.f;
+			LandingCooldown = 0.3f;  // debounce: no new landing for 0.3s
 		}
 		LandingFallSpeed = 0.f;
 	}
@@ -283,19 +286,21 @@ void UFatumMovementComponent::UpdateCameraEffects(float DeltaTime)
 	UpdateHeadBob(DeltaTime);
 	UpdateSlideTilt(DeltaTime);
 
-	// Landing compress spring-back
-	if (LandingCompressTimer > 0.f)
+	// Landing camera spring-damper (bounce effect)
+	if (FMath::Abs(LandingCompressOffset) > 0.001f || FMath::Abs(LandingCompressVelocity) > 0.01f)
 	{
-		LandingCompressTimer -= DeltaTime;
-		if (LandingCompressTimer <= 0.f)
+		constexpr float lk = 200.f;   // stiffness: soft enough for visible displacement
+		constexpr float Zeta = 0.4f;  // damping ratio: < 1 = visible bounce overshoot
+		const float lc = 2.f * Zeta * FMath::Sqrt(lk);
+
+		float Accel = -lk * LandingCompressOffset - lc * LandingCompressVelocity;
+		LandingCompressVelocity += Accel * DeltaTime;
+		LandingCompressOffset += LandingCompressVelocity * DeltaTime;
+
+		if (FMath::Abs(LandingCompressOffset) < 0.01f && FMath::Abs(LandingCompressVelocity) < 0.1f)
 		{
-			LandingCompressTimer = 0.f;
 			LandingCompressOffset = 0.f;
-		}
-		else
-		{
-			float Alpha = LandingCompressTimer / MovementProfile->LandingCameraCompressDuration;
-			LandingCompressOffset = LandingCompressInitial * Alpha;
+			LandingCompressVelocity = 0.f;
 		}
 	}
 }

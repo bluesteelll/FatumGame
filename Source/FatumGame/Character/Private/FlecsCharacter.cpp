@@ -400,6 +400,8 @@ void AFlecsCharacter::Tick(float DeltaTime)
 		}
 	}
 
+	TickWeaponMotion(DeltaTime);              // 3c. Movement-based weapon motion (bob, tilt, landing, sprint)
+
 	TickPostureAndResnap(DeltaTime);          // 4. Posture effects, FeetToActorOffset re-snap
 	if (RopeRenderer) { RopeRenderer->Update(DeltaTime, GetWorld(), GetActorLocation()); } // 4b. Rope Verlet + Niagara
 	CheckHealthChanges();                     // 5. Health change detection
@@ -548,17 +550,31 @@ void AFlecsCharacter::UpdateCamera()
 			FollowCamera->AddLocalRotation(FRotator(RecoilState.ShakeOffset.X, RecoilState.ShakeOffset.Y, RecoilState.ShakeOffset.Z));
 		}
 
-		// Weapon inertia: reset to base transform, then apply rotation + positional offset
+		// Weapon transform: reset to base, then layer all offsets
 		if (WeaponMeshComponent && WeaponMeshComponent->IsVisible())
 		{
 			WeaponMeshComponent->SetRelativeTransform(BaseWeaponTransform);
+
+			// Layer 1: Rotational inertia (aim lag)
 			if (!RecoilState.InertiaOffset.IsNearlyZero(0.001f))
 			{
 				WeaponMeshComponent->AddLocalRotation(FRotator(RecoilState.InertiaOffset.X, RecoilState.InertiaOffset.Y, 0.f));
 			}
+
+			// Layer 2: Positional inertia (mouse-driven mesh shift)
 			if (!RecoilState.InertiaPositionOffset.IsNearlyZero(0.001f))
 			{
 				WeaponMeshComponent->AddLocalOffset(RecoilState.InertiaPositionOffset);
+			}
+
+			// Layer 3: Movement-based motion (bob, tilt, landing, sprint, movement inertia, footsteps)
+			if (!RecoilState.MotionPositionOffset.IsNearlyZero(0.001f))
+			{
+				WeaponMeshComponent->AddLocalOffset(RecoilState.MotionPositionOffset);
+			}
+			if (!RecoilState.MotionRotationOffset.IsNearlyZero(0.001f))
+			{
+				WeaponMeshComponent->AddLocalRotation(RecoilState.MotionRotationOffset);
 			}
 		}
 	}

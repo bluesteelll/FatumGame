@@ -2,6 +2,7 @@
 #include "BarrageDispatch.h"
 // ReSharper disable once CppUnusedIncludeDirective
 #include "BarrageContactEvent.h"
+#include "FWorldSimOwner.h"
 
 using namespace JPH;
 
@@ -44,20 +45,38 @@ void BarrageContactListener::OnContactAdded(const JPH::CharacterVirtual* inChara
 		if (UBarrageDispatch::SelfPtr)
 		{
 			auto Ent1 = BarrageContactEntity(
-				UBarrageDispatch::SelfPtr->GenerateBarrageKeyFromBodyId(inCharacter->GetInnerBodyID()) 
-					); // hey so good chance this is our problem.
-			
+				UBarrageDispatch::SelfPtr->GenerateBarrageKeyFromBodyId(inCharacter->GetInnerBodyID())
+					);
+
 			auto Ent2 = BarrageContactEntity(UBarrageDispatch::SelfPtr->GenerateBarrageKeyFromBodyId(inBodyID2));
-			//in general, almost nothing should push the character without explicitly invoking one of the apply forces functions.
-			//the exception RIGHT NOW is other non-enemy non-hitboxed movers, and terrain. this is in part because the player weighs 1 Unit
-			//to make the math for forces easier. That is Not Very Many Units.
-			if (Ent2.MyLayer != Layers::MOVING && Ent2.MyLayer != Layers::NON_MOVING)
+
+			// Read actual object layer from Jolt body interface (BarrageContactEntity defaults to NUM_LAYERS).
+			uint8 ActualLayer = Layers::NON_MOVING;
+			if (UBarrageDispatch::SelfPtr->JoltGameSim && UBarrageDispatch::SelfPtr->JoltGameSim->body_interface)
 			{
-				ioSettings.mCanPushCharacter = false; //TODO validate push/apply 
+				ActualLayer = static_cast<uint8>(
+					UBarrageDispatch::SelfPtr->JoltGameSim->body_interface->GetObjectLayer(inBodyID2));
 			}
-			if (Ent2.MyLayer == Layers::NON_MOVING)
+
+			if (ActualLayer == Layers::NON_MOVING)
 			{
-				ioSettings.mCanReceiveImpulses = false; // no push world plz.
+				// Static world: can push character (ground support), cannot receive impulses.
+				ioSettings.mCanReceiveImpulses = false;
+			}
+			else
+			{
+				// Dynamic objects: never push the character via contact.
+				// Explosions/grenades use OtherForce -> mForcesUpdate instead.
+				ioSettings.mCanPushCharacter = false;
+
+				// Impulse direction check via contact normal:
+				// Normal points FROM character TO body.
+				// Standing on object: normal.Y < -0.5 (pointing down) → don't push object down (prevents jitter).
+				// Pushing into object: normal mostly horizontal → push normally.
+				if (inContactNormal.GetY() < -0.5f)
+				{
+					ioSettings.mCanReceiveImpulses = false; // standing ON object — no downward impulse
+				}
 			}
 			UBarrageDispatch::SelfPtr->HandleContactAdded(Ent1, Ent2);
 		}

@@ -673,6 +673,9 @@ private:
 	 *  @param AimDelta Mouse-only control rotation delta this frame (excludes recoil). */
 	void TickWeaponInertia(float DeltaTime, const FVector2D& AimDelta);
 
+	/** Movement-based weapon motion: walk bob, strafe tilt, landing, sprint pose, movement inertia, footsteps. */
+	void TickWeaponMotion(float DeltaTime);
+
 #if !UE_BUILD_SHIPPING
 	/** Debug canvas callback: draws blue dot at weapon's actual aim point (2D screen-space). */
 	void DrawInertiaDebug(UCanvas* Canvas, APlayerController* PC);
