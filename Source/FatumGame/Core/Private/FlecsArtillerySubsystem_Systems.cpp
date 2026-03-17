@@ -46,6 +46,7 @@
 #include "FlecsClimbableComponents.h"
 #include "FlecsSwingableComponents.h"
 #include "FlecsStealthComponents.h"
+#include "FlecsVitalsComponents.h"
 
 // ═══════════════════════════════════════════════════════════════
 // COMPONENT REGISTRATION
@@ -194,6 +195,18 @@ void UFlecsArtillerySubsystem::RegisterFlecsComponents()
 	World.component<FStealthInstance>();
 	World.component<FTagStealthLight>();
 	World.component<FTagNoiseZone>();
+
+	// ─────────────────────────────────────────────────────────
+	// VITALS COMPONENTS
+	// ─────────────────────────────────────────────────────────
+	World.component<FVitalsStatic>();
+	World.component<FVitalsInstance>();
+	World.component<FStatModifiers>();
+	World.component<FEquipmentVitalsCache>();
+	World.component<FVitalsItemStatic>();
+	World.component<FCharacterInventoryRef>();
+	World.component<FTemperatureZoneStatic>();
+	World.component<FTagTemperatureZone>();
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -546,6 +559,7 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 	SetupWeaponSystems();        // WeaponTick, WeaponReload, WeaponFire
 	SetupDoorSystems();          // TriggerUnlock, DoorTick
 	SetupStealthSystems();       // StealthUpdateSystem
+	SetupVitalsSystems();        // EquipmentModifier, VitalDrain, VitalModifierRecalc, VitalHPDrain
 
 	// ═══════════════════════════════════════════════════════════════
 	// CLEANUP SYSTEMS

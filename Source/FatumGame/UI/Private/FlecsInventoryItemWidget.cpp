@@ -3,6 +3,9 @@
 #include "FlecsInventoryItemWidget.h"
 #include "FlecsContainerGridWidget.h"
 #include "FlecsInventoryDragPayload.h"
+#include "FlecsItemDefinition.h"
+#include "FlecsVitalsLibrary.h"
+#include "FlecsCharacter.h"
 #include "Blueprint/WidgetTree.h"
 #include "Components/Border.h"
 #include "Components/TextBlock.h"
@@ -78,6 +81,11 @@ FReply UFlecsInventoryItemWidget::NativeOnMouseButtonDown(const FGeometry& InGeo
 	{
 		return FReply::Handled().DetectDrag(TakeWidget(), EKeys::LeftMouseButton);
 	}
+	if (InMouseEvent.GetEffectingButton() == EKeys::RightMouseButton)
+	{
+		ExecuteDefaultAction();
+		return FReply::Handled();
+	}
 	return FReply::Unhandled();
 }
 
@@ -142,4 +150,22 @@ void UFlecsInventoryItemWidget::NativeOnDragLeave(const FDragDropEvent& InDragDr
 	UDragDropOperation* InOperation)
 {
 	// No highlight on item widgets — slots handle that
+}
+
+void UFlecsInventoryItemWidget::ExecuteDefaultAction()
+{
+	if (ItemEntityId == 0) return;
+
+	// Check if item has a Consume action
+	UFlecsItemDefinition* ItemDef = Cast<UFlecsItemDefinition>(ItemDefinition);
+	if (!ItemDef || !ItemDef->HasAction(EItemActionType::Consume)) return;
+
+	// Find the owning character
+	AFlecsCharacter* Character = Cast<AFlecsCharacter>(GetOwningPlayerPawn());
+	if (!Character) return;
+
+	const int64 CharEntityId = Character->GetCharacterEntityId();
+	if (CharEntityId == 0) return;
+
+	UFlecsVitalsLibrary::ConsumeVitalItem(this, ItemEntityId, CharEntityId);
 }

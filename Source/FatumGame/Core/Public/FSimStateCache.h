@@ -1,6 +1,6 @@
 // FSimStateCache — lock-free sim→game state bridge for scalar ECS values.
 // Sim thread writes packed atomics, game thread reads. Zero locks, zero contention.
-// SoA layout: 384 bytes total (6 cache lines, fits in L1).
+// SoA layout: 640 bytes total (10 cache lines, fits in L1).
 
 #pragma once
 
@@ -27,6 +27,13 @@ struct FResourceSnapshot
 {
 	float Ratios[4] = {0.f, 0.f, 0.f, 0.f};  // CurrentValue/MaxValue per pool (0.0-1.0)
 	uint8 PoolCount = 0;
+};
+
+struct FVitalsSnapshot
+{
+	float HungerPercent = 1.f;
+	float ThirstPercent = 1.f;
+	float WarmthPercent = 1.f;
 };
 
 // ─── Packing utilities ───
@@ -98,6 +105,25 @@ namespace SimStatePacking
 		Snap.PoolCount = static_cast<uint8>(Packed >> 32);
 		return Snap;
 	}
+
+	// Vitals: 3 floats quantized to uint16 (0-65535 → 0.0-1.0)
+	// Layout: [47:32]=Warmth(16) [31:16]=Thirst(16) [15:0]=Hunger(16)
+	inline uint64 PackVitals(float Hunger, float Thirst, float Warmth)
+	{
+		uint64 H = static_cast<uint64>(static_cast<uint16>(FMath::Clamp(Hunger, 0.f, 1.f) * 65535.f));
+		uint64 T = static_cast<uint64>(static_cast<uint16>(FMath::Clamp(Thirst, 0.f, 1.f) * 65535.f)) << 16;
+		uint64 W = static_cast<uint64>(static_cast<uint16>(FMath::Clamp(Warmth, 0.f, 1.f) * 65535.f)) << 32;
+		return W | T | H;
+	}
+
+	inline FVitalsSnapshot UnpackVitals(uint64 Packed)
+	{
+		FVitalsSnapshot Snap;
+		Snap.HungerPercent = static_cast<float>(static_cast<uint16>(Packed)) / 65535.f;
+		Snap.ThirstPercent = static_cast<float>(static_cast<uint16>(Packed >> 16)) / 65535.f;
+		Snap.WarmthPercent = static_cast<float>(static_cast<uint16>(Packed >> 32)) / 65535.f;
+		return Snap;
+	}
 }
 
 // ─── The cache (SoA layout) ───
@@ -122,12 +148,14 @@ public:
 	void WriteHealth(int64 EntityId, float HP, float MaxHP);
 	void WriteWeapon(int64 EntityId, int32 Ammo, int32 MagSize, int32 Reserve, bool bReloading);
 	void WriteResources(int64 EntityId, const float Ratios[4], uint8 PoolCount);
+	void WriteVitals(int64 EntityId, float Hunger, float Thirst, float Warmth);
 
 	// ─── Game thread: read (safe from any thread) ───
 
 	bool ReadHealth(int64 EntityId, FHealthSnapshot& Out) const;
 	bool ReadWeapon(int64 EntityId, FWeaponSnapshot& Out) const;
 	bool ReadResources(int64 EntityId, FResourceSnapshot& Out) const;
+	bool ReadVitals(int64 EntityId, FVitalsSnapshot& Out) const;
 
 private:
 	// SoA: IDs contiguous for fast FindSlot scan (128 bytes = 2 cache lines)
@@ -135,7 +163,8 @@ private:
 	alignas(64) std::atomic<uint64> HealthPacked[MaxSlots];   // 128 bytes
 	alignas(64) std::atomic<uint64> WeaponPacked[MaxSlots];   // 128 bytes
 	alignas(64) std::atomic<uint64> ResourcePacked[MaxSlots]; // 128 bytes
-	// Total: 512 bytes (8 cache lines)
+	alignas(64) std::atomic<uint64> VitalsPacked[MaxSlots];   // 128 bytes
+	// Total: 640 bytes (10 cache lines)
 
 	/** Linear scan over EntityIds array. Returns slot index or -1. */
 	int32 FindSlot(int64 EntityId) const;

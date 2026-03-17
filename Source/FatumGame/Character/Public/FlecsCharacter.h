@@ -588,11 +588,20 @@ private:
 	/** Poll SimStateCache for resource changes and fire OnResourcesUpdated on HUD */
 	void UpdateResourceUI();
 
+	/** Poll SimStateCache for vitals changes and fire OnVitalsUpdated on HUD */
+	void UpdateVitalsUI();
+
 	/** Cached resource ratios for change detection (game thread) */
 	float CachedResourceRatios[4] = {};
 	uint8 CachedResourcePoolCount = 0;
 	float ResourcePoolMaxValues[4] = {};  // from ResourcePoolProfile (static)
 	uint8 ResourcePoolTypes[4] = {};      // EResourceType values (static)
+
+	/** Cached vitals snapshot for change detection (game thread) */
+	float CachedVitalsHunger = 1.f;
+	float CachedVitalsThirst = 1.f;
+	float CachedVitalsWarmth = 1.f;
+	bool bHasVitals = false;
 
 	// ─────────────────────────────────────────────────────────
 	// INTERACTION (detection + state machine)

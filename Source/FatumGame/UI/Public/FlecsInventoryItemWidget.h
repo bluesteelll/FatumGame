@@ -61,6 +61,9 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "Inventory|Item")
 	TObjectPtr<UDataAsset> ItemDefinition;
 
+	/** Execute the item's default action (right-click). Currently handles Consume for vitals. */
+	void ExecuteDefaultAction();
+
 protected:
 	virtual void BuildDefaultWidgetTree() override;
 	virtual FReply NativeOnMouseButtonDown(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent) override;

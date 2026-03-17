@@ -43,6 +43,8 @@
 #include "FRopeVisualRenderer.h"
 #include "FlecsStealthComponents.h"
 #include "FlecsWeaponProfile.h"
+#include "FlecsVitalsComponents.h"
+#include "FlecsVitalsProfile.h"
 #include "Engine/Canvas.h"
 #include "CanvasItem.h"
 #include "Debug/DebugDrawService.h"
@@ -193,6 +195,9 @@ void AFlecsCharacter::InitECSRegistration()
 		}
 	}
 
+	// Cache vitals flag for game-thread UI polling.
+	bHasVitals = CharacterDefinition->VitalsProfile != nullptr;
+
 	// Capture actor-specific data for sim thread (POD only).
 	const FSkeletonKey Key = CharacterKey;
 	const FVector SpawnLoc = GetActorLocation();
@@ -269,6 +274,16 @@ void AFlecsCharacter::InitECSRegistration()
 		Entity.set<FRopeSwingState>(FRopeSwingState{});
 		Entity.set<FStealthInstance>(FStealthInstance{});
 
+		// Vitals: per-entity instance components (FVitalsInstance/FVitalsStatic inherited from prefab)
+		if (Definition->VitalsProfile)
+		{
+			Entity.set<FStatModifiers>(FStatModifiers{});
+			Entity.set<FEquipmentVitalsCache>(FEquipmentVitalsCache{});
+			FCharacterInventoryRef InvRef;
+			// InventoryEntityId set later by InitInventoryContainers
+			Entity.set<FCharacterInventoryRef>(InvRef);
+		}
+
 		FlecsWorld->defer_end();
 
 		// SimStateCache
@@ -289,6 +304,14 @@ void AFlecsCharacter::InitECSRegistration()
 					Ratios[p] = Res->Pools[p].GetRatio();
 				FlecsSubsystem->GetSimStateCache().WriteResources(EntityId, Ratios, Res->PoolCount);
 			}
+		}
+
+		if (Definition->VitalsProfile)
+		{
+			FlecsSubsystem->GetSimStateCache().WriteVitals(EntityId,
+				Definition->VitalsProfile->StartingHunger,
+				Definition->VitalsProfile->StartingThirst,
+				Definition->VitalsProfile->StartingWarmth);
 		}
 
 		// Bridge registration
@@ -408,6 +431,7 @@ void AFlecsCharacter::Tick(float DeltaTime)
 	if (RopeRenderer) { RopeRenderer->Update(DeltaTime, GetWorld(), GetActorLocation()); } // 4b. Rope Verlet + Niagara
 	CheckHealthChanges();                     // 5. Health change detection
 	UpdateResourceUI();                       // 5b. Resource pool display
+	UpdateVitalsUI();                         // 5c. Vitals display (hunger, thirst, warmth)
 	TickInteractionStateMachine(DeltaTime);   // 6. Focus/Hold state machine
 	UpdateCamera();                           // 7. FP position + rotation + FOV + screen shake
 	WriteCameraAtomics();                     // 8. Camera pos/dir → sim thread (AFTER UpdateCamera for fresh data)

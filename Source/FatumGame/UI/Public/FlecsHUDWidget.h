@@ -67,6 +67,10 @@ public:
 	UFUNCTION(BlueprintImplementableEvent, Category = "HUD")
 	void OnManaChanged(float Current, float Max, float Percent);
 
+	/** Vitals updated (hunger, thirst, warmth). Values are 0.0–1.0 ratios. */
+	UFUNCTION(BlueprintImplementableEvent, Category = "HUD")
+	void OnVitalsUpdated(float Hunger, float Thirst, float Warmth);
+
 protected:
 	virtual void NativeConstruct() override;
 	virtual void NativeDestruct() override;

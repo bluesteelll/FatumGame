@@ -400,6 +400,16 @@ public:
 	/** Queue a noise event on a character entity. Call from game thread. */
 	void QueueNoiseEvent(FSkeletonKey CharacterKey, const FNoiseEvent& Event);
 
+	// ═══════════════════════════════════════════════════════════════
+	// VITALS SYSTEM API
+	// ═══════════════════════════════════════════════════════════════
+
+	/** Set default ambient temperature for vitals warmth system (0-1). Thread-safe (enqueues to sim thread). */
+	void SetDefaultAmbientTemperature(float Temperature);
+
+	/** Default ambient temperature for vitals warmth system (0-1). Sim thread only. */
+	float DefaultAmbientTemperature = 0.5f;
+
 protected:
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void OnWorldBeginPlay(UWorld& InWorld) override;
@@ -447,6 +457,9 @@ private:
 
 	/** Stealth light + noise computation for characters. */
 	void SetupStealthSystems();
+
+	/** Vitals systems: equipment cache, drain, modifier recalc, HP drain. */
+	void SetupVitalsSystems();
 
 	/** Ambient light level for stealth (sim thread only, written via EnqueueCommand). */
 	float AmbientLightLevel = 0.1f;

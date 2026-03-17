@@ -86,3 +86,6 @@ struct FTagStealthLight {};
 
 /** Entity is a noise zone (modifies footstep noise by surface type) */
 struct FTagNoiseZone {};
+
+/** Entity is a temperature zone (modifies ambient temperature for vitals warmth) */
+struct FTagTemperatureZone {};

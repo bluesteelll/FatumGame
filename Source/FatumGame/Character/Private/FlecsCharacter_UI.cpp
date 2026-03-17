@@ -10,6 +10,7 @@
 #include "FlecsArtillerySubsystem.h"
 #include "FlecsGameTags.h"
 #include "FlecsItemComponents.h"
+#include "FlecsVitalsComponents.h"
 #include "GameFramework/PlayerController.h"
 #include "Async/Async.h"
 #include "InputActionValue.h"
@@ -126,6 +127,16 @@ void AFlecsCharacter::InitInventoryContainers()
 
 		int64 InvId = SpawnContainer(InvDef);
 		int64 WepInvId = SpawnContainer(WepInvDef);
+
+		// Update FCharacterInventoryRef on the character Flecs entity (vitals equipment scanning)
+		if (CharEntity.is_valid() && InvId != 0)
+		{
+			FCharacterInventoryRef* InvRefPtr = CharEntity.try_get_mut<FCharacterInventoryRef>();
+			if (InvRefPtr)
+			{
+				InvRefPtr->InventoryEntityId = InvId;
+			}
+		}
 
 		AsyncTask(ENamedThreads::GameThread, [this, InvId, WepInvId]()
 		{

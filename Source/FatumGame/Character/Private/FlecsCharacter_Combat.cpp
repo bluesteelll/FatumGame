@@ -10,6 +10,7 @@
 #include "FlecsEntityDefinition.h"
 #include "FlecsRenderProfile.h"
 #include "FlecsProjectileProfile.h"
+#include "FSimStateCache.h"
 #include "FlecsWeaponProfile.h"
 #include "FlecsArtillerySubsystem.h"
 #include "FlecsGameTags.h"
@@ -166,6 +167,34 @@ void AFlecsCharacter::UpdateResourceUI()
 		if (R.ResourceType == 1) // Mana
 			HUDWidget->OnManaChanged(R.Current, R.Max, R.Ratio);
 	}
+}
+
+void AFlecsCharacter::UpdateVitalsUI()
+{
+	if (!bHasVitals || !HUDWidget) return;
+
+	UFlecsArtillerySubsystem* FlecsSubsystem = GetWorld()->GetSubsystem<UFlecsArtillerySubsystem>();
+	if (!FlecsSubsystem) return;
+
+	int64 EntityId = GetCharacterEntityId();
+	if (EntityId == 0) return;
+
+	FVitalsSnapshot Snap;
+	if (!FlecsSubsystem->GetSimStateCache().ReadVitals(EntityId, Snap)) return;
+
+	// Detect changes (threshold < one quantization step of 1/65535 ≈ 0.000015, use 0.005 for visible change)
+	const bool bChanged =
+		FMath::Abs(Snap.HungerPercent - CachedVitalsHunger) > 0.005f ||
+		FMath::Abs(Snap.ThirstPercent - CachedVitalsThirst) > 0.005f ||
+		FMath::Abs(Snap.WarmthPercent - CachedVitalsWarmth) > 0.005f;
+
+	if (!bChanged) return;
+
+	CachedVitalsHunger = Snap.HungerPercent;
+	CachedVitalsThirst = Snap.ThirstPercent;
+	CachedVitalsWarmth = Snap.WarmthPercent;
+
+	HUDWidget->OnVitalsUpdated(Snap.HungerPercent, Snap.ThirstPercent, Snap.WarmthPercent);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

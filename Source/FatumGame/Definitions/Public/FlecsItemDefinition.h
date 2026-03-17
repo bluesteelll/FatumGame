@@ -11,6 +11,7 @@
 #include "FlecsItemDefinition.generated.h"
 
 class UTexture2D;
+class UFlecsVitalsItemProfile;
 
 /**
  * Item action type - what can be done with the item.
@@ -206,6 +207,14 @@ public:
 	/** Equipment slot this item goes into (if equippable) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Equipment", meta = (EditCondition = "MaxStackSize == 0"))
 	FGameplayTag EquipmentSlot;
+
+	// ═══════════════════════════════════════════════════════════════
+	// VITALS
+	// ═══════════════════════════════════════════════════════════════
+
+	/** Vitals effects — consumption restoration and passive inventory bonuses */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Instanced, Category = "Vitals")
+	TObjectPtr<UFlecsVitalsItemProfile> VitalsItemProfile;
 
 	// ═══════════════════════════════════════════════════════════════
 	// DURABILITY (only for unique items)
