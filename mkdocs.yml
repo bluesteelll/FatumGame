@@ -1,0 +1,186 @@
+site_name: FatumGame Technical Documentation
+site_description: Architecture, systems, and API reference for the FatumGame UE5 project
+site_url: https://fatumgame.github.io/FatumGame/
+repo_url: https://github.com/fatumgame/FatumGame
+repo_name: FatumGame
+
+theme:
+  name: material
+  palette:
+    - scheme: slate
+      primary: deep purple
+      accent: amber
+      toggle:
+        icon: material/brightness-7
+        name: Switch to light mode
+    - scheme: default
+      primary: deep purple
+      accent: amber
+      toggle:
+        icon: material/brightness-4
+        name: Switch to dark mode
+  features:
+    - navigation.sections
+    - navigation.expand
+    - navigation.indexes
+    - navigation.top
+    - navigation.tabs
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+    - toc.follow
+  icon:
+    repo: fontawesome/brands/github
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.mark
+  - pymdownx.critic
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+
+plugins:
+  - search
+  - tags
+  - i18n:
+      docs_structure: suffix
+      default_language: en
+      languages:
+        - locale: en
+          default: true
+          name: English
+          build: true
+        - locale: ru
+          name: Русский
+          build: true
+          nav_translations:
+            Home: Главная
+            Architecture: Архитектура
+            Overview: Обзор
+            Threading Model: Модель потоков
+            ECS Patterns: Паттерны ECS
+            Collision Pipeline: Конвейер столкновений
+            Render Interpolation: Интерполяция рендера
+            Lock-Free Binding: Lock-free связывание
+            Systems: Системы
+            Spawn Pipeline: Конвейер спавна
+            Damage System: Система урона
+            Weapon System: Система оружия
+            Character System: Система персонажа
+            Movement System: Система движения
+            "Item & Container System": Система предметов и контейнеров
+            Interaction System: Система взаимодействия
+            Destructible System: Система разрушений
+            Door System: Система дверей
+            Time Dilation: Замедление времени
+            Stealth System: Система скрытности
+            Ability System: Система способностей
+            System Execution Order: Порядок выполнения систем
+            API Reference: Справочник API
+            Blueprint Libraries: Библиотеки Blueprint
+            Flecs API Reference: Справочник Flecs API
+            "Data Assets & Profiles": Дата-ассеты и профили
+            ECS Components: Компоненты ECS
+            Subsystems: Подсистемы
+            Actors: Акторы
+            Plugins: Плагины
+            "Barrage (Jolt Physics)": Barrage (физика Jolt)
+            Flecs Integration: Интеграция Flecs
+            FlecsBarrage Bridge: Мост FlecsBarrage
+            FlecsUI Framework: Фреймворк FlecsUI
+            UI: Интерфейс
+            Inventory: Инвентарь
+            HUD: HUD
+            Loot Panel: Панель лута
+            Guidelines: Руководства
+            Coding Standards: Стандарты кода
+            Threading Rules: Правила потокобезопасности
+            ECS Best Practices: Лучшие практики ECS
+            Common Bugs: Типичные баги
+            "Adding a New Entity": Создание новой сущности
+            Rationale: Обоснования
+            "Why ECS + Physics": Почему ECS + физика
+            "Why Simulation Thread": Почему отдельный поток
+            "Why ISM Rendering": Почему ISM рендеринг
+            "Why Collision Pairs": Почему пары столкновений
+            "Why Lock-Free": Почему lock-free
+            "Why Domain Folders": Почему доменные папки
+            Project: Проект
+            Folder Structure: Структура папок
+            Build Setup: Настройка сборки
+            Glossary: Глоссарий
+
+nav:
+  - Home: index.md
+  - Architecture:
+    - Overview: architecture/overview.md
+    - Threading Model: architecture/threading-model.md
+    - ECS Patterns: architecture/ecs-patterns.md
+    - Collision Pipeline: architecture/collision-pipeline.md
+    - Render Interpolation: architecture/render-interpolation.md
+    - Lock-Free Binding: architecture/lock-free-binding.md
+  - Systems:
+    - Spawn Pipeline: systems/spawn-pipeline.md
+    - Damage System: systems/damage-system.md
+    - Weapon System: systems/weapon-system.md
+    - Character System: systems/character-system.md
+    - Movement System: systems/movement-system.md
+    - Item & Container System: systems/item-container-system.md
+    - Interaction System: systems/interaction-system.md
+    - Destructible System: systems/destructible-system.md
+    - Door System: systems/door-system.md
+    - Time Dilation: systems/time-dilation.md
+    - Stealth System: systems/stealth-system.md
+    - Ability System: systems/ability-system.md
+    - System Execution Order: systems/system-execution-order.md
+  - API Reference:
+    - Blueprint Libraries: api/blueprint-libraries.md
+    - Flecs API Reference: api/flecs-api-reference.md
+    - Data Assets & Profiles: api/data-assets.md
+    - ECS Components: api/ecs-components.md
+    - Subsystems: api/subsystems.md
+    - Actors: api/actors.md
+  - Plugins:
+    - Barrage (Jolt Physics): plugins/barrage.md
+    - Flecs Integration: plugins/flecs-integration.md
+    - FlecsBarrage Bridge: plugins/flecs-barrage.md
+    - FlecsUI Framework: plugins/flecs-ui.md
+    - SkeletonKey: plugins/skeleton-key.md
+  - UI:
+    - Overview: ui/overview.md
+    - Inventory: ui/inventory.md
+    - HUD: ui/hud.md
+    - Loot Panel: ui/loot-panel.md
+  - Guidelines:
+    - Coding Standards: guidelines/coding-standards.md
+    - Threading Rules: guidelines/threading-rules.md
+    - ECS Best Practices: guidelines/ecs-best-practices.md
+    - Common Bugs: guidelines/common-bugs.md
+    - Adding a New Entity: guidelines/adding-new-entity.md
+  - Rationale:
+    - Why ECS + Physics: rationale/why-ecs-plus-physics.md
+    - Why Simulation Thread: rationale/why-simulation-thread.md
+    - Why ISM Rendering: rationale/why-ism-rendering.md
+    - Why Collision Pairs: rationale/why-collision-pairs.md
+    - Why Lock-Free: rationale/why-lock-free.md
+    - Why Domain Folders: rationale/why-domain-folders.md
+  - Project:
+    - Folder Structure: project/folder-structure.md
+    - Build Setup: project/build-setup.md
+    - Glossary: project/glossary.md
