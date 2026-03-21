@@ -6,8 +6,23 @@
 #include "FlecsEntityDefinition.h"
 #include "FlecsItemDefinition.h"
 #include "FlecsUISubsystem.h"
+#include "FlecsVitalsComponents.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogFlecsContainer, Log, All);
+
+/** Mark the container owner's vitals equipment cache as dirty (sim thread). */
+static void MarkOwnerEquipmentDirty(int64 ContainerEntityId, flecs::world* FlecsWorld)
+{
+	if (!FlecsWorld || ContainerEntityId == 0) return;
+	flecs::entity ContainerEntity = FlecsWorld->entity(static_cast<flecs::entity_t>(ContainerEntityId));
+	if (!ContainerEntity.is_valid()) return;
+	const FContainerInstance* CI = ContainerEntity.try_get<FContainerInstance>();
+	if (!CI || CI->OwnerEntityId == 0) return;
+	flecs::entity OwnerEntity = FlecsWorld->entity(static_cast<flecs::entity_t>(CI->OwnerEntityId));
+	if (!OwnerEntity.is_valid()) return;
+	FVitalsInstance* VI = OwnerEntity.try_get_mut<FVitalsInstance>();
+	if (VI) VI->bEquipmentDirty = true;
+}
 
 /** Push fresh snapshot to triple buffer if a UI model is tracking this container. Called on sim thread. */
 static void NotifyContainerUI(int64 ContainerEntityId)
@@ -207,6 +222,7 @@ static int32 AddItemToContainerDirect(
 	}
 
 	NotifyContainerUI(ContainerEntityId);
+	MarkOwnerEquipmentDirty(ContainerEntityId, FlecsWorld);
 	return Count;  // All items added: stacked portion + new entity with Remaining
 }
 
@@ -312,6 +328,7 @@ bool UFlecsContainerLibrary::RemoveItemFromContainer(
 			ItemEntityId, ContainerEntityId);
 		ItemEntity.destruct();
 		NotifyContainerUI(ContainerEntityId);
+		MarkOwnerEquipmentDirty(ContainerEntityId, FlecsWorld);
 	});
 
 	return true;
@@ -375,6 +392,7 @@ int32 UFlecsContainerLibrary::RemoveAllItemsFromContainer(
 		UE_LOG(LogFlecsContainer, Log, TEXT("RemoveAllItemsFromContainer: Removed %d items from container %lld"),
 			ItemsToRemove.Num(), ContainerEntityId);
 		NotifyContainerUI(ContainerEntityId);
+		MarkOwnerEquipmentDirty(ContainerEntityId, FlecsWorld);
 	});
 
 	return 0;

@@ -9,6 +9,7 @@ FSimStateCache::FSimStateCache()
 		HealthPacked[i].store(0, std::memory_order_relaxed);
 		WeaponPacked[i].store(0, std::memory_order_relaxed);
 		ResourcePacked[i].store(0, std::memory_order_relaxed);
+		VitalsPacked[i].store(0, std::memory_order_relaxed);
 	}
 }
 
@@ -32,6 +33,7 @@ int32 FSimStateCache::Register(int64 EntityId)
 			HealthPacked[i].store(0, std::memory_order_relaxed);
 			WeaponPacked[i].store(0, std::memory_order_relaxed);
 			ResourcePacked[i].store(0, std::memory_order_relaxed);
+			VitalsPacked[i].store(0, std::memory_order_relaxed);
 			// Publish EntityId LAST (after data is zeroed) — readers use EntityId as publication flag
 			EntityIds[i].store(EntityId, std::memory_order_release);
 			return i;
@@ -52,6 +54,7 @@ void FSimStateCache::Unregister(int64 EntityId)
 		HealthPacked[Slot].store(0, std::memory_order_relaxed);
 		WeaponPacked[Slot].store(0, std::memory_order_relaxed);
 		ResourcePacked[Slot].store(0, std::memory_order_relaxed);
+		VitalsPacked[Slot].store(0, std::memory_order_relaxed);
 		EntityIds[Slot].store(0, std::memory_order_release);
 	}
 }
@@ -84,6 +87,15 @@ void FSimStateCache::WriteResources(int64 EntityId, const float Ratios[4], uint8
 	if (Slot != -1)
 	{
 		ResourcePacked[Slot].store(SimStatePacking::PackResources(Ratios, PoolCount), std::memory_order_release);
+	}
+}
+
+void FSimStateCache::WriteVitals(int64 EntityId, float Hunger, float Thirst, float Warmth)
+{
+	int32 Slot = FindSlot(EntityId);
+	if (Slot != -1)
+	{
+		VitalsPacked[Slot].store(SimStatePacking::PackVitals(Hunger, Thirst, Warmth), std::memory_order_release);
 	}
 }
 
@@ -122,6 +134,18 @@ bool FSimStateCache::ReadResources(int64 EntityId, FResourceSnapshot& Out) const
 
 	Out = SimStatePacking::UnpackResources(ResourcePacked[Slot].load(std::memory_order_acquire));
 
+	if (EntityIds[Slot].load(std::memory_order_acquire) != EntityId) return false;
+	return true;
+}
+
+bool FSimStateCache::ReadVitals(int64 EntityId, FVitalsSnapshot& Out) const
+{
+	int32 Slot = FindSlot(EntityId);
+	if (Slot == -1) return false;
+
+	Out = SimStatePacking::UnpackVitals(VitalsPacked[Slot].load(std::memory_order_acquire));
+
+	// Re-validate: slot still belongs to this entity (prevents ABA if Unregister+Register raced)
 	if (EntityIds[Slot].load(std::memory_order_acquire) != EntityId) return false;
 	return true;
 }

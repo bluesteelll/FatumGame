@@ -25,6 +25,8 @@ class UFlecsClimbProfile;
 class UFlecsRopeSwingProfile;
 class UFlecsStealthLightProfile;
 class UFlecsNoiseZoneProfile;
+class UFlecsVitalsProfile;
+class UFlecsTemperatureZoneProfile;
 
 /**
  * Unified entity definition - a preset combining multiple profiles.
@@ -149,6 +151,14 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Instanced, Category = "Profiles")
 	TObjectPtr<UFlecsNoiseZoneProfile> NoiseZoneProfile;
 
+	/** Vitals — hunger, thirst, warmth needs system */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Instanced, Category = "Profiles")
+	TObjectPtr<UFlecsVitalsProfile> VitalsProfile;
+
+	/** Temperature zone — defines ambient temperature in an AABB region */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Instanced, Category = "Profiles")
+	TObjectPtr<UFlecsTemperatureZoneProfile> TemperatureZoneProfile;
+
 	// ═══════════════════════════════════════════════════════════════
 	// DEFAULT TAGS
 	// ═══════════════════════════════════════════════════════════════
@@ -206,7 +216,9 @@ public:
 			|| ClimbProfile != nullptr
 			|| RopeSwingProfile != nullptr
 			|| StealthLightProfile != nullptr
-			|| NoiseZoneProfile != nullptr;
+			|| NoiseZoneProfile != nullptr
+			|| VitalsProfile != nullptr
+			|| TemperatureZoneProfile != nullptr;
 	}
 
 	/** Check if this will create a world entity (physics or render) */
@@ -247,6 +259,12 @@ public:
 
 	/** Check if this is a noise zone */
 	bool IsNoiseZone() const { return NoiseZoneProfile != nullptr; }
+
+	/** Check if this has vitals (hunger, thirst, warmth) */
+	bool HasVitals() const { return VitalsProfile != nullptr; }
+
+	/** Check if this is a temperature zone */
+	bool IsTemperatureZone() const { return TemperatureZoneProfile != nullptr; }
 
 	virtual FPrimaryAssetId GetPrimaryAssetId() const override
 	{

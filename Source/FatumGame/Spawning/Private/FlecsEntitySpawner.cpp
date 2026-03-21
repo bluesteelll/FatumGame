@@ -21,6 +21,7 @@
 #include "FlecsInteractionComponents.h"
 #include "FlecsDestructibleComponents.h"
 #include "FlecsStealthComponents.h"
+#include "FlecsVitalsComponents.h"
 #include "BarrageDispatch.h"
 #include "BarrageConstraintSystem.h"
 #include "FBarragePrimitive.h"
@@ -703,7 +704,7 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 		// Physics entities get position from Barrage body; these have no body.
 		if (!Data.bHasPhysics)
 		{
-			if (Entity.has<FStealthLightStatic>() || Entity.has<FNoiseZoneStatic>())
+			if (Entity.has<FStealthLightStatic>() || Entity.has<FNoiseZoneStatic>() || Entity.has<FTemperatureZoneStatic>())
 			{
 				FWorldPosition WP;
 				WP.Position = Data.SpawnLocation;

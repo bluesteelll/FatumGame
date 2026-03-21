@@ -26,6 +26,7 @@
 #include "FlecsResourceTypes.h"
 #include "FlecsClimbableComponents.h"
 #include "FlecsSwingableComponents.h"
+#include "FlecsVitalsComponents.h"
 
 // ═══════════════════════════════════════════════════════════════
 // CHARACTER PHYSICS BRIDGE
@@ -579,10 +580,18 @@ void UFlecsArtillerySubsystem::PrepareCharacterStep(float RealDT, float DilatedD
 		const FMovementStatic* MS = Bridge.Entity.try_get<FMovementStatic>();
 		const FCharacterMoveState* State = Bridge.Entity.try_get<FCharacterMoveState>();
 		FCharacterSimState* SimState = Bridge.Entity.try_get_mut<FCharacterSimState>();
+		const FStatModifiers* VitalMods = Bridge.Entity.try_get<FStatModifiers>();
 		if (!MS)
 		{
 			FBChar->mLocomotionUpdate = JPH::Vec3::sZero();
 			continue;
+		}
+
+		// ── 2.1. Apply vitals constraints ──
+		if (VitalMods)
+		{
+			if (!VitalMods->bCanSprint) bSprinting = false;
+			if (!VitalMods->bCanJump) bJumpPressed = false;
 		}
 
 		// Edge-detect crouch (using SimState prev values)
@@ -815,6 +824,12 @@ void UFlecsArtillerySubsystem::PrepareCharacterStep(float RealDT, float DilatedD
 
 			float DecelCm = MS->GroundDeceleration;
 			float AirAccelCm = MS->AirAcceleration;
+
+			// Apply vitals speed multiplier (VInterpTo smoothing handles transitions via existing accel ramp)
+			if (VitalMods && VitalMods->SpeedMultiplier < 1.f)
+			{
+				TargetSpeedCm *= VitalMods->SpeedMultiplier;
+			}
 
 			float DirLen = FMath::Sqrt(DirX * DirX + DirZ * DirZ);
 			JPH::Vec3 TargetH = JPH::Vec3::sZero();

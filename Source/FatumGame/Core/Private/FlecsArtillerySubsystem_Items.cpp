@@ -32,6 +32,10 @@
 #include "FlecsStealthLightProfile.h"
 #include "FlecsNoiseZoneProfile.h"
 #include "FlecsStealthComponents.h"
+#include "FlecsVitalsProfile.h"
+#include "FlecsVitalsItemProfile.h"
+#include "FlecsTemperatureZoneProfile.h"
+#include "FlecsVitalsComponents.h"
 
 // ═══════════════════════════════════════════════════════════════
 // ENTITY PREFAB REGISTRY IMPLEMENTATION
@@ -80,6 +84,11 @@ flecs::entity UFlecsArtillerySubsystem::GetOrCreateEntityPrefab(UFlecsEntityDefi
 		FItemStaticData ItemStatic = FItemStaticData::FromProfile(ItemDef, EntityDefinition);
 		Prefab.set<FItemStaticData>(ItemStatic);
 		ItemPrefabs.Add(ItemStatic.TypeId, Prefab);
+
+		if (ItemDef->VitalsItemProfile)
+		{
+			Prefab.set<FVitalsItemStatic>(FVitalsItemStatic::FromProfile(ItemDef->VitalsItemProfile));
+		}
 	}
 
 	if (EntityDefinition->WeaponProfile)
@@ -160,6 +169,25 @@ flecs::entity UFlecsArtillerySubsystem::GetOrCreateEntityPrefab(UFlecsEntityDefi
 		Prefab.add<FTagNoiseZone>();
 	}
 
+	if (EntityDefinition->VitalsProfile)
+	{
+		Prefab.set<FVitalsStatic>(FVitalsStatic::FromProfile(EntityDefinition->VitalsProfile));
+
+		// FVitalsInstance on prefab: inherited by instances via is_a().
+		// First get_mut<FVitalsInstance>() creates per-entity mutable copy (copy-on-write).
+		FVitalsInstance VI;
+		VI.HungerPercent = EntityDefinition->VitalsProfile->StartingHunger;
+		VI.ThirstPercent = EntityDefinition->VitalsProfile->StartingThirst;
+		VI.WarmthPercent = EntityDefinition->VitalsProfile->StartingWarmth;
+		Prefab.set<FVitalsInstance>(VI);
+	}
+
+	if (EntityDefinition->TemperatureZoneProfile)
+	{
+		Prefab.set<FTemperatureZoneStatic>(FTemperatureZoneStatic::FromProfile(EntityDefinition->TemperatureZoneProfile));
+		Prefab.add<FTagTemperatureZone>();
+	}
+
 	// FHealthInstance on prefab: inherited by instances via is_a().
 	// First get_mut<FHealthInstance>() creates per-entity mutable copy (copy-on-write).
 	// All mutation paths (DamageObserver, HealEntity) MUST use get_mut/try_get_mut.
@@ -176,7 +204,7 @@ flecs::entity UFlecsArtillerySubsystem::GetOrCreateEntityPrefab(UFlecsEntityDefi
 	// Store in registry
 	EntityPrefabs.Add(EntityDefinition, Prefab);
 
-	UE_LOG(LogTemp, Log, TEXT("Created entity prefab: '%s' (Health=%d, Damage=%d, Projectile=%d, Container=%d, Item=%d, Weapon=%d, Interaction=%d, Destructible=%d, Door=%d, Movement=%d, Ability=%d, Resources=%d, Climb=%d, Swing=%d, StealthLight=%d, NoiseZone=%d)"),
+	UE_LOG(LogTemp, Log, TEXT("Created entity prefab: '%s' (Health=%d, Damage=%d, Projectile=%d, Container=%d, Item=%d, Weapon=%d, Interaction=%d, Destructible=%d, Door=%d, Movement=%d, Ability=%d, Resources=%d, Climb=%d, Swing=%d, StealthLight=%d, NoiseZone=%d, Vitals=%d, TempZone=%d)"),
 		*EntityDefinition->GetName(),
 		EntityDefinition->HealthProfile != nullptr,
 		EntityDefinition->DamageProfile != nullptr,
@@ -193,7 +221,9 @@ flecs::entity UFlecsArtillerySubsystem::GetOrCreateEntityPrefab(UFlecsEntityDefi
 		EntityDefinition->ClimbProfile != nullptr,
 		EntityDefinition->RopeSwingProfile != nullptr,
 		EntityDefinition->StealthLightProfile != nullptr,
-		EntityDefinition->NoiseZoneProfile != nullptr);
+		EntityDefinition->NoiseZoneProfile != nullptr,
+		EntityDefinition->VitalsProfile != nullptr,
+		EntityDefinition->TemperatureZoneProfile != nullptr);
 
 	return Prefab;
 }
