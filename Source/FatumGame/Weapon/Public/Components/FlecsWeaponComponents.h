@@ -153,16 +153,19 @@ struct FWeaponStatic
 	UAnimMontage* EquipMontage = nullptr;
 
 	// ─────────────────────────────────────────────────────────
-	// BLOOM (Spread)
+	// SPREAD & BLOOM (all values in decidegrees, 1 unit = 0.1°)
 	// ─────────────────────────────────────────────────────────
 
-	float BaseSpread = 0.f;
-	float SpreadPerShot = 0.5f;
-	float MaxSpread = 5.f;
-	float SpreadDecayRate = 10.f;
-	float SpreadRecoveryDelay = 0.1f;
-	float MovingSpreadAdd = 1.f;
-	float JumpingSpreadAdd = 2.f;
+	float BaseSpread = 3.f;       // standing inaccuracy (always present)
+	float SpreadPerShot = 5.f;    // bloom growth per shot
+	float MaxBloom = 50.f;        // max bloom cap
+	float BloomDecayRate = 100.f; // bloom decay speed (decideg/sec)
+	float BloomRecoveryDelay = 0.1f;
+
+	/** Per-movement-state multipliers. Indexed by EWeaponMoveState. */
+	static constexpr int32 NumMoveStates = 6;
+	float BaseSpreadMultipliers[NumMoveStates] = {1.f, 1.f, 1.f, 1.f, 1.f, 1.f};
+	float BloomMultipliers[NumMoveStates] = {1.f, 1.f, 1.f, 1.f, 1.f, 1.f};
 
 	static FWeaponStatic FromProfile(const UFlecsWeaponProfile* Profile);
 };
@@ -225,8 +228,8 @@ struct FWeaponInstance
 	// BLOOM STATE
 	// ─────────────────────────────────────────────────────────
 
-	/** Current spread cone half-angle in degrees (grows on fire, decays over time) */
-	float CurrentSpread = 0.f;
+	/** Current bloom in decidegrees (grows on fire, decays to 0). BaseSpread added separately. */
+	float CurrentBloom = 0.f;
 
 	/** Seconds since last successful fire (for recovery delay) */
 	float TimeSinceLastShot = 999.f;

@@ -524,6 +524,16 @@ private:
 	/** Fire was requested before weapon finished spawning — apply after spawn completes. */
 	bool bPendingFireAfterSpawn = false;
 
+	/** Sprint was suppressed by firing — restore on fire release if sprint key still held. */
+	bool bSprintSuppressedByFire = false;
+	/** Fire button is currently held (game thread tracking for sprint blocking). */
+	bool bFireHeld = false;
+	/** Sprint key is currently held (raw input state, independent of sprint suppression). */
+	bool bSprintKeyHeld = false;
+
+	/** Check if firing is blocked by current character state (mantle, climb, ledge hang). */
+	bool IsFireBlocked() const;
+
 	// Movement ECS sync — only write to Flecs when state actually changes
 	uint8 LastSyncedPosture = 0;
 	uint8 LastSyncedMoveMode = 0;

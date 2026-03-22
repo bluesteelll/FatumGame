@@ -25,6 +25,8 @@
 #include "PhysicsFilters/FastObjectLayerFilters.h"
 #include "FlecsRecoilTypes.h"
 #include "FlecsMovementStatic.h"
+#include "FlecsMovementComponents.h"
+#include "FlecsWeaponProfile.h"
 
 void UFlecsArtillerySubsystem::SetupWeaponSystems()
 {
@@ -59,18 +61,18 @@ void UFlecsArtillerySubsystem::SetupWeaponSystems()
 				Weapon.bHasFiredSincePress = false;
 			}
 
-			// Bloom decay
+			// Bloom decay (CurrentBloom = bloom only, decays to 0)
 			const FWeaponStatic* Static = Entity.try_get<FWeaponStatic>();
 			if (Static)
 			{
 				Weapon.TimeSinceLastShot += DeltaTime;
-				if (Weapon.TimeSinceLastShot > Static->SpreadRecoveryDelay
-					&& Weapon.CurrentSpread > Static->BaseSpread)
+				if (Weapon.TimeSinceLastShot > Static->BloomRecoveryDelay
+					&& Weapon.CurrentBloom > 0.f)
 				{
-					Weapon.CurrentSpread -= Static->SpreadDecayRate * DeltaTime;
-					if (Weapon.CurrentSpread < Static->BaseSpread)
+					Weapon.CurrentBloom -= Static->BloomDecayRate * DeltaTime;
+					if (Weapon.CurrentBloom < 0.f)
 					{
-						Weapon.CurrentSpread = Static->BaseSpread;
+						Weapon.CurrentBloom = 0.f;
 					}
 				}
 			}
@@ -319,34 +321,27 @@ void UFlecsArtillerySubsystem::SetupWeaponSystems()
 			float Speed = ProjProfile->DefaultSpeed * Static->ProjectileSpeedMultiplier;
 
 			// ─────────────────────────────────────────────────────
-			// BLOOM: compute effective spread (base + movement penalties)
+			// SPREAD: BaseSpread * BaseMultiplier + Bloom * BloomMultiplier
+			// All values in decidegrees (1 unit = 0.1°), converted to radians at the end.
 			// ─────────────────────────────────────────────────────
-			float EffectiveSpread = Weapon.CurrentSpread;
+			float EffectiveSpread;
 			{
-				// Movement penalties: check velocity for moving, Z velocity for airborne
-				// CharBody already validated above (line ~186)
-				if (CharBody && CharBody->IsValid())
+				float BaseMult = 1.f;
+				float BloomMult = 1.f;
+				const FMovementState* MoveState = CharacterEntity.try_get<FMovementState>();
+				if (MoveState)
 				{
-					FBLet CharPrimRef = CachedBarrageDispatch->GetShapeRef(CharBody->BarrageKey);
-					if (FBarragePrimitive::IsNotNull(CharPrimRef))
-					{
-						FVector CharVel(FBarragePrimitive::GetVelocity(CharPrimRef));
-						float HorizSpeedSq = CharVel.X * CharVel.X + CharVel.Y * CharVel.Y;
-						constexpr float MovingThresholdSq = 50.f * 50.f; // 50 cm/s
-						if (HorizSpeedSq > MovingThresholdSq)
-						{
-							EffectiveSpread += Static->MovingSpreadAdd;
-						}
-						constexpr float AirborneThreshold = 50.f; // cm/s vertical
-						if (FMath::Abs(CharVel.Z) > AirborneThreshold)
-						{
-							EffectiveSpread += Static->JumpingSpreadAdd;
-						}
-					}
+					EWeaponMoveState WeaponState = ResolveWeaponMoveState(MoveState->MoveMode, MoveState->Posture);
+					uint8 StateIdx = static_cast<uint8>(WeaponState);
+					BaseMult = Static->BaseSpreadMultipliers[StateIdx];
+					BloomMult = Static->BloomMultipliers[StateIdx];
 				}
-				EffectiveSpread = FMath::Min(EffectiveSpread, Static->MaxSpread);
+				// Min() handles state transitions where BloomMult decreases mid-spray
+				float Bloom = FMath::Min(Weapon.CurrentBloom, Static->MaxBloom) * BloomMult;
+				EffectiveSpread = Static->BaseSpread * BaseMult + Bloom;
 			}
-			const float SpreadRadians = FMath::DegreesToRadians(EffectiveSpread);
+			// Decidegrees → radians (÷10 → degrees → radians)
+			const float SpreadRadians = FMath::DegreesToRadians(EffectiveSpread * 0.1f);
 
 			for (int32 i = 0; i < Static->ProjectilesPerShot; ++i)
 			{
@@ -465,8 +460,8 @@ void UFlecsArtillerySubsystem::SetupWeaponSystems()
 				Weapon.CurrentAmmo = FMath::Max(0, Weapon.CurrentAmmo);
 			}
 
-			// Increment bloom
-			Weapon.CurrentSpread = FMath::Min(Weapon.CurrentSpread + Static->SpreadPerShot, Static->MaxSpread);
+			// Increment bloom (CurrentBloom = bloom only, capped at MaxBloom)
+			Weapon.CurrentBloom = FMath::Min(Weapon.CurrentBloom + Static->SpreadPerShot, Static->MaxBloom);
 			Weapon.TimeSinceLastShot = 0.f;
 
 			// Enqueue shot-fired event for game thread recoil
@@ -477,9 +472,9 @@ void UFlecsArtillerySubsystem::SetupWeaponSystems()
 				PendingShotEvents.Enqueue(ShotEvent);
 			}
 
-			UE_LOG(LogTemp, Log, TEXT("WEAPON: FIRED! Ammo=%d->%d, Auto=%d, Burst=%d, Spread=%.2f"),
+			UE_LOG(LogTemp, Log, TEXT("WEAPON: FIRED! Ammo=%d->%d, Auto=%d, Burst=%d, Bloom=%.2f"),
 				AmmoBefore, Weapon.CurrentAmmo,
-				Static->bIsAutomatic, Static->bIsBurst, Weapon.CurrentSpread);
+				Static->bIsAutomatic, Static->bIsBurst, Weapon.CurrentBloom);
 
 			// Broadcast ammo change to message system (sim→game thread)
 			if (auto* MsgSub = UFlecsMessageSubsystem::SelfPtr)

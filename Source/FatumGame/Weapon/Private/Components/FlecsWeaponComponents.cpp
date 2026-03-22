@@ -43,14 +43,23 @@ FWeaponStatic FWeaponStatic::FromProfile(const UFlecsWeaponProfile* Profile)
 	S.ReloadMontage = Profile->ReloadMontage;
 	S.EquipMontage = Profile->EquipMontage;
 
-	// Bloom
+	// Spread & Bloom (decidegrees)
 	S.BaseSpread = Profile->BaseSpread;
 	S.SpreadPerShot = Profile->SpreadPerShot;
-	S.MaxSpread = Profile->MaxSpread;
-	S.SpreadDecayRate = Profile->SpreadDecayRate;
-	S.SpreadRecoveryDelay = Profile->SpreadRecoveryDelay;
-	S.MovingSpreadAdd = Profile->MovingSpreadAdd;
-	S.JumpingSpreadAdd = Profile->JumpingSpreadAdd;
+	S.MaxBloom = Profile->MaxBloom;
+	S.BloomDecayRate = Profile->BloomDecayRate;
+	S.BloomRecoveryDelay = Profile->BloomRecoveryDelay;
+
+	// Movement state multipliers (base spread + bloom)
+	static_assert(static_cast<uint8>(EWeaponMoveState::MAX) == FWeaponStatic::NumMoveStates,
+		"Multiplier array size must match EWeaponMoveState count");
+	for (uint8 i = 0; i < FWeaponStatic::NumMoveStates; ++i)
+	{
+		const EWeaponMoveState State = static_cast<EWeaponMoveState>(i);
+		const FWeaponStateMultipliers& M = Profile->GetStateMultipliers(State);
+		S.BaseSpreadMultipliers[i] = M.SpreadBaseMultiplier;
+		S.BloomMultipliers[i] = M.BloomMultiplier;
+	}
 
 	return S;
 }

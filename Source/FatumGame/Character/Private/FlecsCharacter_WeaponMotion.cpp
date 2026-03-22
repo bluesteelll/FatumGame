@@ -28,6 +28,12 @@ void AFlecsCharacter::TickWeaponMotion(float DeltaTime)
 	const bool bInAir = FatumMovement->IsFalling();
 	const float ADSAlpha = RecoilState.ADSAlpha;
 
+	// Resolve movement state for bob multiplier
+	const EWeaponMoveState WeaponMoveState = ResolveWeaponMoveState(
+		static_cast<uint8>(FatumMovement->GetCurrentMoveMode()),
+		static_cast<uint8>(FatumMovement->GetCurrentPosture()));
+	const float StateBobMult = Profile->GetStateMultipliers(WeaponMoveState).BobMultiplier;
+
 	// Accumulate position and rotation offsets from all systems
 	FVector TotalPosOffset = FVector::ZeroVector;
 	FRotator TotalRotOffset = FRotator::ZeroRotator;
@@ -42,7 +48,7 @@ void AFlecsCharacter::TickWeaponMotion(float DeltaTime)
 
 		if (bInAir) SpeedRatio = 0.f;  // no bob while airborne
 
-		float BobMultiplier = bSprinting ? Profile->SprintBobMultiplier : 1.f;
+		float BobMultiplier = StateBobMult;
 
 		// Advance phase proportional to speed
 		RecoilState.WalkBobPhase += Profile->WalkBobFrequency * DeltaTime * UE_TWO_PI * SpeedRatio;
@@ -201,10 +207,6 @@ void AFlecsCharacter::TickWeaponMotion(float DeltaTime)
 
 		TotalPosOffset += RecoilState.MovementInertiaOffset;
 	}
-	else
-	{
-
-	}
 
 	// ═══════════════════════════════════════════════════════════════
 	// 6. FOOTSTEP IMPACT — micro-impulse at each step (bob zero-crossing)
@@ -222,7 +224,7 @@ void AFlecsCharacter::TickWeaponMotion(float DeltaTime)
 			// Small downward impulse on landing spring
 			float StepIntensity = FMath::Clamp(HorizontalSpeed / Profile->WalkBobReferenceSpeed, 0.f, 1.f);
 			StepIntensity *= FMath::Lerp(1.f, Profile->ADSBobMultiplier, ADSAlpha);
-			float SprintMul = bSprinting ? Profile->SprintBobMultiplier : 1.f;
+			float SprintMul = StateBobMult;
 			RecoilState.LandingImpactVelocity.Z -= 15.f * StepIntensity * SprintMul;
 
 			// Tiny random rotation kick

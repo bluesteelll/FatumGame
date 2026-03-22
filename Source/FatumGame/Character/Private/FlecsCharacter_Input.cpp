@@ -116,8 +116,14 @@ void AFlecsCharacter::Look(const FInputActionValue& Value)
 
 void AFlecsCharacter::OnSprintStarted(const FInputActionValue& Value)
 {
+	bSprintKeyHeld = true;
+
 	// Block sprint while ADS is active (ADS cancels sprint, so re-entering sprint during ADS is invalid)
 	if (RecoilState.ADSAlpha > 0.f && RecoilState.CachedProfile && RecoilState.CachedProfile->bADSCancelsSprint)
+		return;
+
+	// Block sprint while firing — sprint will auto-restore on fire release
+	if (bFireHeld)
 		return;
 
 	if (InputAtomics) InputAtomics->Sprinting.Write(true);
@@ -126,6 +132,8 @@ void AFlecsCharacter::OnSprintStarted(const FInputActionValue& Value)
 
 void AFlecsCharacter::OnSprintCompleted(const FInputActionValue& Value)
 {
+	bSprintKeyHeld = false;
+	bSprintSuppressedByFire = false;
 	if (InputAtomics) InputAtomics->Sprinting.Write(false);
 	if (FatumMovement) FatumMovement->RequestSprint(false);
 }
@@ -194,6 +202,11 @@ void AFlecsCharacter::OnTelekinesisScroll(const FInputActionValue& Value)
 
 void AFlecsCharacter::StartFire(const FInputActionValue& Value)
 {
+	bFireHeld = true;
+
+	// Block firing during mantle/climb/ledge hang
+	if (IsFireBlocked()) return;
+
 	if (TestWeaponDefinition)
 	{
 		if (TestWeaponEntityId == 0)
@@ -212,10 +225,22 @@ void AFlecsCharacter::StartFire(const FInputActionValue& Value)
 
 void AFlecsCharacter::StopFire(const FInputActionValue& Value)
 {
+	bFireHeld = false;
 	bPendingFireAfterSpawn = false;
 	if (TestWeaponEntityId != 0)
 	{
 		StopFiringWeapon();
+	}
+
+	// Restore sprint if it was suppressed by firing and sprint key is still held
+	if (bSprintSuppressedByFire)
+	{
+		bSprintSuppressedByFire = false;
+		if (bSprintKeyHeld)
+		{
+			if (InputAtomics) InputAtomics->Sprinting.Write(true);
+			if (FatumMovement) FatumMovement->RequestSprint(true);
+		}
 	}
 }
 

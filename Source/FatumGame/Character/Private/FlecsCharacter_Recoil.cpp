@@ -6,6 +6,7 @@
 #include "FlecsRecoilTypes.h"
 #include "FlecsRecoilState.h"
 #include "FlecsWeaponProfile.h"
+#include "FatumMovementComponent.h"
 #include "Curves/CurveVector.h"
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -68,6 +69,16 @@ void AFlecsCharacter::DrainShotEventsAndApplyRecoil()
 		// ── Kick Impulse (instant offset, spring-damper will recover) ──
 		float KickPitch = FMath::FRandRange(Profile->KickPitchMin, Profile->KickPitchMax);
 		float KickYaw = FMath::FRandRange(Profile->KickYawMin, Profile->KickYawMax);
+		// Movement state attenuation
+		if (FatumMovement)
+		{
+			EWeaponMoveState WeaponState = ResolveWeaponMoveState(
+				static_cast<uint8>(FatumMovement->GetCurrentMoveMode()),
+				static_cast<uint8>(FatumMovement->GetCurrentPosture()));
+			float StateKickMult = Profile->GetStateMultipliers(WeaponState).KickMultiplier;
+			KickPitch *= StateKickMult;
+			KickYaw *= StateKickMult;
+		}
 		// ADS attenuation: reduce kick during aim-down-sights
 		if (RecoilState.ADSAlpha > 0.f)
 		{
@@ -285,7 +296,15 @@ void AFlecsCharacter::TickWeaponInertia(float DeltaTime, const FVector2D& AimDel
 				RecoilState.IdleSwayPhase = FMath::Fmod(RecoilState.IdleSwayPhase, UE_TWO_PI);
 
 			const float SwayADSScale = FMath::Lerp(1.f, Profile->ADSSwayMultiplier, ADSAlpha);
-			const float Amp = Profile->IdleSwayAmplitude * SwayAlpha * SwayADSScale;
+			float StateSwayMult = 1.f;
+			if (FatumMovement)
+			{
+				EWeaponMoveState WeaponState = ResolveWeaponMoveState(
+					static_cast<uint8>(FatumMovement->GetCurrentMoveMode()),
+					static_cast<uint8>(FatumMovement->GetCurrentPosture()));
+				StateSwayMult = Profile->GetStateMultipliers(WeaponState).SwayMultiplier;
+			}
+			const float Amp = Profile->IdleSwayAmplitude * SwayAlpha * SwayADSScale * StateSwayMult;
 			FVector2D NewSway;
 			NewSway.X = Amp * FMath::Sin(RecoilState.IdleSwayPhase);
 			NewSway.Y = Amp * FMath::Sin(RecoilState.IdleSwayPhase * 1.3f + 0.7f);

@@ -12,6 +12,8 @@ class UStaticMesh;
 class USkeletalMesh;
 class UAnimMontage;
 class UCurveVector;
+enum class ECharacterMoveMode : uint8;
+enum class ECharacterPosture : uint8;
 
 /**
  * Weapon firing mode.
@@ -23,6 +25,56 @@ enum class EWeaponFireMode : uint8
 	FullAuto	UMETA(DisplayName = "Full-Automatic"),
 	Burst		UMETA(DisplayName = "Burst Fire")
 };
+
+/**
+ * Movement states for weapon parameter multipliers.
+ * Priority (highest wins): Slide > Airborne > Sprint > Crouch > Walk > Idle.
+ */
+UENUM(BlueprintType)
+enum class EWeaponMoveState : uint8
+{
+	Idle = 0,
+	Walk = 1,
+	Sprint = 2,
+	Airborne = 3,
+	Crouch = 4,
+	Slide = 5,
+	MAX UMETA(Hidden)
+};
+
+/**
+ * Per-movement-state multipliers for weapon parameters.
+ * 1.0 = no change, >1 = penalty, <1 = bonus.
+ */
+USTRUCT(BlueprintType)
+struct FWeaponStateMultipliers
+{
+	GENERATED_BODY()
+
+	/** Base spread (standing inaccuracy) multiplier. Affects minimum spread floor. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta = (ClampMin = "0", ClampMax = "50"))
+	float SpreadBaseMultiplier = 1.f;
+
+	/** Bloom (per-shot spread growth) multiplier. Affects accumulated spread from firing. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta = (ClampMin = "0", ClampMax = "50"))
+	float BloomMultiplier = 1.f;
+
+	/** Idle sway amplitude multiplier. Affects passive weapon drift. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta = (ClampMin = "0", ClampMax = "50"))
+	float SwayMultiplier = 1.f;
+
+	/** Kick/recoil multiplier. Affects view punch on fire. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta = (ClampMin = "0", ClampMax = "50"))
+	float KickMultiplier = 1.f;
+
+	/** Walk bob amplitude multiplier. Affects weapon bob during movement. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta = (ClampMin = "0", ClampMax = "50"))
+	float BobMultiplier = 1.f;
+};
+
+/** Resolve movement state from ECharacterMoveMode + ECharacterPosture.
+ *  Priority: Slide > Airborne > Sprint > Crouch > Walk > Idle. */
+FATUMGAME_API EWeaponMoveState ResolveWeaponMoveState(uint8 MoveMode, uint8 Posture);
 
 /**
  * Weapon profile - defines weapon behavior and configuration.
@@ -39,6 +91,8 @@ class FATUMGAME_API UFlecsWeaponProfile : public UDataAsset
 	GENERATED_BODY()
 
 public:
+	UFlecsWeaponProfile();
+
 	// ═══════════════════════════════════════════════════════════════
 	// FIRING
 	// ═══════════════════════════════════════════════════════════════
@@ -148,38 +202,65 @@ public:
 	TObjectPtr<UAnimMontage> EquipMontage;
 
 	// ═══════════════════════════════════════════════════════════════
-	// BLOOM (Spread)
-	// Random projectile deviation within an expanding cone.
-	// First shot accuracy: BaseSpread=0 means perfectly accurate first shot.
+	// SPREAD & BLOOM
+	// All spread values are in decidegrees (1 unit = 0.1°).
+	// Example: 5 = 0.5° half-angle, 50 = 5° half-angle.
+	// BaseSpread is always present (standing inaccuracy, like CS).
+	// Bloom adds on top from firing.
 	// ═══════════════════════════════════════════════════════════════
 
-	/** Minimum spread cone half-angle in degrees. 0 = first-shot-accurate. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Bloom", meta = (ClampMin = "0", ClampMax = "30"))
-	float BaseSpread = 0.f;
+	/** Base spread cone half-angle (decidegrees). Always present, even without firing. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Spread", meta = (ClampMin = "0", ClampMax = "300"))
+	float BaseSpread = 3.f;
 
-	/** Spread growth per shot (degrees). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Bloom", meta = (ClampMin = "0", ClampMax = "10"))
-	float SpreadPerShot = 0.5f;
+	/** Bloom growth per shot (decidegrees). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Spread", meta = (ClampMin = "0", ClampMax = "100"))
+	float SpreadPerShot = 5.f;
 
-	/** Maximum spread cone half-angle (degrees). Cap during sustained fire. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Bloom", meta = (ClampMin = "0", ClampMax = "30"))
-	float MaxSpread = 5.f;
+	/** Maximum bloom cone half-angle (decidegrees). Cap during sustained fire. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Spread", meta = (ClampMin = "0", ClampMax = "300"))
+	float MaxBloom = 50.f;
 
-	/** Spread decay speed (degrees/sec) when not firing. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Bloom", meta = (ClampMin = "0", ClampMax = "100"))
-	float SpreadDecayRate = 10.f;
+	/** Bloom decay speed (decidegrees/sec) when not firing. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Spread", meta = (ClampMin = "0", ClampMax = "1000"))
+	float BloomDecayRate = 100.f;
 
-	/** Seconds after last shot before spread starts decaying. Prevents tap-tap abuse. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Bloom", meta = (ClampMin = "0", ClampMax = "2"))
-	float SpreadRecoveryDelay = 0.1f;
+	/** Seconds after last shot before bloom starts decaying. Prevents tap-tap abuse. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Spread", meta = (ClampMin = "0", ClampMax = "2"))
+	float BloomRecoveryDelay = 0.1f;
 
-	/** Additional spread (degrees) when character is moving. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Bloom", meta = (ClampMin = "0", ClampMax = "10"))
-	float MovingSpreadAdd = 1.f;
+	// ═══════════════════════════════════════════════════════════════
+	// MOVEMENT STATE MULTIPLIERS
+	// Per-state scaling for spread, sway, kick, and walk bob.
+	// 1.0 = no change. Priority: Slide > Airborne > Sprint > Crouch > Walk > Idle.
+	// ═══════════════════════════════════════════════════════════════
 
-	/** Additional spread (degrees) when character is airborne. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Bloom", meta = (ClampMin = "0", ClampMax = "15"))
-	float JumpingSpreadAdd = 2.f;
+	/** Multipliers when standing still. Baseline — typically all 1.0. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement State Multipliers")
+	FWeaponStateMultipliers IdleMultipliers;
+
+	/** Multipliers when walking (not sprinting). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement State Multipliers")
+	FWeaponStateMultipliers WalkMultipliers;
+
+	/** Multipliers when sprinting. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement State Multipliers")
+	FWeaponStateMultipliers SprintMultipliers;
+
+	/** Multipliers when airborne (jumping or falling). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement State Multipliers")
+	FWeaponStateMultipliers AirborneMultipliers;
+
+	/** Multipliers when crouching (idle or moving while crouched). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement State Multipliers")
+	FWeaponStateMultipliers CrouchMultipliers;
+
+	/** Multipliers when sliding. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement State Multipliers")
+	FWeaponStateMultipliers SlideMultipliers;
+
+	/** Get multipliers for a given movement state. */
+	const FWeaponStateMultipliers& GetStateMultipliers(EWeaponMoveState State) const;
 
 	// ═══════════════════════════════════════════════════════════════
 	// SCREEN SHAKE (Visual Only)
@@ -338,10 +419,6 @@ public:
 	/** Roll rotation per step cycle (degrees). Adds weapon tilt during bob. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon Motion|Walk Bob", meta = (ClampMin = "0", ClampMax = "5"))
 	float WalkBobRollAmplitude = 0.5f;
-
-	/** Sprint bob multiplier. Amplifies bob during sprint. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon Motion|Walk Bob", meta = (ClampMin = "0", ClampMax = "3"))
-	float SprintBobMultiplier = 1.5f;
 
 	/** Character speed considered "full walk" for bob scaling (cm/s). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon Motion|Walk Bob", meta = (ClampMin = "50", ClampMax = "1000"))

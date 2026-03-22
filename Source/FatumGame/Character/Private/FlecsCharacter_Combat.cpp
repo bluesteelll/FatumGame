@@ -426,7 +426,7 @@ void AFlecsCharacter::SpawnAndEquipTestWeapon()
 			FWeaponInstance Instance;
 			Instance.CurrentAmmo = Static->MagazineSize;
 			Instance.ReserveAmmo = Static->MaxReserveAmmo;
-			Instance.CurrentSpread = Static->BaseSpread;
+			Instance.CurrentBloom = 0.f;  // bloom starts at 0; BaseSpread is added separately
 			WeaponEntity.set<FWeaponInstance>(Instance);
 		}
 
@@ -465,9 +465,26 @@ void AFlecsCharacter::SpawnAndEquipTestWeapon()
 	});
 }
 
+bool AFlecsCharacter::IsFireBlocked() const
+{
+	if (!StateAtomics) return false;
+	return StateAtomics->MantleActive.Read() || StateAtomics->ClimbActive.Read();
+}
+
 void AFlecsCharacter::StartFiringWeapon()
 {
 	if (TestWeaponEntityId == 0) return;
+
+	// Block firing during mantle/climb/ledge hang
+	if (IsFireBlocked()) return;
+
+	// Cancel sprint when firing — sprint resumes on fire release
+	if (FatumMovement && FatumMovement->IsSprinting())
+	{
+		if (InputAtomics) InputAtomics->Sprinting.Write(false);
+		FatumMovement->RequestSprint(false);
+		bSprintSuppressedByFire = true;
+	}
 
 	// Block firing when weapon is retracted into wall-ready pose
 	if (RecoilState.CachedProfile && RecoilState.CachedProfile->CollisionFireBlockThreshold > 0.f)
