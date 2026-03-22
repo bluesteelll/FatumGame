@@ -91,23 +91,38 @@ struct FWeaponStatic
 	bool bIsBurst = false;
 
 	// ─────────────────────────────────────────────────────────
-	// AMMO
+	// AMMO & RELOAD
 	// ─────────────────────────────────────────────────────────
 
-	/** Magazine capacity */
-	int32 MagazineSize = 30;
+	/** Accepted caliber IDs (from CaliberRegistry). 0xFF = invalid. */
+	static constexpr int32 MaxAcceptedCalibers = 4;
+	uint8 AcceptedCaliberIds[MaxAcceptedCalibers] = {0xFF, 0xFF, 0xFF, 0xFF};
+	int32 AcceptedCaliberCount = 0;
 
-	/** Reload time in seconds */
-	float ReloadTime = 2.0f;
-
-	/** Max reserve ammo */
-	int32 MaxReserveAmmo = 300;
+	/** Check if a caliber ID is accepted by this weapon. */
+	bool AcceptsCaliber(uint8 CaliberId) const
+	{
+		for (int32 i = 0; i < AcceptedCaliberCount; ++i)
+			if (AcceptedCaliberIds[i] == CaliberId) return true;
+		return false;
+	}
 
 	/** Ammo consumed per shot */
 	int32 AmmoPerShot = 1;
 
-	/** Unlimited ammo flag */
+	/** Weapon has a chamber (+1 round). Tactical reload skips chambering. */
+	bool bHasChamber = true;
+
+	/** Unlimited ammo (debug). Ignores magazine system, uses ProjectileDefinition. */
 	bool bUnlimitedAmmo = false;
+
+	/** Reload phase durations (seconds) */
+	float RemoveMagTime = 0.5f;
+	float InsertMagTime = 0.7f;
+	float ChamberTime = 0.3f;
+
+	/** Movement speed multiplier during reload */
+	float ReloadMoveSpeedMultiplier = 0.7f;
 
 	// ─────────────────────────────────────────────────────────
 	// MUZZLE
@@ -167,7 +182,16 @@ struct FWeaponStatic
 	float BaseSpreadMultipliers[NumMoveStates] = {1.f, 1.f, 1.f, 1.f, 1.f, 1.f};
 	float BloomMultipliers[NumMoveStates] = {1.f, 1.f, 1.f, 1.f, 1.f, 1.f};
 
-	static FWeaponStatic FromProfile(const UFlecsWeaponProfile* Profile);
+	static FWeaponStatic FromProfile(const UFlecsWeaponProfile* Profile, const class UFlecsCaliberRegistry* CaliberRegistry = nullptr);
+};
+
+/** Weapon reload phase state machine. */
+enum class EWeaponReloadPhase : uint8
+{
+	Idle = 0,
+	RemovingMag = 1,
+	InsertingMag = 2,
+	Chambering = 3
 };
 
 // ═══════════════════════════════════════════════════════════════
@@ -175,7 +199,7 @@ struct FWeaponStatic
 // ═══════════════════════════════════════════════════════════════
 //
 // Instance weapon data - mutable per-entity data.
-// Static data (magazine size, fire rate) comes from FWeaponStatic in prefab.
+// Static data (fire rate, caliber) comes from FWeaponStatic in prefab.
 // ═══════════════════════════════════════════════════════════════
 
 USTRUCT(BlueprintType)
@@ -184,16 +208,11 @@ struct FWeaponInstance
 	GENERATED_BODY()
 
 	// ─────────────────────────────────────────────────────────
-	// AMMO STATE
+	// MAGAZINE STATE
 	// ─────────────────────────────────────────────────────────
 
-	/** Current ammo in magazine */
-	UPROPERTY(BlueprintReadWrite, Category = "Weapon")
-	int32 CurrentAmmo = 30;
-
-	/** Reserve ammo */
-	UPROPERTY(BlueprintReadWrite, Category = "Weapon")
-	int32 ReserveAmmo = 300;
+	/** Flecs entity ID of the currently inserted magazine. 0 = no magazine. */
+	int64 InsertedMagazineId = 0;
 
 	// ─────────────────────────────────────────────────────────
 	// FIRING STATE (countdown timers - subtract dt, fire when <= 0)
@@ -217,12 +236,17 @@ struct FWeaponInstance
 	// RELOAD STATE
 	// ─────────────────────────────────────────────────────────
 
-	/** Is currently reloading? */
-	UPROPERTY(BlueprintReadOnly, Category = "Weapon")
-	bool bIsReloading = false;
+	/** Current reload phase */
+	EWeaponReloadPhase ReloadPhase = EWeaponReloadPhase::Idle;
 
-	/** Reload time remaining in seconds */
-	float ReloadTimeRemaining = 0.f;
+	/** Timer for current reload phase (counts down to 0) */
+	float ReloadPhaseTimer = 0.f;
+
+	/** Magazine entity selected for insertion during reload */
+	int64 SelectedMagazineId = 0;
+
+	/** Was the previous magazine empty? (determines if chambering is needed) */
+	bool bPrevMagWasEmpty = false;
 
 	// ─────────────────────────────────────────────────────────
 	// BLOOM STATE
@@ -252,33 +276,24 @@ struct FWeaponInstance
 	/** Reload was requested */
 	bool bReloadRequested = false;
 
+	/** Reload cancel was requested (press R during reload) */
+	bool bReloadCancelRequested = false;
+
 	// ─────────────────────────────────────────────────────────
 	// HELPERS
 	// ─────────────────────────────────────────────────────────
 
-	/** Check if weapon can fire (cooldown expired, has ammo, not reloading) */
+	/** Check if weapon can fire (cooldown expired, has magazine, not reloading) */
 	bool CanFire() const
 	{
-		return !bIsReloading
-			&& CurrentAmmo > 0
+		return ReloadPhase == EWeaponReloadPhase::Idle
+			&& InsertedMagazineId != 0
 			&& FireCooldownRemaining <= 0.f
 			&& BurstCooldownRemaining <= 0.f;
 	}
 
-	/** Check if weapon needs reload */
-	bool NeedsReload(int32 MagazineSize, bool bUnlimitedAmmo) const
-	{
-		if (bUnlimitedAmmo) return false;
-		return CurrentAmmo == 0 && ReserveAmmo > 0 && MagazineSize > 0;
-	}
-
-	/** Check if weapon can reload */
-	bool CanReload(int32 MagazineSize, bool bUnlimitedAmmo) const
-	{
-		if (bUnlimitedAmmo) return false;
-		if (bIsReloading) return false;
-		return CurrentAmmo < MagazineSize && ReserveAmmo > 0;
-	}
+	/** Check if weapon is currently reloading */
+	bool IsReloading() const { return ReloadPhase != EWeaponReloadPhase::Idle; }
 };
 
 // ═══════════════════════════════════════════════════════════════
@@ -330,3 +345,6 @@ struct FEquippedBy
 
 /** Entity is a weapon */
 struct FTagWeapon {};
+
+/** Weapon is currently reloading (query optimization) */
+struct FTagReloading {};

@@ -110,6 +110,7 @@ public class FatumGame : ModuleRules
 				"SolidMacros",
 				// Gameplay systems
 				"GameplayTags",
+				"DeveloperSettings",
 				// UI
 				"UMG",
 				"Slate",

@@ -274,14 +274,18 @@ void AFlecsCharacter::InitECSRegistration()
 		Entity.set<FRopeSwingState>(FRopeSwingState{});
 		Entity.set<FStealthInstance>(FStealthInstance{});
 
+		// Inventory ref — always needed (weapon reload, vitals equipment scanning)
+		// InventoryEntityId set later by InitInventoryContainers
+		{
+			FCharacterInventoryRef InvRef;
+			Entity.set<FCharacterInventoryRef>(InvRef);
+		}
+
 		// Vitals: per-entity instance components (FVitalsInstance/FVitalsStatic inherited from prefab)
 		if (Definition->VitalsProfile)
 		{
 			Entity.set<FStatModifiers>(FStatModifiers{});
 			Entity.set<FEquipmentVitalsCache>(FEquipmentVitalsCache{});
-			FCharacterInventoryRef InvRef;
-			// InventoryEntityId set later by InitInventoryContainers
-			Entity.set<FCharacterInventoryRef>(InvRef);
 		}
 
 		FlecsWorld->defer_end();

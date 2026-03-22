@@ -16,6 +16,7 @@
 #include "FlecsContainerProfile.h"
 #include "FlecsWeaponProfile.h"
 #include "FlecsInteractionProfile.h"
+#include "FlecsMagazineProfile.h"
 #include "FlecsDestructibleProfile.h"
 #include "FlecsDoorProfile.h"
 #include "FlecsDoorComponents.h"
@@ -92,7 +93,10 @@ flecs::entity UFlecsArtillerySubsystem::GetOrCreateEntityPrefab(UFlecsEntityDefi
 	}
 
 	if (EntityDefinition->WeaponProfile)
-		Prefab.set<FWeaponStatic>(FWeaponStatic::FromProfile(EntityDefinition->WeaponProfile));
+		Prefab.set<FWeaponStatic>(FWeaponStatic::FromProfile(EntityDefinition->WeaponProfile, CaliberRegistry));
+
+	if (EntityDefinition->MagazineProfile)
+		Prefab.set<FMagazineStatic>(FMagazineStatic::FromProfile(EntityDefinition->MagazineProfile, CaliberRegistry));
 
 	if (EntityDefinition->InteractionProfile)
 		Prefab.set<FInteractionStatic>(FInteractionStatic::FromProfile(EntityDefinition->InteractionProfile));

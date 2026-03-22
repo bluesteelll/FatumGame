@@ -22,6 +22,8 @@
 #include "FlecsNiagaraManager.h"
 #include "FDebrisPool.h"
 #include "FWorldSimOwner.h"
+#include "FatumGameSettings.h"
+#include "FlecsCaliberRegistry.h"
 #include "HAL/PlatformTime.h"
 
 // ═══════════════════════════════════════════════════════════════
@@ -99,6 +101,12 @@ void UFlecsArtillerySubsystem::OnWorldBeginPlay(UWorld& InWorld)
 	int32 NumWorkers = FMath::Max(2, FPlatformMisc::NumberOfCoresIncludingHyperthreads() - 2);
 	FlecsWorld->set_threads(NumWorkers);
 	UE_LOG(LogTemp, Warning, TEXT("FlecsArtillerySubsystem: %d Flecs worker threads enabled"), NumWorkers);
+
+	// Load caliber registry from Project Settings (Fatum Game → Caliber Registry)
+	if (const UFatumGameSettings* Settings = UFatumGameSettings::Get())
+	{
+		CaliberRegistry = Settings->GetCaliberRegistry();
+	}
 
 	// Create debris pool for fragment body reuse
 	DebrisPool = new FDebrisPool();

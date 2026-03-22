@@ -25,6 +25,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Flecs|Weapon", meta = (WorldContext = "WorldContextObject"))
 	static void ReloadWeapon(UObject* WorldContextObject, int64 WeaponEntityId);
 
+	/** Toggle reload: if idle, start reload. If reloading, cancel reload. */
+	UFUNCTION(BlueprintCallable, Category = "Flecs|Weapon", meta = (WorldContext = "WorldContextObject"))
+	static void ToggleReload(UObject* WorldContextObject, int64 WeaponEntityId);
+
 	UFUNCTION(BlueprintCallable, Category = "Flecs|Weapon", meta = (WorldContext = "WorldContextObject"))
 	static void SetAimDirection(UObject* WorldContextObject, int64 CharacterEntityId, FVector Direction, FVector CharacterPosition = FVector::ZeroVector);
 

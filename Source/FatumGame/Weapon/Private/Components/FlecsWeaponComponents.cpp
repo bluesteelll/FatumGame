@@ -2,8 +2,9 @@
 
 #include "FlecsWeaponComponents.h"
 #include "FlecsWeaponProfile.h"
+#include "FlecsCaliberRegistry.h"
 
-FWeaponStatic FWeaponStatic::FromProfile(const UFlecsWeaponProfile* Profile)
+FWeaponStatic FWeaponStatic::FromProfile(const UFlecsWeaponProfile* Profile, const UFlecsCaliberRegistry* CaliberRegistry)
 {
 	check(Profile);
 
@@ -20,12 +21,20 @@ FWeaponStatic FWeaponStatic::FromProfile(const UFlecsWeaponProfile* Profile)
 	S.bIsAutomatic = Profile->IsAutomatic();
 	S.bIsBurst = Profile->IsBurst();
 
-	// Ammo
-	S.MagazineSize = Profile->MagazineSize;
-	S.ReloadTime = Profile->ReloadTime;
-	S.MaxReserveAmmo = Profile->MaxReserveAmmo;
+	// Ammo & Reload — resolve caliber names to uint8 IDs via registry
+	S.AcceptedCaliberCount = FMath::Min(Profile->AcceptedCalibers.Num(), FWeaponStatic::MaxAcceptedCalibers);
+	for (int32 i = 0; i < S.AcceptedCaliberCount; ++i)
+	{
+		S.AcceptedCaliberIds[i] = CaliberRegistry ? CaliberRegistry->GetCaliberIndex(Profile->AcceptedCalibers[i]) : 0xFF;
+		checkf(S.AcceptedCaliberIds[i] != 0xFF, TEXT("Weapon caliber '%s' not found in CaliberRegistry"), *Profile->AcceptedCalibers[i].ToString());
+	}
 	S.AmmoPerShot = Profile->AmmoPerShot;
+	S.bHasChamber = Profile->bHasChamber;
 	S.bUnlimitedAmmo = Profile->HasUnlimitedAmmo();
+	S.RemoveMagTime = Profile->RemoveMagTime;
+	S.InsertMagTime = Profile->InsertMagTime;
+	S.ChamberTime = Profile->ChamberTime;
+	S.ReloadMoveSpeedMultiplier = Profile->ReloadMoveSpeedMultiplier;
 
 	// Muzzle
 	S.MuzzleOffset = Profile->MuzzleOffset;

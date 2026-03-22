@@ -4,6 +4,9 @@
 #include "FlecsItemDefinition.h"
 #include "FlecsEntityDefinition.h"
 #include "FlecsContainerProfile.h"
+#include "FlecsMagazineProfile.h"
+#include "FlecsAmmoTypeDefinition.h"
+#include "FlecsCaliberRegistry.h"
 #include "Properties/FlecsComponentProperties.h"
 
 REGISTER_FLECS_COMPONENT(FItemInstance);
@@ -145,4 +148,28 @@ FIntPoint FContainerGridInstance::FindFreeSpace(FIntPoint Size, int32 GridWidth,
 		}
 	}
 	return FIntPoint(-1, -1);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// MAGAZINE
+// ═══════════════════════════════════════════════════════════════
+
+FMagazineStatic FMagazineStatic::FromProfile(const UFlecsMagazineProfile* Profile, const UFlecsCaliberRegistry* CaliberRegistry)
+{
+	check(Profile);
+
+	FMagazineStatic S;
+	S.CaliberId = CaliberRegistry ? CaliberRegistry->GetCaliberIndex(Profile->Caliber) : 0xFF;
+	checkf(S.CaliberId != 0xFF, TEXT("Magazine caliber '%s' not found in CaliberRegistry"), *Profile->Caliber.ToString());
+	S.Capacity = FMath::Clamp(Profile->Capacity, 1, MAX_MAGAZINE_CAPACITY);
+	S.WeightPerRound = Profile->WeightPerRound;
+	S.ReloadSpeedModifier = Profile->ReloadSpeedModifier;
+
+	S.AcceptedAmmoTypeCount = FMath::Min(Profile->AcceptedAmmoTypes.Num(), MAX_MAGAZINE_AMMO_TYPES);
+	for (int32 i = 0; i < S.AcceptedAmmoTypeCount; ++i)
+	{
+		S.AcceptedAmmoTypes[i] = Profile->AcceptedAmmoTypes[i];
+	}
+
+	return S;
 }

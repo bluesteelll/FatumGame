@@ -126,24 +126,42 @@ public:
 	int32 ProjectilesPerShot = 1;
 
 	// ═══════════════════════════════════════════════════════════════
-	// AMMUNITION
+	// AMMUNITION & RELOAD
 	// ═══════════════════════════════════════════════════════════════
 
-	/** Magazine capacity (-1 = unlimited) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ammunition", meta = (ClampMin = "-1"))
-	int32 MagazineSize = 30;
-
-	/** Reload time in seconds */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ammunition", meta = (ClampMin = "0"))
-	float ReloadTime = 2.0f;
-
-	/** Max reserve ammo (-1 = unlimited) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ammunition", meta = (ClampMin = "-1"))
-	int32 MaxReserveAmmo = 300;
+	/** Accepted calibers — select from CaliberRegistry (Project Settings → Fatum Game). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ammunition", meta = (GetOptions = "GetCaliberOptions"))
+	TArray<FName> AcceptedCalibers;
 
 	/** Ammo consumed per shot */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ammunition", meta = (ClampMin = "1"))
 	int32 AmmoPerShot = 1;
+
+	/** Weapon has a chamber (+1 round). Tactical reload skips chambering phase. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ammunition")
+	bool bHasChamber = true;
+
+	/** Unlimited ammo (debug/cheat). Ignores magazine system, uses ProjectileDefinition directly. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ammunition")
+	bool bUnlimitedAmmo = false;
+
+	// ── Reload Phases ──
+
+	/** Time to remove the old magazine (seconds). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ammunition|Reload", meta = (ClampMin = "0.1", ClampMax = "3.0"))
+	float RemoveMagTime = 0.5f;
+
+	/** Time to insert the new magazine (seconds). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ammunition|Reload", meta = (ClampMin = "0.1", ClampMax = "3.0"))
+	float InsertMagTime = 0.7f;
+
+	/** Time to chamber a round (seconds). Only when previous magazine was empty. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ammunition|Reload", meta = (ClampMin = "0.1", ClampMax = "1.0"))
+	float ChamberTime = 0.3f;
+
+	/** Movement speed multiplier during reload (0.3-1.0). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ammunition|Reload", meta = (ClampMin = "0.3", ClampMax = "1.0"))
+	float ReloadMoveSpeedMultiplier = 0.7f;
 
 	// ═══════════════════════════════════════════════════════════════
 	// MUZZLE
@@ -632,14 +650,11 @@ public:
 	/** Get fire interval in frames (60Hz simulation tick) */
 	int32 GetFireIntervalFrames() const { return FMath::RoundToInt(GetFireInterval() * 120.f); }
 
-	/** Get reload time in frames (120Hz) */
-	int32 GetReloadTimeFrames() const { return FMath::RoundToInt(ReloadTime * 120.f); }
+	/** Get total reload time in frames (120Hz, sum of all phases) */
+	int32 GetReloadTimeFrames() const { return FMath::RoundToInt((RemoveMagTime + InsertMagTime + ChamberTime) * 120.f); }
 
 	/** Check if weapon has unlimited ammo */
-	bool HasUnlimitedAmmo() const { return MagazineSize < 0; }
-
-	/** Check if weapon has unlimited reserve */
-	bool HasUnlimitedReserve() const { return MaxReserveAmmo < 0; }
+	bool HasUnlimitedAmmo() const { return bUnlimitedAmmo; }
 
 	/** Check if weapon is a shotgun (multiple projectiles) */
 	bool IsShotgun() const { return ProjectilesPerShot > 1; }
@@ -649,4 +664,7 @@ public:
 
 	/** Check if weapon is burst */
 	bool IsBurst() const { return FireMode == EWeaponFireMode::Burst; }
+
+	UFUNCTION()
+	TArray<FName> GetCaliberOptions() const;
 };

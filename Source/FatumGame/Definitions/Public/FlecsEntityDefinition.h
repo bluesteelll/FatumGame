@@ -27,6 +27,7 @@ class UFlecsStealthLightProfile;
 class UFlecsNoiseZoneProfile;
 class UFlecsVitalsProfile;
 class UFlecsTemperatureZoneProfile;
+class UFlecsMagazineProfile;
 
 /**
  * Unified entity definition - a preset combining multiple profiles.
@@ -106,6 +107,10 @@ public:
 	/** Weapon - makes entity a weapon with firing and ammo */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Instanced, Category = "Profiles")
 	TObjectPtr<UFlecsWeaponProfile> WeaponProfile;
+
+	/** Magazine - makes entity a magazine with ammo capacity */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Instanced, Category = "Profiles")
+	TObjectPtr<UFlecsMagazineProfile> MagazineProfile;
 
 	/** Interaction - makes entity interactable (press E) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Instanced, Category = "Profiles")
@@ -206,6 +211,7 @@ public:
 			|| ProjectileProfile != nullptr
 			|| ContainerProfile != nullptr
 			|| WeaponProfile != nullptr
+			|| MagazineProfile != nullptr
 			|| InteractionProfile != nullptr
 			|| NiagaraProfile != nullptr
 			|| DestructibleProfile != nullptr
@@ -238,6 +244,9 @@ public:
 
 	/** Check if this is a weapon */
 	bool IsWeapon() const { return WeaponProfile != nullptr; }
+
+	/** Check if this is a magazine */
+	bool IsMagazine() const { return MagazineProfile != nullptr; }
 
 	/** Check if this is interactable */
 	bool IsInteractable() const { return InteractionProfile != nullptr; }

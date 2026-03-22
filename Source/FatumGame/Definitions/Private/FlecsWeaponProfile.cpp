@@ -75,3 +75,27 @@ EWeaponMoveState ResolveWeaponMoveState(uint8 MoveMode, uint8 Posture)
 
 	return EWeaponMoveState::Idle;
 }
+
+// ═══════════════════════════════════════════════════════════════
+// CALIBER OPTIONS (shared helper for editor dropdowns)
+// ═══════════════════════════════════════════════════════════════
+
+#include "FatumGameSettings.h"
+#include "FlecsCaliberRegistry.h"
+
+static TArray<FName> GetCaliberOptionsFromRegistry()
+{
+	if (const UFatumGameSettings* Settings = UFatumGameSettings::Get())
+	{
+		if (UFlecsCaliberRegistry* Registry = Settings->GetCaliberRegistry())
+		{
+			return Registry->Calibers;
+		}
+	}
+	return {};
+}
+
+TArray<FName> UFlecsWeaponProfile::GetCaliberOptions() const
+{
+	return GetCaliberOptionsFromRegistry();
+}

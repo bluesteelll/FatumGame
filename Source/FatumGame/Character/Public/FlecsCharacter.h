@@ -210,6 +210,14 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flecs|Weapon")
 	TObjectPtr<UFlecsEntityDefinition> TestWeaponDefinition;
 
+	/** Magazine definition for testing (spawned and inserted into test weapon) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flecs|Weapon")
+	TObjectPtr<UFlecsEntityDefinition> TestMagazineDefinition;
+
+	/** How many test magazines to spawn in inventory */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flecs|Weapon", meta = (ClampMin = "1", ClampMax = "10"))
+	int32 TestMagazineCount = 3;
+
 	/** Flecs entity ID of spawned test weapon (0 = not spawned) */
 	UPROPERTY(BlueprintReadOnly, Category = "Flecs|Weapon")
 	int64 TestWeaponEntityId = 0;

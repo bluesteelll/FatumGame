@@ -211,3 +211,70 @@ struct FContainedIn
 	bool IsInGrid() const { return GridPosition.X >= 0 && GridPosition.Y >= 0; }
 	bool IsInSlot() const { return SlotIndex >= 0; }
 };
+
+// ═══════════════════════════════════════════════════════════════
+// MAGAZINE COMPONENTS
+// ═══════════════════════════════════════════════════════════════
+
+class UFlecsAmmoTypeDefinition;
+
+/** Maximum ammo types a magazine can accept */
+static constexpr int32 MAX_MAGAZINE_AMMO_TYPES = 8;
+
+/** Maximum rounds a magazine can hold */
+static constexpr int32 MAX_MAGAZINE_CAPACITY = 60;
+
+/** Magazine static data — lives in PREFAB, shared by all magazines of this type. */
+struct FMagazineStatic
+{
+	uint8 CaliberId = 0xFF;  // index from CaliberRegistry (0xFF = invalid)
+	int32 Capacity = 30;
+	float WeightPerRound = 0.011f;
+	float ReloadSpeedModifier = 1.0f;
+
+	/** Accepted ammo type definitions. Indexed by AmmoSlots values. */
+	UFlecsAmmoTypeDefinition* AcceptedAmmoTypes[MAX_MAGAZINE_AMMO_TYPES] = {};
+	int32 AcceptedAmmoTypeCount = 0;
+
+	/** Check if an ammo type is accepted. Returns index (0-7) or -1. */
+	int32 FindAmmoTypeIndex(const UFlecsAmmoTypeDefinition* AmmoType) const
+	{
+		for (int32 i = 0; i < AcceptedAmmoTypeCount; ++i)
+		{
+			if (AcceptedAmmoTypes[i] == AmmoType) return i;
+		}
+		return -1;
+	}
+
+	static FMagazineStatic FromProfile(const class UFlecsMagazineProfile* Profile, const class UFlecsCaliberRegistry* CaliberRegistry = nullptr);
+};
+
+/** Magazine instance data — per-entity mutable ammo stack.
+ *  AmmoSlots stores uint8 indices into FMagazineStatic::AcceptedAmmoTypes.
+ *  LIFO stack: AmmoSlots[AmmoCount-1] = next round to fire. */
+struct FMagazineInstance
+{
+	uint8 AmmoSlots[MAX_MAGAZINE_CAPACITY] = {};
+	int32 AmmoCount = 0;
+
+	/** Pop the top round. Returns ammo type index, or -1 if empty. */
+	int32 Pop()
+	{
+		if (AmmoCount <= 0) return -1;
+		return AmmoSlots[--AmmoCount];
+	}
+
+	/** Push a round onto the stack. Returns false if full. */
+	bool Push(uint8 AmmoTypeIndex)
+	{
+		if (AmmoCount >= MAX_MAGAZINE_CAPACITY) return false;
+		AmmoSlots[AmmoCount++] = AmmoTypeIndex;
+		return true;
+	}
+
+	bool IsEmpty() const { return AmmoCount <= 0; }
+	bool IsFull(int32 Capacity) const { return AmmoCount >= Capacity; }
+};
+
+/** Tag: entity is a magazine */
+struct FTagMagazine {};

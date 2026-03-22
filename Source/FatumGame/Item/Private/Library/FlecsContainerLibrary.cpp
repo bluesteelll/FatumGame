@@ -5,6 +5,8 @@
 #include "FlecsGameTags.h"
 #include "FlecsEntityDefinition.h"
 #include "FlecsItemDefinition.h"
+#include "FlecsMagazineProfile.h"
+#include "FlecsAmmoTypeDefinition.h"
 #include "FlecsUISubsystem.h"
 #include "FlecsVitalsComponents.h"
 
@@ -160,11 +162,32 @@ static int32 AddItemToContainerDirect(
 		Contained.GridPosition = GridPos;
 		Contained.SlotIndex = SlotIdx;
 
-		return FlecsWorld->entity()
+		flecs::entity NewEntity = FlecsWorld->entity()
 			.is_a(ItemPrefab)
 			.set<FItemInstance>(Instance)
 			.set<FContainedIn>(Contained)
 			.add<FTagItem>();
+
+		// Initialize magazine ammo stack if this is a magazine entity
+		const FMagazineStatic* MagStatic = NewEntity.try_get<FMagazineStatic>();
+		if (MagStatic)
+		{
+			FMagazineInstance MagInst;
+			// Fill with default ammo type if the definition has one
+			if (EntityDefinition && EntityDefinition->MagazineProfile && EntityDefinition->MagazineProfile->DefaultAmmoType)
+			{
+				int32 AmmoIdx = MagStatic->FindAmmoTypeIndex(EntityDefinition->MagazineProfile->DefaultAmmoType);
+				if (AmmoIdx >= 0)
+				{
+					for (int32 r = 0; r < MagStatic->Capacity; ++r)
+						MagInst.Push(static_cast<uint8>(AmmoIdx));
+				}
+			}
+			NewEntity.set<FMagazineInstance>(MagInst);
+			NewEntity.add<FTagMagazine>();
+		}
+
+		return NewEntity;
 	};
 
 	if (ContainerStatic->Type == EContainerType::List)

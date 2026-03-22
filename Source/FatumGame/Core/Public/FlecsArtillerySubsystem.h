@@ -433,6 +433,9 @@ public:
 	/** Access SimWorker for time dilation atomics (game thread writes, sim thread reads). */
 	FSimulationWorker& GetSimWorker() { return SimWorker; }
 
+	/** Get caliber registry (loaded from Project Settings → Fatum Game). */
+	class UFlecsCaliberRegistry* GetCaliberRegistry() const { return CaliberRegistry; }
+
 private:
 	/** Set up Flecs systems that run on the simulation thread. */
 	void SetupFlecsSystems();
@@ -489,6 +492,11 @@ private:
 	// CACHED SUBSYSTEM POINTERS
 	// ═══════════════════════════════════════════════════════════════
 	UBarrageDispatch* CachedBarrageDispatch = nullptr;
+
+	// ═══════════════════════════════════════════════════════════════
+	// CALIBER REGISTRY (loaded from Project Settings → Fatum Game)
+	// ═══════════════════════════════════════════════════════════════
+	class UFlecsCaliberRegistry* CaliberRegistry = nullptr;
 
 	// ═══════════════════════════════════════════════════════════════
 	// SIMULATION THREAD (simulation thread)

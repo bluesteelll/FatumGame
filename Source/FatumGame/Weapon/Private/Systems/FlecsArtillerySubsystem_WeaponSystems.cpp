@@ -27,6 +27,9 @@
 #include "FlecsMovementStatic.h"
 #include "FlecsMovementComponents.h"
 #include "FlecsWeaponProfile.h"
+#include "FlecsItemComponents.h"
+#include "FlecsAmmoTypeDefinition.h"
+#include "FlecsVitalsComponents.h"
 
 void UFlecsArtillerySubsystem::SetupWeaponSystems()
 {
@@ -79,83 +82,276 @@ void UFlecsArtillerySubsystem::SetupWeaponSystems()
 		});
 
 	// ─────────────────────────────────────────────────────────
-	// WEAPON RELOAD SYSTEM
-	// Handles reload state machine.
+	// WEAPON RELOAD SYSTEM (Phase-based: Remove → Insert → Chamber)
 	// ─────────────────────────────────────────────────────────
 	World.system<FWeaponInstance>("WeaponReloadSystem")
 		.with<FTagWeapon>()
 		.without<FTagDead>()
 		.each([this](flecs::entity Entity, FWeaponInstance& Weapon)
 		{
+			const FWeaponStatic* Static = Entity.try_get<FWeaponStatic>();
+			if (!Static || Static->bUnlimitedAmmo) return;
+
 			const float DeltaTime = Entity.world().get_info()->delta_time;
 
-			const FWeaponStatic* Static = Entity.try_get<FWeaponStatic>();
-			if (!Static) return;
-
-			// Process reload request
-			if (Weapon.bReloadRequested && !Weapon.bIsReloading)
+			// ── Handle reload request (Idle → RemovingMag) ──
+			if (Weapon.bReloadRequested && Weapon.ReloadPhase == EWeaponReloadPhase::Idle)
 			{
-				if (Weapon.CanReload(Static->MagazineSize, Static->bUnlimitedAmmo))
-				{
-					Weapon.bIsReloading = true;
-					Weapon.ReloadTimeRemaining = Static->ReloadTime;
-					UE_LOG(LogTemp, Log, TEXT("WEAPON: Reload started, %.2f sec"), Static->ReloadTime);
-
-					if (auto* MsgSub = UFlecsMessageSubsystem::SelfPtr)
-					{
-						FUIReloadMessage ReloadMsg;
-						ReloadMsg.WeaponEntityId = static_cast<int64>(Entity.id());
-						ReloadMsg.bStarted = true;
-						ReloadMsg.MagazineSize = Static->MagazineSize;
-						MsgSub->EnqueueMessage(TAG_UI_Reload, ReloadMsg);
-					}
-
-					// Update sim→game state cache (reload started)
-					SimStateCache.WriteWeapon(static_cast<int64>(Entity.id()),
-						Weapon.CurrentAmmo, Static->MagazineSize, Weapon.ReserveAmmo, true);
-				}
 				Weapon.bReloadRequested = false;
+
+				// Find character's inventory
+				const FEquippedBy* Equip = Entity.try_get<FEquippedBy>();
+				if (!Equip || !Equip->IsEquipped()) return;
+
+				flecs::entity CharEntity = Entity.world().entity(static_cast<flecs::entity_t>(Equip->CharacterEntityId));
+				if (!CharEntity.is_valid()) return;
+
+				const FCharacterInventoryRef* InvRef = CharEntity.try_get<FCharacterInventoryRef>();
+				if (!InvRef || InvRef->InventoryEntityId == 0) return;
+
+				// Find best magazine in inventory
+				// NOTE: FMagazineStatic is on prefab (inherited via IsA), so we can't use it
+				// as a typed param in each() — read it via try_get() instead.
+				int64 BestMagId = 0;
+				int32 BestAmmoCount = 0;
+				const int64 InvId = InvRef->InventoryEntityId;
+				const int64 CurrentMagId = Weapon.InsertedMagazineId;
+				int32 DbgTotal = 0, DbgInInv = 0, DbgHasAmmo = 0, DbgHasStatic = 0, DbgCaliberMatch = 0;
+
+				Entity.world().each([&](flecs::entity MagEntity, const FContainedIn& CI, const FMagazineInstance& MagInst)
+				{
+					++DbgTotal;
+					UE_LOG(LogTemp, Log, TEXT("  DBG MAG: entity=%lld container=%lld ammo=%d (want inv=%lld)"),
+						static_cast<int64>(MagEntity.id()), CI.ContainerEntityId, MagInst.AmmoCount, InvId);
+					if (CI.ContainerEntityId != InvId) return;
+					++DbgInInv;
+					if (MagInst.AmmoCount <= 0) return;
+					++DbgHasAmmo;
+					if (static_cast<int64>(MagEntity.id()) == CurrentMagId) return;
+
+					const FMagazineStatic* MagStatic = MagEntity.try_get<FMagazineStatic>();
+					if (!MagStatic) return;
+					++DbgHasStatic;
+					if (!Static->AcceptsCaliber(MagStatic->CaliberId)) return;
+					++DbgCaliberMatch;
+
+					if (MagInst.AmmoCount > BestAmmoCount)
+					{
+						BestAmmoCount = MagInst.AmmoCount;
+						BestMagId = static_cast<int64>(MagEntity.id());
+					}
+				});
+
+				if (BestMagId == 0)
+				{
+					UE_LOG(LogTemp, Warning, TEXT("WEAPON: No compatible magazine. InvId=%lld Total=%d InInv=%d HasAmmo=%d HasStatic=%d CaliberOK=%d WeaponCalibers=%d[%d,%d,%d,%d]"),
+						InvId, DbgTotal, DbgInInv, DbgHasAmmo, DbgHasStatic, DbgCaliberMatch,
+						Static->AcceptedCaliberCount,
+						Static->AcceptedCaliberIds[0], Static->AcceptedCaliberIds[1],
+						Static->AcceptedCaliberIds[2], Static->AcceptedCaliberIds[3]);
+					return;
+				}
+
+				// Check if current magazine is empty (for chambering decision)
+				Weapon.bPrevMagWasEmpty = true;
+				if (Weapon.InsertedMagazineId != 0)
+				{
+					flecs::entity CurMag = Entity.world().entity(static_cast<flecs::entity_t>(Weapon.InsertedMagazineId));
+					if (CurMag.is_valid())
+					{
+						const FMagazineInstance* CurMagInst = CurMag.try_get<FMagazineInstance>();
+						if (CurMagInst && CurMagInst->AmmoCount > 0)
+							Weapon.bPrevMagWasEmpty = false;
+					}
+				}
+
+				// Get magazine's reload speed modifier
+				float MagSpeedMod = 1.f;
+				flecs::entity SelMag = Entity.world().entity(static_cast<flecs::entity_t>(BestMagId));
+				if (SelMag.is_valid())
+				{
+					const FMagazineStatic* MagSt = SelMag.try_get<FMagazineStatic>();
+					if (MagSt) MagSpeedMod = MagSt->ReloadSpeedModifier;
+				}
+
+				// Enter RemovingMag phase
+				Weapon.SelectedMagazineId = BestMagId;
+				Weapon.ReloadPhase = EWeaponReloadPhase::RemovingMag;
+				Weapon.ReloadPhaseTimer = Static->RemoveMagTime * MagSpeedMod;
+				Entity.add<FTagReloading>();
+
+				if (auto* MsgSub = UFlecsMessageSubsystem::SelfPtr)
+				{
+					FUIReloadMessage ReloadMsg;
+					ReloadMsg.WeaponEntityId = static_cast<int64>(Entity.id());
+					ReloadMsg.bStarted = true;
+					ReloadMsg.MagazineSize = 0; // Will be updated on completion
+					MsgSub->EnqueueMessage(TAG_UI_Reload, ReloadMsg);
+				}
+
+				// Update sim→game state cache (reload started)
+				SimStateCache.WriteWeapon(static_cast<int64>(Entity.id()), 0, 0, 0, true);
+
+				UE_LOG(LogTemp, Log, TEXT("WEAPON: Reload started (RemovingMag, %.2fs)"), Weapon.ReloadPhaseTimer);
+			}
+			Weapon.bReloadRequested = false; // consume even if not processed
+
+			// ── Handle reload cancel ──
+			if (Weapon.bReloadCancelRequested && Weapon.ReloadPhase != EWeaponReloadPhase::Idle)
+			{
+				Weapon.bReloadCancelRequested = false;
+
+				if (Weapon.ReloadPhase == EWeaponReloadPhase::RemovingMag)
+				{
+					// Cancel during remove: magazine stays in weapon
+					Weapon.ReloadPhase = EWeaponReloadPhase::Idle;
+					Weapon.ReloadPhaseTimer = 0.f;
+					Weapon.SelectedMagazineId = 0;
+					Entity.remove<FTagReloading>();
+					UE_LOG(LogTemp, Log, TEXT("WEAPON: Reload cancelled (mag stays)"));
+				}
+				else if (Weapon.ReloadPhase == EWeaponReloadPhase::InsertingMag)
+				{
+					// Cancel during insert: old mag already in inventory, weapon is EMPTY
+					Weapon.ReloadPhase = EWeaponReloadPhase::Idle;
+					Weapon.ReloadPhaseTimer = 0.f;
+					Weapon.SelectedMagazineId = 0;
+					Entity.remove<FTagReloading>();
+					UE_LOG(LogTemp, Log, TEXT("WEAPON: Reload cancelled (weapon empty!)"));
+				}
+				// Chambering is non-cancellable
+			}
+			Weapon.bReloadCancelRequested = false;
+
+			// ── Tick reload phase timer ──
+			if (Weapon.ReloadPhase == EWeaponReloadPhase::Idle) return;
+
+			Weapon.ReloadPhaseTimer -= DeltaTime;
+			if (Weapon.ReloadPhaseTimer > 0.f) return;
+
+			// ── Phase transitions ──
+			switch (Weapon.ReloadPhase)
+			{
+			case EWeaponReloadPhase::RemovingMag:
+			{
+				// Old magazine removed from weapon → return to inventory
+				const FEquippedBy* Equip = Entity.try_get<FEquippedBy>();
+				if (Equip && Equip->IsEquipped() && Weapon.InsertedMagazineId != 0)
+				{
+					flecs::entity CharEntity = Entity.world().entity(static_cast<flecs::entity_t>(Equip->CharacterEntityId));
+					if (CharEntity.is_valid())
+					{
+						const FCharacterInventoryRef* InvRef = CharEntity.try_get<FCharacterInventoryRef>();
+						if (InvRef && InvRef->InventoryEntityId != 0)
+						{
+							flecs::entity OldMag = Entity.world().entity(static_cast<flecs::entity_t>(Weapon.InsertedMagazineId));
+							if (OldMag.is_valid())
+							{
+								FContainedIn Contained;
+								Contained.ContainerEntityId = InvRef->InventoryEntityId;
+								Contained.SlotIndex = -1;
+								OldMag.set<FContainedIn>(Contained);
+								UE_LOG(LogTemp, Log, TEXT("WEAPON: Old magazine %lld returned to inventory"), Weapon.InsertedMagazineId);
+							}
+						}
+					}
+				}
+
+				Weapon.InsertedMagazineId = 0; // Weapon now has no magazine
+
+				// Transition to InsertingMag
+				float MagSpeedMod = 1.f;
+				flecs::entity SelMag = Entity.world().entity(static_cast<flecs::entity_t>(Weapon.SelectedMagazineId));
+				if (SelMag.is_valid())
+				{
+					const FMagazineStatic* MagSt = SelMag.try_get<FMagazineStatic>();
+					if (MagSt) MagSpeedMod = MagSt->ReloadSpeedModifier;
+				}
+
+				Weapon.ReloadPhase = EWeaponReloadPhase::InsertingMag;
+				Weapon.ReloadPhaseTimer = Static->InsertMagTime * MagSpeedMod;
+				UE_LOG(LogTemp, Log, TEXT("WEAPON: InsertingMag phase (%.2fs)"), Weapon.ReloadPhaseTimer);
+				break;
 			}
 
-			// Process reload timer
-			if (Weapon.bIsReloading)
+			case EWeaponReloadPhase::InsertingMag:
 			{
-				Weapon.ReloadTimeRemaining -= DeltaTime;
+				// New magazine inserted into weapon
+				Weapon.InsertedMagazineId = Weapon.SelectedMagazineId;
+				Weapon.SelectedMagazineId = 0;
 
-				if (Weapon.ReloadTimeRemaining <= 0.f)
+				// Remove magazine from inventory container (it's now "in the weapon")
+				flecs::entity NewMag = Entity.world().entity(static_cast<flecs::entity_t>(Weapon.InsertedMagazineId));
+				if (NewMag.is_valid())
 				{
-					// Complete reload
-					int32 AmmoNeeded = Static->MagazineSize - Weapon.CurrentAmmo;
+					NewMag.remove<FContainedIn>();
+				}
 
-					if (Static->bUnlimitedAmmo)
-					{
-						Weapon.CurrentAmmo = Static->MagazineSize;
-					}
-					else
-					{
-						int32 AmmoToLoad = FMath::Min(AmmoNeeded, Weapon.ReserveAmmo);
-						Weapon.CurrentAmmo += AmmoToLoad;
-						Weapon.ReserveAmmo -= AmmoToLoad;
-					}
+				// Check if chambering is needed
+				if (Static->bHasChamber && Weapon.bPrevMagWasEmpty)
+				{
+					Weapon.ReloadPhase = EWeaponReloadPhase::Chambering;
+					Weapon.ReloadPhaseTimer = Static->ChamberTime;
+					UE_LOG(LogTemp, Log, TEXT("WEAPON: Chambering phase (%.2fs)"), Weapon.ReloadPhaseTimer);
+				}
+				else
+				{
+					// Reload complete
+					Weapon.ReloadPhase = EWeaponReloadPhase::Idle;
+					Entity.remove<FTagReloading>();
 
-					Weapon.bIsReloading = false;
-					UE_LOG(LogTemp, Log, TEXT("WEAPON: Reload complete, ammo=%d/%d reserve=%d"),
-						Weapon.CurrentAmmo, Static->MagazineSize, Weapon.ReserveAmmo);
-
+					// Notify UI
 					if (auto* MsgSub = UFlecsMessageSubsystem::SelfPtr)
 					{
 						FUIReloadMessage ReloadMsg;
 						ReloadMsg.WeaponEntityId = static_cast<int64>(Entity.id());
 						ReloadMsg.bStarted = false;
-						ReloadMsg.NewAmmo = Weapon.CurrentAmmo;
-						ReloadMsg.MagazineSize = Static->MagazineSize;
+
+						if (NewMag.is_valid())
+						{
+							const FMagazineInstance* MI = NewMag.try_get<FMagazineInstance>();
+							const FMagazineStatic* MS = NewMag.try_get<FMagazineStatic>();
+							ReloadMsg.NewAmmo = MI ? MI->AmmoCount : 0;
+							ReloadMsg.MagazineSize = MS ? MS->Capacity : 0;
+						}
 						MsgSub->EnqueueMessage(TAG_UI_Reload, ReloadMsg);
 					}
 
-					// Update sim→game state cache (reload complete)
-					SimStateCache.WriteWeapon(static_cast<int64>(Entity.id()),
-						Weapon.CurrentAmmo, Static->MagazineSize, Weapon.ReserveAmmo, false);
+					UE_LOG(LogTemp, Log, TEXT("WEAPON: Reload complete (tactical, skip chamber)"));
 				}
+				break;
+			}
+
+			case EWeaponReloadPhase::Chambering:
+			{
+				// Chambering complete
+				Weapon.ReloadPhase = EWeaponReloadPhase::Idle;
+				Entity.remove<FTagReloading>();
+
+				// Notify UI
+				if (auto* MsgSub = UFlecsMessageSubsystem::SelfPtr)
+				{
+					FUIReloadMessage ReloadMsg;
+					ReloadMsg.WeaponEntityId = static_cast<int64>(Entity.id());
+					ReloadMsg.bStarted = false;
+
+					flecs::entity InsertedMag = Entity.world().entity(static_cast<flecs::entity_t>(Weapon.InsertedMagazineId));
+					if (InsertedMag.is_valid())
+					{
+						const FMagazineInstance* MI = InsertedMag.try_get<FMagazineInstance>();
+						const FMagazineStatic* MS = InsertedMag.try_get<FMagazineStatic>();
+						ReloadMsg.NewAmmo = MI ? MI->AmmoCount : 0;
+						ReloadMsg.MagazineSize = MS ? MS->Capacity : 0;
+					}
+					MsgSub->EnqueueMessage(TAG_UI_Reload, ReloadMsg);
+				}
+
+				UE_LOG(LogTemp, Log, TEXT("WEAPON: Reload complete (chambered)"));
+				break;
+			}
+
+			default:
+				break;
 			}
 		});
 
@@ -176,7 +372,10 @@ void UFlecsArtillerySubsystem::SetupWeaponSystems()
 			if (!EquippedBy.IsEquipped()) return;
 
 			const FWeaponStatic* Static = WeaponEntity.try_get<FWeaponStatic>();
-			if (!Static || !Static->ProjectileDefinition) return;
+			if (!Static) return;
+
+			// Unlimited ammo requires ProjectileDefinition on weapon
+			if (Static->bUnlimitedAmmo && !Static->ProjectileDefinition) return;
 
 			// Check fire request: continuous hold OR pending trigger (survives Start+Stop batching)
 			if (!Weapon.bFireRequested && !Weapon.bFireTriggerPending) return;
@@ -188,10 +387,29 @@ void UFlecsArtillerySubsystem::SetupWeaponSystems()
 				return;
 			}
 
-			// Check if can fire (cooldown expired, has ammo, not reloading)
+			// Check if can fire (cooldown expired, has magazine, not reloading)
 			if (!Weapon.CanFire())
 			{
 				return;
+			}
+
+			// Check magazine has ammo (only for non-unlimited)
+			if (!Static->bUnlimitedAmmo)
+			{
+				flecs::entity MagCheck = World.entity(static_cast<flecs::entity_t>(Weapon.InsertedMagazineId));
+				if (!MagCheck.is_valid())
+				{
+					Weapon.bFireTriggerPending = false;
+					return;
+				}
+				const FMagazineInstance* MagCheckInst = MagCheck.try_get<FMagazineInstance>();
+				if (!MagCheckInst || MagCheckInst->IsEmpty())
+				{
+					// Auto-reload on empty
+					Weapon.bReloadRequested = true;
+					Weapon.bFireTriggerPending = false;
+					return;
+				}
 			}
 
 			// Get character entity - if dead or invalid, stop firing
@@ -241,11 +459,39 @@ void UFlecsArtillerySubsystem::SetupWeaponSystems()
 			}
 
 			// ─────────────────────────────────────────────────────
-			// PROJECTILE CREATION (on sim thread — no game thread round-trip)
-			// Creates Barrage body + Flecs entity immediately.
-			// Only ISM render queued for game thread.
+			// RESOLVE PROJECTILE DEFINITION FROM MAGAZINE AMMO STACK
 			// ─────────────────────────────────────────────────────
-			UFlecsEntityDefinition* ProjDef = Static->ProjectileDefinition;
+			UFlecsEntityDefinition* ProjDef = nullptr;
+			float AmmoDamageMult = 1.f;
+			float AmmoSpeedMult = 1.f;
+
+			if (Static->bUnlimitedAmmo)
+			{
+				ProjDef = Static->ProjectileDefinition;
+			}
+			else
+			{
+				// Pop round from inserted magazine
+				flecs::entity MagEntity = World.entity(static_cast<flecs::entity_t>(Weapon.InsertedMagazineId));
+				checkf(MagEntity.is_valid(), TEXT("WeaponFireSystem: InsertedMagazineId %lld is invalid"), Weapon.InsertedMagazineId);
+
+				FMagazineInstance* MagInst = MagEntity.try_get_mut<FMagazineInstance>();
+				const FMagazineStatic* MagStatic = MagEntity.try_get<FMagazineStatic>();
+				checkf(MagInst && MagStatic, TEXT("WeaponFireSystem: Magazine entity missing components"));
+
+				int32 AmmoTypeIdx = MagInst->Pop();
+				checkf(AmmoTypeIdx >= 0, TEXT("WeaponFireSystem: Magazine is empty but CanFire passed"));
+				checkf(AmmoTypeIdx < MagStatic->AcceptedAmmoTypeCount, TEXT("WeaponFireSystem: AmmoTypeIdx %d out of range (%d)"), AmmoTypeIdx, MagStatic->AcceptedAmmoTypeCount);
+
+				UFlecsAmmoTypeDefinition* AmmoType = MagStatic->AcceptedAmmoTypes[AmmoTypeIdx];
+				checkf(AmmoType && AmmoType->ProjectileDefinition, TEXT("WeaponFireSystem: AmmoType or its ProjectileDefinition is null"));
+
+				ProjDef = AmmoType->ProjectileDefinition;
+				AmmoDamageMult = AmmoType->DamageMultiplier;
+				AmmoSpeedMult = AmmoType->SpeedMultiplier;
+			}
+
+			check(ProjDef);
 			UFlecsProjectileProfile* ProjProfile = ProjDef->ProjectileProfile;
 			if (!ProjProfile)
 			{
@@ -318,7 +564,7 @@ void UFlecsArtillerySubsystem::SetupWeaponSystems()
 				SpawnDirection = FireDirection;
 			}
 
-			float Speed = ProjProfile->DefaultSpeed * Static->ProjectileSpeedMultiplier;
+			float Speed = ProjProfile->DefaultSpeed * Static->ProjectileSpeedMultiplier * AmmoSpeedMult;
 
 			// ─────────────────────────────────────────────────────
 			// SPREAD: BaseSpread * BaseMultiplier + Bloom * BloomMultiplier
@@ -405,7 +651,11 @@ void UFlecsArtillerySubsystem::SetupWeaponSystems()
 					ProjEntity.set<FProjectileStatic>(FProjectileStatic::FromProfile(ProjProfile));
 
 				if (ProjDef->DamageProfile)
-					ProjEntity.set<FDamageStatic>(FDamageStatic::FromProfile(ProjDef->DamageProfile));
+				{
+					FDamageStatic DmgStatic = FDamageStatic::FromProfile(ProjDef->DamageProfile);
+					DmgStatic.Damage *= Static->DamageMultiplier * AmmoDamageMult;
+					ProjEntity.set<FDamageStatic>(DmgStatic);
+				}
 
 				if (RenderProfile && RenderProfile->Mesh)
 				{
@@ -452,13 +702,8 @@ void UFlecsArtillerySubsystem::SetupWeaponSystems()
 					TargetPoint.X, TargetPoint.Y, TargetPoint.Z);
 			}
 
-			// Consume ammo
-			int32 AmmoBefore = Weapon.CurrentAmmo;
-			if (!Static->bUnlimitedAmmo)
-			{
-				Weapon.CurrentAmmo -= Static->AmmoPerShot;
-				Weapon.CurrentAmmo = FMath::Max(0, Weapon.CurrentAmmo);
-			}
+			// Ammo was already consumed by MagInst->Pop() above (for non-unlimited).
+			// Read current magazine state for UI.
 
 			// Increment bloom (CurrentBloom = bloom only, capped at MaxBloom)
 			Weapon.CurrentBloom = FMath::Min(Weapon.CurrentBloom + Static->SpreadPerShot, Static->MaxBloom);
@@ -472,8 +717,23 @@ void UFlecsArtillerySubsystem::SetupWeaponSystems()
 				PendingShotEvents.Enqueue(ShotEvent);
 			}
 
-			UE_LOG(LogTemp, Log, TEXT("WEAPON: FIRED! Ammo=%d->%d, Auto=%d, Burst=%d, Bloom=%.2f"),
-				AmmoBefore, Weapon.CurrentAmmo,
+			// Get ammo count from magazine for UI
+			int32 CurrentAmmoForUI = 0;
+			int32 MagSizeForUI = 0;
+			if (!Static->bUnlimitedAmmo && Weapon.InsertedMagazineId != 0)
+			{
+				flecs::entity MagUI = World.entity(static_cast<flecs::entity_t>(Weapon.InsertedMagazineId));
+				if (MagUI.is_valid())
+				{
+					const FMagazineInstance* MI = MagUI.try_get<FMagazineInstance>();
+					const FMagazineStatic* MS = MagUI.try_get<FMagazineStatic>();
+					if (MI) CurrentAmmoForUI = MI->AmmoCount;
+					if (MS) MagSizeForUI = MS->Capacity;
+				}
+			}
+
+			UE_LOG(LogTemp, Log, TEXT("WEAPON: FIRED! MagAmmo=%d/%d, Auto=%d, Burst=%d, Bloom=%.2f"),
+				CurrentAmmoForUI, MagSizeForUI,
 				Static->bIsAutomatic, Static->bIsBurst, Weapon.CurrentBloom);
 
 			// Broadcast ammo change to message system (sim→game thread)
@@ -481,15 +741,15 @@ void UFlecsArtillerySubsystem::SetupWeaponSystems()
 			{
 				FUIAmmoMessage AmmoMsg;
 				AmmoMsg.WeaponEntityId = static_cast<int64>(WeaponEntity.id());
-				AmmoMsg.CurrentAmmo = Weapon.CurrentAmmo;
-				AmmoMsg.MagazineSize = Static->MagazineSize;
-				AmmoMsg.ReserveAmmo = Weapon.ReserveAmmo;
+				AmmoMsg.CurrentAmmo = CurrentAmmoForUI;
+				AmmoMsg.MagazineSize = MagSizeForUI;
+				AmmoMsg.ReserveAmmo = 0; // Reserve concept replaced by physical magazines
 				MsgSub->EnqueueMessage(TAG_UI_Ammo, AmmoMsg);
 			}
 
 			// Update sim→game state cache
 			SimStateCache.WriteWeapon(static_cast<int64>(WeaponEntity.id()),
-				Weapon.CurrentAmmo, Static->MagazineSize, Weapon.ReserveAmmo, Weapon.bIsReloading);
+				CurrentAmmoForUI, MagSizeForUI, 0, Weapon.IsReloading());
 
 			// Carry-over overshoot for consistent average fire rate.
 			// If cooldown was -0.003 when we fire, += FireInterval gives 0.097
@@ -522,10 +782,18 @@ void UFlecsArtillerySubsystem::SetupWeaponSystems()
 				}
 			}
 
-			// Auto-reload when empty
-			if (Weapon.CurrentAmmo == 0 && !Static->bUnlimitedAmmo && Weapon.ReserveAmmo > 0)
+			// Auto-reload when magazine is empty
+			if (!Static->bUnlimitedAmmo && Weapon.InsertedMagazineId != 0)
 			{
-				Weapon.bReloadRequested = true;
+				flecs::entity MagAutoReload = World.entity(static_cast<flecs::entity_t>(Weapon.InsertedMagazineId));
+				if (MagAutoReload.is_valid())
+				{
+					const FMagazineInstance* MagInst = MagAutoReload.try_get<FMagazineInstance>();
+					if (MagInst && MagInst->IsEmpty())
+					{
+						Weapon.bReloadRequested = true;
+					}
+				}
 			}
 		});
 }

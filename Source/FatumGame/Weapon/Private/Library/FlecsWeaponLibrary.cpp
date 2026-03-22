@@ -72,6 +72,29 @@ void UFlecsWeaponLibrary::ReloadWeapon(UObject* WorldContextObject, int64 Weapon
 	});
 }
 
+void UFlecsWeaponLibrary::ToggleReload(UObject* WorldContextObject, int64 WeaponEntityId)
+{
+	UFlecsArtillerySubsystem* Subsystem = FlecsLibrary::GetSubsystem(WorldContextObject);
+	if (!Subsystem || WeaponEntityId == 0) return;
+
+	Subsystem->EnqueueCommand([Subsystem, WeaponEntityId]()
+	{
+		flecs::world* World = Subsystem->GetFlecsWorld();
+		if (!World) return;
+
+		flecs::entity WeaponEntity = World->entity(static_cast<flecs::entity_t>(WeaponEntityId));
+		if (!WeaponEntity.is_valid() || !WeaponEntity.is_alive()) return;
+
+		FWeaponInstance* Weapon = WeaponEntity.try_get_mut<FWeaponInstance>();
+		if (!Weapon) return;
+
+		if (Weapon->IsReloading())
+			Weapon->bReloadCancelRequested = true;
+		else
+			Weapon->bReloadRequested = true;
+	});
+}
+
 void UFlecsWeaponLibrary::SetAimDirection(UObject* WorldContextObject, int64 CharacterEntityId, FVector Direction, FVector CharacterPosition)
 {
 	UFlecsArtillerySubsystem* Subsystem = FlecsLibrary::GetSubsystem(WorldContextObject);

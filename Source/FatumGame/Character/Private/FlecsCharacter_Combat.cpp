@@ -15,6 +15,10 @@
 #include "FlecsArtillerySubsystem.h"
 #include "FlecsGameTags.h"
 #include "FlecsWeaponComponents.h"
+#include "FlecsItemComponents.h"
+#include "FlecsMagazineProfile.h"
+#include "FlecsAmmoTypeDefinition.h"
+#include "FlecsVitalsComponents.h"
 #include "FlecsMessageSubsystem.h"
 #include "FlecsUIMessages.h"
 #include "FlecsHUDWidget.h"
@@ -421,14 +425,75 @@ void AFlecsCharacter::SpawnAndEquipTestWeapon()
 
 		// Initialize FWeaponInstance
 		const FWeaponStatic* Static = WeaponEntity.try_get<FWeaponStatic>();
-		if (Static)
+		FWeaponInstance Instance;
+		Instance.CurrentBloom = 0.f;  // bloom starts at 0; BaseSpread is added separately
+
+		// Spawn test magazines if available
+		if (Static && !Static->bUnlimitedAmmo && TestMagazineDefinition && TestMagazineDefinition->MagazineProfile)
 		{
-			FWeaponInstance Instance;
-			Instance.CurrentAmmo = Static->MagazineSize;
-			Instance.ReserveAmmo = Static->MaxReserveAmmo;
-			Instance.CurrentBloom = 0.f;  // bloom starts at 0; BaseSpread is added separately
-			WeaponEntity.set<FWeaponInstance>(Instance);
+			const UFlecsMagazineProfile* MagProfile = TestMagazineDefinition->MagazineProfile;
+
+			flecs::entity MagPrefab = FlecsSubsystem->GetOrCreateEntityPrefab(TestMagazineDefinition);
+			if (MagPrefab.is_valid())
+			{
+				for (int32 i = 0; i < TestMagazineCount; ++i)
+				{
+					flecs::entity MagEntity = World->entity()
+						.is_a(MagPrefab)
+						.add<FTagMagazine>()
+						.add<FTagItem>();
+
+					// Initialize ammo stack (fill with default ammo type)
+					FMagazineInstance MagInst;
+					if (MagProfile->DefaultAmmoType)
+					{
+						const FMagazineStatic* MagStatic = MagEntity.try_get<FMagazineStatic>();
+						if (MagStatic)
+						{
+							int32 AmmoIdx = MagStatic->FindAmmoTypeIndex(MagProfile->DefaultAmmoType);
+							if (AmmoIdx >= 0)
+							{
+								for (int32 r = 0; r < MagStatic->Capacity; ++r)
+								{
+									MagInst.Push(static_cast<uint8>(AmmoIdx));
+								}
+							}
+						}
+					}
+					MagEntity.set<FMagazineInstance>(MagInst);
+
+					if (i == 0)
+					{
+						// First magazine goes into the weapon
+						Instance.InsertedMagazineId = static_cast<int64>(MagEntity.id());
+						UE_LOG(LogTemp, Log, TEXT("WEAPON: First magazine %lld inserted into weapon (%d rounds)"),
+							Instance.InsertedMagazineId, MagInst.AmmoCount);
+					}
+					else
+					{
+						// Remaining magazines go to inventory
+						// Read InventoryEntityId from Flecs entity (sim-thread safe), not from game-thread member
+						int64 InvId = 0;
+						const FCharacterInventoryRef* InvRefPtr = CharEntity.try_get<FCharacterInventoryRef>();
+						if (InvRefPtr) InvId = InvRefPtr->InventoryEntityId;
+						UE_LOG(LogTemp, Log, TEXT("WEAPON: Placing mag in inventory, InvId=%lld (game-thread=%lld)"), InvId, InventoryEntityId);
+						FContainedIn Contained;
+						Contained.ContainerEntityId = InvId;
+						Contained.SlotIndex = -1;
+						MagEntity.set<FContainedIn>(Contained);
+
+						FItemInstance ItemInst;
+						ItemInst.Count = 1;
+						MagEntity.set<FItemInstance>(ItemInst);
+
+						UE_LOG(LogTemp, Log, TEXT("WEAPON: Magazine %lld added to inventory (%d rounds)"),
+							static_cast<int64>(MagEntity.id()), MagInst.AmmoCount);
+					}
+				}
+			}
 		}
+
+		WeaponEntity.set<FWeaponInstance>(Instance);
 
 		// Equip to character
 		FEquippedBy Equipped;
@@ -439,22 +504,33 @@ void AFlecsCharacter::SpawnAndEquipTestWeapon()
 		// Store weapon entity ID (thread-safe assignment via main thread later)
 		int64 WeaponId = static_cast<int64>(WeaponEntity.id());
 
-		// Register weapon in sim→game state cache with initial values
-		if (Static)
+		// Get ammo info from inserted magazine for UI
+		int32 InitAmmo = 0;
+		int32 InitMagSize = 0;
+		if (Instance.InsertedMagazineId != 0)
 		{
-			FlecsSubsystem->GetSimStateCache().Register(WeaponId);
-			FlecsSubsystem->GetSimStateCache().WriteWeapon(
-				WeaponId, Static->MagazineSize, Static->MagazineSize, Static->MaxReserveAmmo, false);
+			flecs::entity MagE = World->entity(static_cast<flecs::entity_t>(Instance.InsertedMagazineId));
+			if (MagE.is_valid())
+			{
+				const FMagazineInstance* MI = MagE.try_get<FMagazineInstance>();
+				const FMagazineStatic* MS = MagE.try_get<FMagazineStatic>();
+				if (MI) InitAmmo = MI->AmmoCount;
+				if (MS) InitMagSize = MS->Capacity;
+			}
 		}
 
+		// Register weapon in sim→game state cache with initial values
+		FlecsSubsystem->GetSimStateCache().Register(WeaponId);
+		FlecsSubsystem->GetSimStateCache().WriteWeapon(WeaponId, InitAmmo, InitMagSize, 0, false);
+
 		// Send initial ammo state to HUD (we're on sim thread, use EnqueueMessage)
-		if (Static && UFlecsMessageSubsystem::SelfPtr)
+		if (UFlecsMessageSubsystem::SelfPtr)
 		{
 			FUIAmmoMessage AmmoMsg;
 			AmmoMsg.WeaponEntityId = WeaponId;
-			AmmoMsg.CurrentAmmo = Static->MagazineSize;
-			AmmoMsg.MagazineSize = Static->MagazineSize;
-			AmmoMsg.ReserveAmmo = Static->MaxReserveAmmo;
+			AmmoMsg.CurrentAmmo = InitAmmo;
+			AmmoMsg.MagazineSize = InitMagSize;
+			AmmoMsg.ReserveAmmo = 0;
 			UFlecsMessageSubsystem::SelfPtr->EnqueueMessage(TAG_UI_Ammo, AmmoMsg);
 		}
 
@@ -519,5 +595,5 @@ void AFlecsCharacter::StopFiringWeapon()
 void AFlecsCharacter::ReloadTestWeapon()
 {
 	if (TestWeaponEntityId == 0) return;
-	UFlecsWeaponLibrary::ReloadWeapon(this, TestWeaponEntityId);
+	UFlecsWeaponLibrary::ToggleReload(this, TestWeaponEntityId);
 }

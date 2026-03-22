@@ -125,6 +125,14 @@ void UFlecsArtillerySubsystem::RegisterFlecsComponents()
 	World.component<FTagWeapon>();
 
 	// ─────────────────────────────────────────────────────────
+	// MAGAZINE COMPONENTS
+	// ─────────────────────────────────────────────────────────
+	World.component<FMagazineStatic>();
+	World.component<FMagazineInstance>();
+	World.component<FTagMagazine>();
+	World.component<FTagReloading>();
+
+	// ─────────────────────────────────────────────────────────
 	// MOVEMENT COMPONENTS
 	// ─────────────────────────────────────────────────────────
 	World.component<FMovementState>();
