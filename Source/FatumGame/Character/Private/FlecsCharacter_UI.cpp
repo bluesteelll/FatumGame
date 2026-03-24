@@ -207,9 +207,11 @@ void AFlecsCharacter::ToggleInventory(const FInputActionValue& Value)
 	{
 		InventoryWidget->CloseInventory();
 		InventoryWidget->SetVisibility(ESlateVisibility::Collapsed);
+		ClearGameBit(ActionBit::InventoryOpen);
 	}
 	else
 	{
+		if (!SetGameBit(ActionBit::InventoryOpen)) return;
 		InventoryWidget->SetVisibility(ESlateVisibility::SelfHitTestInvisible);
 		InventoryWidget->OpenInventory(InventoryEntityId);
 	}
@@ -229,6 +231,7 @@ void AFlecsCharacter::OpenLootPanel(int64 ExternalContainerEntityId, const FText
 		InventoryWidget->SetVisibility(ESlateVisibility::Collapsed);
 	}
 
+	if (!SetGameBit(ActionBit::LootPanelOpen)) return;
 	LootPanel->SetVisibility(ESlateVisibility::SelfHitTestInvisible);
 	LootPanel->OpenLoot(InventoryEntityId, ExternalContainerEntityId, ExternalTitle);
 }
@@ -239,4 +242,5 @@ void AFlecsCharacter::CloseLootPanel()
 
 	LootPanel->CloseLoot();
 	LootPanel->SetVisibility(ESlateVisibility::Collapsed);
+	ClearGameBit(ActionBit::LootPanelOpen);
 }

@@ -9,6 +9,8 @@
 #include "FlecsCharacterTypes.h"
 #include "FTimeDilationStack.h"
 #include "FlecsRecoilState.h"
+#include "FActionStateSystem.h"
+#include "FCharacterInteractionState.h"
 #include "FlecsCharacter.generated.h"
 
 class UFlecsArtillerySubsystem;
@@ -529,22 +531,37 @@ private:
 	/** Cached health for change detection */
 	float CachedHealth = 0.f;
 
+	// ─────────────────────────────────────────────────────────
+	// ACTION STATE SYSTEM (bitmask-based, replaces ad-hoc booleans)
+	// GameActionState: written by game thread only
+	// SimActionState: lives on FCharacterStateAtomics, written by sim thread
+	// Full state = GameActionState | SimActionState
+	// ─────────────────────────────────────────────────────────
+
+	/** Game-thread owned action state bitmask */
+	std::atomic<uint64> GameActionState{0};
+
+	/** Read combined state from game + sim threads */
+	uint64 GetFullActionState() const;
+
+	/** Try to enter a state (applies rule table: blocked check, cancel conflicts, exclusive group).
+	 *  Game thread only. Returns true if state was entered. */
+	bool SetGameBit(uint64 Bit);
+
+	/** Exit a state (clears bit, processes deferred transitions). Game thread only. */
+	void ClearGameBit(uint64 Bit);
+
+	/** Handle side effects when states are force-canceled by another state entering. */
+	void HandleStateCanceled(uint64 CanceledBits);
+
+	// Convenience queries
+	bool IsFireHeld() const;
+	bool IsSprintKeyHeld() const;
+
 	/** Fire was requested before weapon finished spawning — apply after spawn completes. */
-	bool bPendingFireAfterSpawn = false;
+	bool bPendingFireAfterSpawn = false; // NOT a state — one-time event flag
 
-	/** Sprint was suppressed by firing — restore on fire release if sprint key still held. */
-	bool bSprintSuppressedByFire = false;
-	/** Sprint was suppressed by reload — restore on reload complete if sprint key still held. */
-	bool bSprintSuppressedByReload = false;
-	/** Weapon is currently reloading (game thread tracking for sprint blocking). */
-	bool bReloadingWeapon = false;
-	/** Fire button is currently held (game thread tracking for sprint blocking). */
-	bool bFireHeld = false;
-	/** Sprint key is currently held (raw input state, independent of sprint suppression). */
-	bool bSprintKeyHeld = false;
-
-	/** Check if firing is blocked by current character state (mantle, climb, ledge hang). */
-	bool IsFireBlocked() const;
+	// IsFireBlocked() removed — fire blocking handled by rule table in SetGameBit(Firing)
 
 	// Movement ECS sync — only write to Flecs when state actually changes
 	uint8 LastSyncedPosture = 0;
@@ -559,6 +576,7 @@ private:
 	void InitInventoryContainers();  // in FlecsCharacter_UI.cpp
 	void InitInteractionTrace();     // in FlecsCharacter_Interaction.cpp
 	void InitUI();                   // in FlecsCharacter_UI.cpp
+	void InitReloadListener();       // in FlecsCharacter_ActionState.cpp
 	void CleanupUI();                // in FlecsCharacter_UI.cpp
 	void CleanupInteraction();       // in FlecsCharacter_Interaction.cpp
 	void UnregisterFromECS();
@@ -631,35 +649,7 @@ private:
 	// Implementation in FlecsCharacter_Interaction.cpp
 	// ─────────────────────────────────────────────────────────
 
-	/** All interaction state: detection, state machine, focus camera, hold progress. */
-	struct FCharacterInteractionState
-	{
-		// State machine
-		EInteractionState State = EInteractionState::Gameplay;
-		const UFlecsInteractionProfile* ActiveProfile = nullptr;
-		FSkeletonKey ActiveTargetKey;
-
-		// Detection (10Hz trace results)
-		FSkeletonKey CurrentTarget;
-		FText CachedPrompt;
-		EInteractionType CachedType = EInteractionType::Instant;
-		float CachedHoldDuration = 0.f;
-
-		// Focus camera transition
-		FTransform SavedCameraTransform = FTransform::Identity;
-		float SavedCameraFOV = 90.f;
-		FTransform FocusCameraTarget = FTransform::Identity;
-		float FocusTargetFOV = 0.f;
-		float FocusLerpAlpha = 0.f;
-		float CurrentTransitionDuration = 0.4f;
-
-		// Hold state
-		float HoldAccumulator = 0.f;
-		float HoldRequiredDuration = 1.f;
-		float HoldTargetLostTime = 0.f;
-		bool bHoldCanCancel = true;
-		bool bInteractKeyHeld = false;
-	};
+	/** Interaction state (struct defined in FCharacterInteractionState.h) */
 	FCharacterInteractionState Interact;
 
 	/** Focus panel widget instance (UPROPERTY for GC, can't live in plain struct) */

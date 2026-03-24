@@ -13,12 +13,34 @@
 
 void AFlecsCharacter::OnADSStarted(const FInputActionValue& Value)
 {
-	RecoilState.bWantsADS = true;
+	if (InputAtomics) InputAtomics->SetInputBit(InputBit::ADSHeld);
+
+	// Rule table handles blocks (Sprint, Mantling, Climbing, etc.)
+	// CanceledOnEntry handles Sprint cancel
+	if (SetGameBit(ActionBit::ADS))
+	{
+		RecoilState.bWantsADS = true;  // dual-write for TickADS compat
+		// Sync sprint cancel
+		if (!HasBit(GameActionState.load(std::memory_order_relaxed), ActionBit::Sprinting))
+		{
+			if (InputAtomics) InputAtomics->Sprinting.Write(false);
+			if (FatumMovement) FatumMovement->RequestSprint(false);
+		}
+	}
 }
 
 void AFlecsCharacter::OnADSCompleted(const FInputActionValue& Value)
 {
+	if (InputAtomics) InputAtomics->ClearInputBit(InputBit::ADSHeld);
 	RecoilState.bWantsADS = false;
+
+	ClearGameBit(ActionBit::ADS);
+	// Deferred transition: if SprintHeld → auto-enters Sprinting
+	if (HasBit(GameActionState.load(std::memory_order_relaxed), ActionBit::Sprinting))
+	{
+		if (InputAtomics) InputAtomics->Sprinting.Write(true);
+		if (FatumMovement) FatumMovement->RequestSprint(true);
+	}
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -96,15 +118,7 @@ void AFlecsCharacter::TickADS(float DeltaTime)
 		bBlocked = true;
 	}
 
-	// Sprint + ADS: cancel sprint when entering ADS
-	if (RecoilState.bWantsADS && !bBlocked && Profile->bADSCancelsSprint)
-	{
-		if (FatumMovement && FatumMovement->IsSprinting())
-		{
-			FatumMovement->RequestSprint(false);
-			if (InputAtomics) InputAtomics->Sprinting.Write(false);
-		}
-	}
+	// Sprint cancel on ADS entry is handled by SetGameBit(ADS) CanceledOnEntry
 
 	// ── Determine target ──
 	float TargetAlpha = (RecoilState.bWantsADS && !bBlocked && RecoilState.bADSTransformValid) ? 1.f : 0.f;

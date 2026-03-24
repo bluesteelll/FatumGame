@@ -117,24 +117,20 @@ void AFlecsCharacter::Look(const FInputActionValue& Value)
 
 void AFlecsCharacter::OnSprintStarted(const FInputActionValue& Value)
 {
-	bSprintKeyHeld = true;
+	if (InputAtomics) InputAtomics->SetInputBit(InputBit::SprintHeld);
 
-	// Block sprint while ADS is active (ADS cancels sprint, so re-entering sprint during ADS is invalid)
-	if (RecoilState.ADSAlpha > 0.f && RecoilState.CachedProfile && RecoilState.CachedProfile->bADSCancelsSprint)
-		return;
-
-	// Block sprint while firing — sprint will auto-restore on fire release
-	if (bFireHeld)
-		return;
-
-	if (InputAtomics) InputAtomics->Sprinting.Write(true);
-	if (FatumMovement) FatumMovement->RequestSprint(true);
+	// Rule table handles all blocks (Firing, ADS, Mantling, etc.)
+	if (SetGameBit(ActionBit::Sprinting))
+	{
+		if (InputAtomics) InputAtomics->Sprinting.Write(true);  // dual-write for sim thread compat
+		if (FatumMovement) FatumMovement->RequestSprint(true);
+	}
 }
 
 void AFlecsCharacter::OnSprintCompleted(const FInputActionValue& Value)
 {
-	bSprintKeyHeld = false;
-	bSprintSuppressedByFire = false;
+	if (InputAtomics) InputAtomics->ClearInputBit(InputBit::SprintHeld);
+	ClearGameBit(ActionBit::Sprinting);
 	if (InputAtomics) InputAtomics->Sprinting.Write(false);
 	if (FatumMovement) FatumMovement->RequestSprint(false);
 }
@@ -151,23 +147,35 @@ void AFlecsCharacter::OnJumpCompleted(const FInputActionValue& Value)
 
 void AFlecsCharacter::OnCrouchStarted(const FInputActionValue& Value)
 {
-	if (InputAtomics) InputAtomics->CrouchHeld.Write(true);
-	if (FatumMovement) FatumMovement->RequestCrouch(true);
+	if (InputAtomics) InputAtomics->SetInputBit(InputBit::CrouchHeld);
+	if (InputAtomics) InputAtomics->CrouchHeld.Write(true);  // dual-write
+	if (SetGameBit(ActionBit::Crouching))
+	{
+		if (FatumMovement) FatumMovement->RequestCrouch(true);
+	}
 }
 
 void AFlecsCharacter::OnCrouchCompleted(const FInputActionValue& Value)
 {
-	if (InputAtomics) InputAtomics->CrouchHeld.Write(false);
+	if (InputAtomics) InputAtomics->ClearInputBit(InputBit::CrouchHeld);
+	if (InputAtomics) InputAtomics->CrouchHeld.Write(false);  // dual-write
+	ClearGameBit(ActionBit::Crouching);
 	if (FatumMovement) FatumMovement->RequestCrouch(false);
 }
 
 void AFlecsCharacter::OnProneStarted(const FInputActionValue& Value)
 {
-	if (FatumMovement) FatumMovement->RequestProne(true);
+	if (InputAtomics) InputAtomics->SetInputBit(InputBit::ProneHeld);
+	if (SetGameBit(ActionBit::Prone))
+	{
+		if (FatumMovement) FatumMovement->RequestProne(true);
+	}
 }
 
 void AFlecsCharacter::OnProneCompleted(const FInputActionValue& Value)
 {
+	if (InputAtomics) InputAtomics->ClearInputBit(InputBit::ProneHeld);
+	ClearGameBit(ActionBit::Prone);
 	if (FatumMovement) FatumMovement->RequestProne(false);
 }
 
@@ -203,10 +211,22 @@ void AFlecsCharacter::OnTelekinesisScroll(const FInputActionValue& Value)
 
 void AFlecsCharacter::StartFire(const FInputActionValue& Value)
 {
-	bFireHeld = true;
+	if (InputAtomics) InputAtomics->SetInputBit(InputBit::FireHeld);
 
-	// Block firing during mantle/climb/ledge hang
-	if (IsFireBlocked()) return;
+	// Rule table handles blocks (Mantling, Climbing, LedgeHang, Dead, WeaponRetracted, etc.)
+	// CanceledOnEntry handles Sprinting cancel
+	if (!SetGameBit(ActionBit::Firing))
+		return;
+
+	// Sprint was auto-canceled via HandleStateCanceled if it was active.
+	// Deferred transition will restore it on ClearGameBit(Firing) + SprintHeld.
+
+	// Sync sprint cancel to sim thread + movement component
+	if (!HasBit(GameActionState.load(std::memory_order_relaxed), ActionBit::Sprinting))
+	{
+		if (InputAtomics) InputAtomics->Sprinting.Write(false);
+		if (FatumMovement) FatumMovement->RequestSprint(false);
+	}
 
 	if (TestWeaponDefinition)
 	{
@@ -226,29 +246,49 @@ void AFlecsCharacter::StartFire(const FInputActionValue& Value)
 
 void AFlecsCharacter::StopFire(const FInputActionValue& Value)
 {
-	bFireHeld = false;
+	if (InputAtomics) InputAtomics->ClearInputBit(InputBit::FireHeld);
 	bPendingFireAfterSpawn = false;
-	if (TestWeaponEntityId != 0)
-	{
-		StopFiringWeapon();
-	}
 
-	// Restore sprint if it was suppressed by firing and sprint key is still held
-	if (bSprintSuppressedByFire)
+	if (TestWeaponEntityId != 0)
+		StopFiringWeapon();
+
+	// ClearGameBit processes deferred transitions:
+	// if SprintHeld → auto-enters Sprinting
+	ClearGameBit(ActionBit::Firing);
+
+	// Sync deferred sprint restore to sim thread + movement component
+	if (HasBit(GameActionState.load(std::memory_order_relaxed), ActionBit::Sprinting))
 	{
-		bSprintSuppressedByFire = false;
-		if (bSprintKeyHeld)
-		{
-			if (InputAtomics) InputAtomics->Sprinting.Write(true);
-			if (FatumMovement) FatumMovement->RequestSprint(true);
-		}
+		if (InputAtomics) InputAtomics->Sprinting.Write(true);
+		if (FatumMovement) FatumMovement->RequestSprint(true);
 	}
 }
 
 void AFlecsCharacter::OnReload(const FInputActionValue& Value)
 {
-	if (TestWeaponEntityId != 0)
+	if (TestWeaponEntityId == 0) return;
+
+	uint64 State = GetFullActionState();
+	if (HasBit(State, ActionBit::Reloading))
 	{
+		// Already reloading — send cancel request to sim thread.
+		// Do NOT clear the bit here. The sim thread is authoritative.
+		// InitReloadListener will clear the bit when sim confirms completion/cancel.
+		ReloadTestWeapon();
+	}
+	else
+	{
+		// Start reload — rule table cancels Sprint and Firing
+		if (!SetGameBit(ActionBit::Reloading))
+			return;
+
+		// Sync sprint cancel to sim thread + movement component
+		if (!HasBit(GameActionState.load(std::memory_order_relaxed), ActionBit::Sprinting))
+		{
+			if (InputAtomics) InputAtomics->Sprinting.Write(false);
+			if (FatumMovement) FatumMovement->RequestSprint(false);
+		}
+
 		ReloadTestWeapon();
 	}
 }

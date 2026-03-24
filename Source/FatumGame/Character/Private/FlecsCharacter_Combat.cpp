@@ -552,26 +552,14 @@ void AFlecsCharacter::SpawnAndEquipTestWeapon()
 	});
 }
 
-bool AFlecsCharacter::IsFireBlocked() const
-{
-	if (!StateAtomics) return false;
-	return StateAtomics->MantleActive.Read() || StateAtomics->ClimbActive.Read();
-}
+// IsFireBlocked() removed — fire blocking handled by rule table in SetGameBit(ActionBit::Firing)
 
 void AFlecsCharacter::StartFiringWeapon()
 {
 	if (TestWeaponEntityId == 0) return;
 
-	// Block firing during mantle/climb/ledge hang
-	if (IsFireBlocked()) return;
-
-	// Cancel sprint when firing — sprint resumes on fire release
-	if (FatumMovement && FatumMovement->IsSprinting())
-	{
-		if (InputAtomics) InputAtomics->Sprinting.Write(false);
-		FatumMovement->RequestSprint(false);
-		bSprintSuppressedByFire = true;
-	}
+	// Firing blocks and sprint cancel are handled by SetGameBit(Firing) in StartFire.
+	// IsFireBlocked() is checked there via rule table. Sprint cancel via CanceledOnEntry.
 
 	// Block firing when weapon is retracted into wall-ready pose
 	if (RecoilState.CachedProfile && RecoilState.CachedProfile->CollisionFireBlockThreshold > 0.f)

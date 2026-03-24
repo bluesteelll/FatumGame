@@ -10,6 +10,7 @@
 #include "FlecsArtillerySubsystem.h"
 #include "FlecsCharacter.h"
 #include "FlecsCharacterTypes.h"
+#include "FActionStateSystem.h"
 #include "FlecsMovementStatic.h"
 #include "FBarragePrimitive.h"
 #include "BarrageDispatch.h"
@@ -654,6 +655,19 @@ void UFlecsArtillerySubsystem::PrepareCharacterStep(float RealDT, float DilatedD
 		Bridge.StateAtomics->BlinkAiming.Write(AbilityResults.bBlinkAiming);
 		Bridge.StateAtomics->TelekinesisActive.Write(AbilityResults.bTelekinesisActive);
 		Bridge.StateAtomics->ClimbActive.Write(AbilityResults.bClimbing);
+
+		// ── 3.5b. Dual-write: SimActionState bitmask (Action State System) ──
+		{
+			uint64 SimBits = 0;
+			if (AbilityResults.bMantling)        SimBits |= ActionBit::Mantling;
+			if (AbilityResults.bHanging)         SimBits |= ActionBit::LedgeHang;
+			if (bSliding)                        SimBits |= ActionBit::Sliding;
+			if (AbilityResults.bBlinkAiming)     SimBits |= ActionBit::BlinkAiming;
+			if (AbilityResults.bTelekinesisActive) SimBits |= ActionBit::TelekinesisActive;
+			if (AbilityResults.bClimbing)        SimBits |= ActionBit::Climbing;
+			// Atomic store replaces all sim bits (sim thread is sole writer)
+			Bridge.StateAtomics->SimActionState.store(SimBits, std::memory_order_relaxed);
+		}
 
 		// ── 3.6. Rope visual atomics (sim→game for Verlet rendering) ──
 		if (Bridge.RopeVisualAtomics)

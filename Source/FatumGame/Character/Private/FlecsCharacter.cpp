@@ -128,6 +128,7 @@ void AFlecsCharacter::BeginPlay()
 
 	InitInteractionTrace();  // _Interaction.cpp
 	InitUI();                // _UI.cpp
+	InitReloadListener();    // _ActionState.cpp
 
 #if !UE_BUILD_SHIPPING
 	InertiaDebugDrawHandle = UDebugDrawService::Register(

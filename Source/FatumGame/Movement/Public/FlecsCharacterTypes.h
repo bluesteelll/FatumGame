@@ -61,6 +61,12 @@ struct FCharacterInputAtomics
 	FAtomicOneShot TelekinesisToggle; // one-shot: grab/release toggle
 	FAtomicOneShot TelekinesisThrow;  // one-shot: throw held object
 	FAtomicAxis    TelekinesisScroll; // scroll delta for hold distance adjustment
+
+	// ── Action State System (bitmask) ──
+	std::atomic<uint64> InputState{0};
+	void SetInputBit(uint64 Bit)   { InputState.fetch_or(Bit, std::memory_order_relaxed); }
+	void ClearInputBit(uint64 Bit) { InputState.fetch_and(~Bit, std::memory_order_relaxed); }
+	uint64 ReadInputState() const  { return InputState.load(std::memory_order_relaxed); }
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -78,6 +84,12 @@ struct FCharacterStateAtomics
 	TAtomicLatestWins<uint8>    MantleType;    // 0=Vault, 1=Mantle, 2=LedgeGrab
 	FAtomicState                TelekinesisActive; // sim→game: holding an object
 	FAtomicState                ClimbActive;       // sim→game: climbing a ladder
+
+	// ── Action State System (bitmask) ──
+	std::atomic<uint64> SimActionState{0};
+	void SetSimBit(uint64 Bit)   { SimActionState.fetch_or(Bit, std::memory_order_relaxed); }
+	void ClearSimBit(uint64 Bit) { SimActionState.fetch_and(~Bit, std::memory_order_relaxed); }
+	uint64 ReadSimState() const  { return SimActionState.load(std::memory_order_relaxed); }
 };
 
 // ═══════════════════════════════════════════════════════════════════════════

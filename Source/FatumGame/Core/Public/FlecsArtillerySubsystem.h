@@ -454,6 +454,9 @@ private:
 
 	/** Weapon tick, reload, and fire systems. */
 	void SetupWeaponSystems();
+	void SetupWeaponTickSystem();
+	void SetupWeaponReloadSystem();
+	void SetupWeaponFireSystem();
 
 	/** Door trigger unlock + door state machine. */
 	void SetupDoorSystems();
