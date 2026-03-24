@@ -249,6 +249,83 @@ static int32 AddItemToContainerDirect(
 	return Count;  // All items added: stacked portion + new entity with Remaining
 }
 
+// ═══════════════════════════════════════════════════════════════
+// PlaceExistingEntityInContainer — SIM THREAD ONLY
+// Places an already-existing entity (e.g. empty magazine returned from weapon)
+// back into a container with proper grid placement and counter updates.
+// ═══════════════════════════════════════════════════════════════
+bool UFlecsContainerLibrary::PlaceExistingEntityInContainer(
+	UFlecsArtillerySubsystem* Subsystem,
+	int64 EntityId,
+	int64 ContainerEntityId)
+{
+	if (!Subsystem || EntityId == 0 || ContainerEntityId == 0) return false;
+
+	flecs::world* FlecsWorld = Subsystem->GetFlecsWorld();
+	if (!FlecsWorld) return false;
+
+	flecs::entity Entity = FlecsWorld->entity(static_cast<flecs::entity_t>(EntityId));
+	if (!Entity.is_valid() || !Entity.is_alive()) return false;
+
+	flecs::entity ContainerEntity = FlecsWorld->entity(static_cast<flecs::entity_t>(ContainerEntityId));
+	if (!ContainerEntity.is_valid() || !ContainerEntity.is_alive()) return false;
+
+	const FContainerStatic* ContainerStatic = ContainerEntity.try_get<FContainerStatic>();
+	FContainerInstance* ContainerInstance = ContainerEntity.try_get_mut<FContainerInstance>();
+	if (!ContainerStatic || !ContainerInstance) return false;
+
+	const FItemStaticData* ItemStatic = Entity.try_get<FItemStaticData>();
+	FIntPoint ItemSize = ItemStatic ? ItemStatic->GridSize : FIntPoint(1, 1);
+
+	FContainedIn Contained;
+	Contained.ContainerEntityId = ContainerEntityId;
+
+	if (ContainerStatic->Type == EContainerType::Grid)
+	{
+		FContainerGridInstance* Grid = ContainerEntity.try_get_mut<FContainerGridInstance>();
+		if (!Grid) return false;
+
+		FIntPoint FreePos = Grid->FindFreeSpace(ItemSize, ContainerStatic->GridWidth, ContainerStatic->GridHeight);
+		if (FreePos.X < 0)
+		{
+			UE_LOG(LogFlecsContainer, Warning, TEXT("PlaceExistingEntityInContainer: No free space in grid container %lld"), ContainerEntityId);
+			return false;
+		}
+
+		Grid->Occupy(FreePos, ItemSize, ContainerStatic->GridWidth);
+		Contained.GridPosition = FreePos;
+		Contained.SlotIndex = -1;
+	}
+	else // List
+	{
+		if (ContainerStatic->MaxItems > 0 && ContainerInstance->CurrentCount >= ContainerStatic->MaxItems)
+		{
+			UE_LOG(LogFlecsContainer, Warning, TEXT("PlaceExistingEntityInContainer: List container %lld is full"), ContainerEntityId);
+			return false;
+		}
+		Contained.GridPosition = FIntPoint(-1, -1);
+		Contained.SlotIndex = ContainerInstance->CurrentCount;
+	}
+
+	Entity.set<FContainedIn>(Contained);
+	ContainerInstance->CurrentCount++;
+
+	// Update weight
+	if (ItemStatic)
+	{
+		const FItemInstance* ItemInst = Entity.try_get<FItemInstance>();
+		int32 Count = ItemInst ? ItemInst->Count : 1;
+		ContainerInstance->CurrentWeight += ItemStatic->Weight * Count;
+	}
+
+	NotifyContainerUI(ContainerEntityId);
+	MarkOwnerEquipmentDirty(ContainerEntityId, FlecsWorld);
+
+	UE_LOG(LogTemp, Log, TEXT("PlaceExistingEntityInContainer: Entity %lld placed in container %lld at (%d,%d)"),
+		EntityId, ContainerEntityId, Contained.GridPosition.X, Contained.GridPosition.Y);
+	return true;
+}
+
 bool UFlecsContainerLibrary::AddItemToContainer(
 	UObject* WorldContextObject,
 	int64 ContainerEntityId,

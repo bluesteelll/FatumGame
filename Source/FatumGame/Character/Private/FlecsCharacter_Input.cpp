@@ -39,6 +39,7 @@ void AFlecsCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 	FatumInput->BindNativeAction(InputConfig, TAG_Input_Cancel,    ETriggerEvent::Started,   this, &AFlecsCharacter::OnInteractCancel);
 	FatumInput->BindNativeAction(InputConfig, TAG_Input_Sprint,    ETriggerEvent::Started,   this, &AFlecsCharacter::OnSprintStarted);
 	FatumInput->BindNativeAction(InputConfig, TAG_Input_Sprint,    ETriggerEvent::Completed, this, &AFlecsCharacter::OnSprintCompleted);
+	FatumInput->BindNativeAction(InputConfig, TAG_Input_Reload,    ETriggerEvent::Started,   this, &AFlecsCharacter::OnReload);
 	FatumInput->BindNativeAction(InputConfig, TAG_Input_ADS,       ETriggerEvent::Started,   this, &AFlecsCharacter::OnADSStarted);
 	FatumInput->BindNativeAction(InputConfig, TAG_Input_ADS,       ETriggerEvent::Completed, this, &AFlecsCharacter::OnADSCompleted);
 	FatumInput->BindNativeAction(InputConfig, TAG_Input_Crouch,    ETriggerEvent::Started,   this, &AFlecsCharacter::OnCrouchStarted);
@@ -241,6 +242,14 @@ void AFlecsCharacter::StopFire(const FInputActionValue& Value)
 			if (InputAtomics) InputAtomics->Sprinting.Write(true);
 			if (FatumMovement) FatumMovement->RequestSprint(true);
 		}
+	}
+}
+
+void AFlecsCharacter::OnReload(const FInputActionValue& Value)
+{
+	if (TestWeaponEntityId != 0)
+	{
+		ReloadTestWeapon();
 	}
 }
 

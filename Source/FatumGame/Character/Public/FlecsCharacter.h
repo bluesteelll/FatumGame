@@ -534,6 +534,10 @@ private:
 
 	/** Sprint was suppressed by firing — restore on fire release if sprint key still held. */
 	bool bSprintSuppressedByFire = false;
+	/** Sprint was suppressed by reload — restore on reload complete if sprint key still held. */
+	bool bSprintSuppressedByReload = false;
+	/** Weapon is currently reloading (game thread tracking for sprint blocking). */
+	bool bReloadingWeapon = false;
 	/** Fire button is currently held (game thread tracking for sprint blocking). */
 	bool bFireHeld = false;
 	/** Sprint key is currently held (raw input state, independent of sprint suppression). */
@@ -712,6 +716,9 @@ private:
 
 	/** Movement-based weapon motion: walk bob, strafe tilt, landing, sprint pose, movement inertia, footsteps. */
 	void TickWeaponMotion(float DeltaTime);
+
+	/** Reload input handler (R key — toggle reload / cancel) */
+	void OnReload(const FInputActionValue& Value);
 
 	/** ADS input handlers */
 	void OnADSStarted(const FInputActionValue& Value);

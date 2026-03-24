@@ -248,6 +248,12 @@ struct FWeaponInstance
 	/** Was the previous magazine empty? (determines if chambering is needed) */
 	bool bPrevMagWasEmpty = false;
 
+	/** A round is chambered (separate from magazine). Tactical reload preserves it. */
+	bool bChambered = false;
+
+	/** Ammo type index of the chambered round (index into FMagazineStatic::AcceptedAmmoTypes) */
+	uint8 ChamberedAmmoTypeIdx = 0;
+
 	// ─────────────────────────────────────────────────────────
 	// BLOOM STATE
 	// ─────────────────────────────────────────────────────────

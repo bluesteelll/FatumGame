@@ -30,6 +30,7 @@
 #include "FlecsItemComponents.h"
 #include "FlecsAmmoTypeDefinition.h"
 #include "FlecsVitalsComponents.h"
+#include "FlecsContainerLibrary.h"
 
 void UFlecsArtillerySubsystem::SetupWeaponSystems()
 {
@@ -152,9 +153,10 @@ void UFlecsArtillerySubsystem::SetupWeaponSystems()
 					return;
 				}
 
-				// Check if current magazine is empty (for chambering decision)
-				Weapon.bPrevMagWasEmpty = true;
-				if (Weapon.InsertedMagazineId != 0)
+				// Check if current magazine + chamber is empty (for chambering decision)
+				// Tactical reload (has chambered round or magazine has ammo) skips chambering
+				Weapon.bPrevMagWasEmpty = !Weapon.bChambered;
+				if (Weapon.bPrevMagWasEmpty && Weapon.InsertedMagazineId != 0)
 				{
 					flecs::entity CurMag = Entity.world().entity(static_cast<flecs::entity_t>(Weapon.InsertedMagazineId));
 					if (CurMag.is_valid())
@@ -244,14 +246,14 @@ void UFlecsArtillerySubsystem::SetupWeaponSystems()
 						const FCharacterInventoryRef* InvRef = CharEntity.try_get<FCharacterInventoryRef>();
 						if (InvRef && InvRef->InventoryEntityId != 0)
 						{
-							flecs::entity OldMag = Entity.world().entity(static_cast<flecs::entity_t>(Weapon.InsertedMagazineId));
-							if (OldMag.is_valid())
+							if (UFlecsContainerLibrary::PlaceExistingEntityInContainer(
+								this, Weapon.InsertedMagazineId, InvRef->InventoryEntityId))
 							{
-								FContainedIn Contained;
-								Contained.ContainerEntityId = InvRef->InventoryEntityId;
-								Contained.SlotIndex = -1;
-								OldMag.set<FContainedIn>(Contained);
 								UE_LOG(LogTemp, Log, TEXT("WEAPON: Old magazine %lld returned to inventory"), Weapon.InsertedMagazineId);
+							}
+							else
+							{
+								UE_LOG(LogTemp, Warning, TEXT("WEAPON: Failed to return magazine %lld to inventory (no space?)"), Weapon.InsertedMagazineId);
 							}
 						}
 					}
@@ -296,7 +298,19 @@ void UFlecsArtillerySubsystem::SetupWeaponSystems()
 				}
 				else
 				{
-					// Reload complete
+					// Tactical reload: preserve existing chambered round
+					// Only chamber from new magazine if chamber is empty (shouldn't happen in tactical, but safety)
+					if (Static->bHasChamber && !Weapon.bChambered && NewMag.is_valid())
+					{
+						FMagazineInstance* MI = NewMag.try_get_mut<FMagazineInstance>();
+						if (MI && MI->AmmoCount > 0)
+						{
+							int32 Idx = MI->Pop();
+							Weapon.bChambered = true;
+							Weapon.ChamberedAmmoTypeIdx = static_cast<uint8>(Idx);
+						}
+					}
+
 					Weapon.ReloadPhase = EWeaponReloadPhase::Idle;
 					Entity.remove<FTagReloading>();
 
@@ -311,20 +325,48 @@ void UFlecsArtillerySubsystem::SetupWeaponSystems()
 						{
 							const FMagazineInstance* MI = NewMag.try_get<FMagazineInstance>();
 							const FMagazineStatic* MS = NewMag.try_get<FMagazineStatic>();
-							ReloadMsg.NewAmmo = MI ? MI->AmmoCount : 0;
-							ReloadMsg.MagazineSize = MS ? MS->Capacity : 0;
+							// +1 for chambered round in UI
+							ReloadMsg.NewAmmo = (MI ? MI->AmmoCount : 0) + (Weapon.bChambered ? 1 : 0);
+							ReloadMsg.MagazineSize = (MS ? MS->Capacity : 0) + (Static->bHasChamber ? 1 : 0);
 						}
 						MsgSub->EnqueueMessage(TAG_UI_Reload, ReloadMsg);
 					}
 
-					UE_LOG(LogTemp, Log, TEXT("WEAPON: Reload complete (tactical, skip chamber)"));
+					// Update ammo counter on HUD
+					if (auto* MsgSub = UFlecsMessageSubsystem::SelfPtr)
+					{
+						FUIAmmoMessage AmmoMsg;
+						AmmoMsg.WeaponEntityId = static_cast<int64>(Entity.id());
+						if (NewMag.is_valid())
+						{
+							const FMagazineInstance* MI = NewMag.try_get<FMagazineInstance>();
+							const FMagazineStatic* MS = NewMag.try_get<FMagazineStatic>();
+							AmmoMsg.CurrentAmmo = (MI ? MI->AmmoCount : 0) + (Weapon.bChambered ? 1 : 0);
+							AmmoMsg.MagazineSize = (MS ? MS->Capacity : 0) + (Static->bHasChamber ? 1 : 0);
+						}
+						MsgSub->EnqueueMessage(TAG_UI_Ammo, AmmoMsg);
+					}
+
+					UE_LOG(LogTemp, Log, TEXT("WEAPON: Reload complete (tactical, chambered=%d)"), Weapon.bChambered);
 				}
 				break;
 			}
 
 			case EWeaponReloadPhase::Chambering:
 			{
-				// Chambering complete
+				// Chambering complete — chamber first round from magazine
+				flecs::entity InsertedMag = Entity.world().entity(static_cast<flecs::entity_t>(Weapon.InsertedMagazineId));
+				if (InsertedMag.is_valid())
+				{
+					FMagazineInstance* MI = InsertedMag.try_get_mut<FMagazineInstance>();
+					if (MI && MI->AmmoCount > 0)
+					{
+						int32 Idx = MI->Pop();
+						Weapon.bChambered = true;
+						Weapon.ChamberedAmmoTypeIdx = static_cast<uint8>(Idx);
+					}
+				}
+
 				Weapon.ReloadPhase = EWeaponReloadPhase::Idle;
 				Entity.remove<FTagReloading>();
 
@@ -335,18 +377,32 @@ void UFlecsArtillerySubsystem::SetupWeaponSystems()
 					ReloadMsg.WeaponEntityId = static_cast<int64>(Entity.id());
 					ReloadMsg.bStarted = false;
 
-					flecs::entity InsertedMag = Entity.world().entity(static_cast<flecs::entity_t>(Weapon.InsertedMagazineId));
 					if (InsertedMag.is_valid())
 					{
 						const FMagazineInstance* MI = InsertedMag.try_get<FMagazineInstance>();
 						const FMagazineStatic* MS = InsertedMag.try_get<FMagazineStatic>();
-						ReloadMsg.NewAmmo = MI ? MI->AmmoCount : 0;
-						ReloadMsg.MagazineSize = MS ? MS->Capacity : 0;
+						ReloadMsg.NewAmmo = (MI ? MI->AmmoCount : 0) + (Weapon.bChambered ? 1 : 0);
+						ReloadMsg.MagazineSize = (MS ? MS->Capacity : 0) + (Static->bHasChamber ? 1 : 0);
 					}
 					MsgSub->EnqueueMessage(TAG_UI_Reload, ReloadMsg);
 				}
 
-				UE_LOG(LogTemp, Log, TEXT("WEAPON: Reload complete (chambered)"));
+				// Update ammo counter on HUD
+				if (auto* MsgSub = UFlecsMessageSubsystem::SelfPtr)
+				{
+					FUIAmmoMessage AmmoMsg;
+					AmmoMsg.WeaponEntityId = static_cast<int64>(Entity.id());
+					if (InsertedMag.is_valid())
+					{
+						const FMagazineInstance* MI = InsertedMag.try_get<FMagazineInstance>();
+						const FMagazineStatic* MS = InsertedMag.try_get<FMagazineStatic>();
+						AmmoMsg.CurrentAmmo = (MI ? MI->AmmoCount : 0) + (Weapon.bChambered ? 1 : 0);
+						AmmoMsg.MagazineSize = (MS ? MS->Capacity : 0) + (Static->bHasChamber ? 1 : 0);
+					}
+					MsgSub->EnqueueMessage(TAG_UI_Ammo, AmmoMsg);
+				}
+
+				UE_LOG(LogTemp, Log, TEXT("WEAPON: Reload complete (chambered=%d)"), Weapon.bChambered);
 				break;
 			}
 
@@ -393,17 +449,21 @@ void UFlecsArtillerySubsystem::SetupWeaponSystems()
 				return;
 			}
 
-			// Check magazine has ammo (only for non-unlimited)
+			// Check magazine has ammo or chambered round (only for non-unlimited)
 			if (!Static->bUnlimitedAmmo)
 			{
-				flecs::entity MagCheck = World.entity(static_cast<flecs::entity_t>(Weapon.InsertedMagazineId));
-				if (!MagCheck.is_valid())
+				bool bHasAmmo = Weapon.bChambered;  // chambered round counts
+				if (!bHasAmmo)
 				{
-					Weapon.bFireTriggerPending = false;
-					return;
+					flecs::entity MagCheck = World.entity(static_cast<flecs::entity_t>(Weapon.InsertedMagazineId));
+					if (MagCheck.is_valid())
+					{
+						const FMagazineInstance* MagCheckInst = MagCheck.try_get<FMagazineInstance>();
+						if (MagCheckInst && !MagCheckInst->IsEmpty())
+							bHasAmmo = true;
+					}
 				}
-				const FMagazineInstance* MagCheckInst = MagCheck.try_get<FMagazineInstance>();
-				if (!MagCheckInst || MagCheckInst->IsEmpty())
+				if (!bHasAmmo)
 				{
 					// Auto-reload on empty
 					Weapon.bReloadRequested = true;
@@ -471,7 +531,6 @@ void UFlecsArtillerySubsystem::SetupWeaponSystems()
 			}
 			else
 			{
-				// Pop round from inserted magazine
 				flecs::entity MagEntity = World.entity(static_cast<flecs::entity_t>(Weapon.InsertedMagazineId));
 				checkf(MagEntity.is_valid(), TEXT("WeaponFireSystem: InsertedMagazineId %lld is invalid"), Weapon.InsertedMagazineId);
 
@@ -479,9 +538,30 @@ void UFlecsArtillerySubsystem::SetupWeaponSystems()
 				const FMagazineStatic* MagStatic = MagEntity.try_get<FMagazineStatic>();
 				checkf(MagInst && MagStatic, TEXT("WeaponFireSystem: Magazine entity missing components"));
 
-				int32 AmmoTypeIdx = MagInst->Pop();
-				checkf(AmmoTypeIdx >= 0, TEXT("WeaponFireSystem: Magazine is empty but CanFire passed"));
-				checkf(AmmoTypeIdx < MagStatic->AcceptedAmmoTypeCount, TEXT("WeaponFireSystem: AmmoTypeIdx %d out of range (%d)"), AmmoTypeIdx, MagStatic->AcceptedAmmoTypeCount);
+				// Fire chambered round first, then chamber next from magazine
+				int32 AmmoTypeIdx;
+				if (Weapon.bChambered)
+				{
+					AmmoTypeIdx = Weapon.ChamberedAmmoTypeIdx;
+					Weapon.bChambered = false;
+
+					// Chamber next round from magazine (if available)
+					if (MagInst->AmmoCount > 0)
+					{
+						int32 NextIdx = MagInst->Pop();
+						Weapon.bChambered = true;
+						Weapon.ChamberedAmmoTypeIdx = static_cast<uint8>(NextIdx);
+					}
+				}
+				else
+				{
+					// No chambered round — pop directly from magazine
+					AmmoTypeIdx = MagInst->Pop();
+					checkf(AmmoTypeIdx >= 0, TEXT("WeaponFireSystem: Magazine is empty and no chambered round"));
+				}
+
+				checkf(AmmoTypeIdx >= 0 && AmmoTypeIdx < MagStatic->AcceptedAmmoTypeCount,
+					TEXT("WeaponFireSystem: AmmoTypeIdx %d out of range (%d)"), AmmoTypeIdx, MagStatic->AcceptedAmmoTypeCount);
 
 				UFlecsAmmoTypeDefinition* AmmoType = MagStatic->AcceptedAmmoTypes[AmmoTypeIdx];
 				checkf(AmmoType && AmmoType->ProjectileDefinition, TEXT("WeaponFireSystem: AmmoType or its ProjectileDefinition is null"));
@@ -717,9 +797,9 @@ void UFlecsArtillerySubsystem::SetupWeaponSystems()
 				PendingShotEvents.Enqueue(ShotEvent);
 			}
 
-			// Get ammo count from magazine for UI
-			int32 CurrentAmmoForUI = 0;
-			int32 MagSizeForUI = 0;
+			// Get ammo count from magazine for UI (+1 if chambered)
+			int32 CurrentAmmoForUI = Weapon.bChambered ? 1 : 0;
+			int32 MagSizeForUI = Static->bHasChamber ? 1 : 0;
 			if (!Static->bUnlimitedAmmo && Weapon.InsertedMagazineId != 0)
 			{
 				flecs::entity MagUI = World.entity(static_cast<flecs::entity_t>(Weapon.InsertedMagazineId));
@@ -727,8 +807,8 @@ void UFlecsArtillerySubsystem::SetupWeaponSystems()
 				{
 					const FMagazineInstance* MI = MagUI.try_get<FMagazineInstance>();
 					const FMagazineStatic* MS = MagUI.try_get<FMagazineStatic>();
-					if (MI) CurrentAmmoForUI = MI->AmmoCount;
-					if (MS) MagSizeForUI = MS->Capacity;
+					if (MI) CurrentAmmoForUI += MI->AmmoCount;
+					if (MS) MagSizeForUI += MS->Capacity;
 				}
 			}
 
@@ -782,8 +862,8 @@ void UFlecsArtillerySubsystem::SetupWeaponSystems()
 				}
 			}
 
-			// Auto-reload when magazine is empty
-			if (!Static->bUnlimitedAmmo && Weapon.InsertedMagazineId != 0)
+			// Auto-reload when magazine AND chamber are both empty
+			if (!Static->bUnlimitedAmmo && !Weapon.bChambered && Weapon.InsertedMagazineId != 0)
 			{
 				flecs::entity MagAutoReload = World.entity(static_cast<flecs::entity_t>(Weapon.InsertedMagazineId));
 				if (MagAutoReload.is_valid())

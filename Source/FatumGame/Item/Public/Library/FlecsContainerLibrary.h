@@ -71,6 +71,14 @@ public:
 		int64 ContainerEntityId,
 		int32& OutPickedUp);
 
+	/** Place an existing entity (e.g. empty magazine) back into a container. SIM THREAD ONLY.
+	 *  Finds free grid space, updates occupancy and container counters.
+	 *  @return true if placed successfully */
+	static bool PlaceExistingEntityInContainer(
+		class UFlecsArtillerySubsystem* Subsystem,
+		int64 EntityId,
+		int64 ContainerEntityId);
+
 	UFUNCTION(BlueprintCallable, Category = "Flecs|Container", meta = (WorldContext = "WorldContextObject"))
 	static FSkeletonKey DropItem(
 		UObject* WorldContextObject,

@@ -466,8 +466,18 @@ void AFlecsCharacter::SpawnAndEquipTestWeapon()
 					{
 						// First magazine goes into the weapon
 						Instance.InsertedMagazineId = static_cast<int64>(MagEntity.id());
-						UE_LOG(LogTemp, Log, TEXT("WEAPON: First magazine %lld inserted into weapon (%d rounds)"),
-							Instance.InsertedMagazineId, MagInst.AmmoCount);
+
+						// Chamber first round from magazine (if weapon has chamber)
+						if (Static && Static->bHasChamber && MagInst.AmmoCount > 0)
+						{
+							int32 Idx = MagInst.Pop();
+							Instance.bChambered = true;
+							Instance.ChamberedAmmoTypeIdx = static_cast<uint8>(Idx);
+							MagEntity.set<FMagazineInstance>(MagInst);  // write back after Pop
+						}
+
+						UE_LOG(LogTemp, Log, TEXT("WEAPON: First magazine %lld inserted into weapon (%d rounds, chambered=%d)"),
+							Instance.InsertedMagazineId, MagInst.AmmoCount, Instance.bChambered);
 					}
 					else
 					{
@@ -505,17 +515,18 @@ void AFlecsCharacter::SpawnAndEquipTestWeapon()
 		int64 WeaponId = static_cast<int64>(WeaponEntity.id());
 
 		// Get ammo info from inserted magazine for UI
-		int32 InitAmmo = 0;
-		int32 InitMagSize = 0;
+		// set() in EnqueueCommand is immediate (not deferred), so try_get sees post-Pop value
+		int32 InitAmmo = Instance.bChambered ? 1 : 0;  // chambered round
+		int32 InitMagSize = (Static && Static->bHasChamber) ? 1 : 0;  // +1 for chamber
 		if (Instance.InsertedMagazineId != 0)
 		{
 			flecs::entity MagE = World->entity(static_cast<flecs::entity_t>(Instance.InsertedMagazineId));
 			if (MagE.is_valid())
 			{
-				const FMagazineInstance* MI = MagE.try_get<FMagazineInstance>();
 				const FMagazineStatic* MS = MagE.try_get<FMagazineStatic>();
-				if (MI) InitAmmo = MI->AmmoCount;
-				if (MS) InitMagSize = MS->Capacity;
+				if (MS) InitMagSize += MS->Capacity;
+				const FMagazineInstance* MI = MagE.try_get<FMagazineInstance>();
+				if (MI) InitAmmo += MI->AmmoCount;
 			}
 		}
 

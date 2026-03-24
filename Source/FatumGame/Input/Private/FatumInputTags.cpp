@@ -19,3 +19,4 @@ UE_DEFINE_GAMEPLAY_TAG(TAG_Input_Ability3,  "InputTag.Ability3");
 UE_DEFINE_GAMEPLAY_TAG(TAG_Input_TKThrow,   "InputTag.TKThrow");
 UE_DEFINE_GAMEPLAY_TAG(TAG_Input_TKScroll,  "InputTag.TKScroll");
 UE_DEFINE_GAMEPLAY_TAG(TAG_Input_ADS,       "InputTag.ADS");
+UE_DEFINE_GAMEPLAY_TAG(TAG_Input_Reload,    "InputTag.Reload");
