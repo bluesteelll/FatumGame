@@ -37,6 +37,7 @@ namespace ActionBit
 	constexpr uint64 Reloading   = 1ULL << 17;
 	constexpr uint64 ADS         = 1ULL << 18;
 	constexpr uint64 WeaponRetracted = 1ULL << 19;
+	constexpr uint64 WeaponSwitching = 1ULL << 20;
 
 	// Abilities (bits 24-31, CONCURRENT)
 	constexpr uint64 BlinkAiming      = 1ULL << 24;
@@ -133,17 +134,23 @@ inline constexpr FActionRule GActionRules[] =
 	// Combat (concurrent — no exclusive group)
 	{ ActionBit::Firing,    ActionBit::Mantling | ActionBit::Climbing | ActionBit::LedgeHang
 		| ActionBit::Dead | ActionBit::Stunned
-		| ActionBit::InventoryOpen | ActionBit::LootPanelOpen | ActionBit::Reloading,
+		| ActionBit::InventoryOpen | ActionBit::LootPanelOpen | ActionBit::Reloading | ActionBit::WeaponSwitching,
 		ActionBit::Sprinting, 0 },
 
 	{ ActionBit::Reloading, ActionBit::Mantling | ActionBit::Climbing | ActionBit::LedgeHang
-		| ActionBit::Dead | ActionBit::Stunned | ActionBit::InventoryOpen | ActionBit::LootPanelOpen,
+		| ActionBit::Dead | ActionBit::Stunned | ActionBit::InventoryOpen | ActionBit::LootPanelOpen
+		| ActionBit::WeaponSwitching,
 		ActionBit::Sprinting | ActionBit::Firing, 0 },
 
 	{ ActionBit::ADS,       ActionBit::Mantling | ActionBit::Climbing | ActionBit::LedgeHang
 		| ActionBit::Dead | ActionBit::Stunned
-		| ActionBit::InventoryOpen | ActionBit::LootPanelOpen,
+		| ActionBit::InventoryOpen | ActionBit::LootPanelOpen | ActionBit::WeaponSwitching,
 		ActionBit::Sprinting, 0 },
+
+	{ ActionBit::WeaponSwitching, ActionBit::Mantling | ActionBit::Climbing | ActionBit::LedgeHang
+		| ActionBit::Dead | ActionBit::Stunned
+		| ActionBit::InventoryOpen | ActionBit::LootPanelOpen,
+		ActionBit::Firing | ActionBit::Reloading | ActionBit::ADS | ActionBit::Sprinting, 0 },
 
 	// Interaction (exclusive group)
 	{ ActionBit::InteractFocus, ActionBit::Dead,
@@ -176,9 +183,10 @@ struct FDeferredTransition
 
 inline constexpr FDeferredTransition GDeferredTransitions[] =
 {
-	{ ActionBit::Firing,    InputBit::SprintHeld,  ActionBit::Sprinting },
-	{ ActionBit::Reloading, InputBit::SprintHeld,  ActionBit::Sprinting },
-	{ ActionBit::ADS,       InputBit::SprintHeld,  ActionBit::Sprinting },
+	{ ActionBit::Firing,          InputBit::SprintHeld,  ActionBit::Sprinting },
+	{ ActionBit::Reloading,       InputBit::SprintHeld,  ActionBit::Sprinting },
+	{ ActionBit::ADS,             InputBit::SprintHeld,  ActionBit::Sprinting },
+	{ ActionBit::WeaponSwitching, InputBit::SprintHeld,  ActionBit::Sprinting },
 	// Slide→Crouch deferred transition handled by sim thread posture management (not game thread)
 };
 

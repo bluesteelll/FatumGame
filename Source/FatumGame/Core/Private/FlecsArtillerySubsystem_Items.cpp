@@ -93,7 +93,10 @@ flecs::entity UFlecsArtillerySubsystem::GetOrCreateEntityPrefab(UFlecsEntityDefi
 	}
 
 	if (EntityDefinition->WeaponProfile)
+	{
 		Prefab.set<FWeaponStatic>(FWeaponStatic::FromProfile(EntityDefinition->WeaponProfile, CaliberRegistry));
+		Prefab.add<FTagWeapon>();
+	}
 
 	if (EntityDefinition->MagazineProfile)
 		Prefab.set<FMagazineStatic>(FMagazineStatic::FromProfile(EntityDefinition->MagazineProfile, CaliberRegistry));

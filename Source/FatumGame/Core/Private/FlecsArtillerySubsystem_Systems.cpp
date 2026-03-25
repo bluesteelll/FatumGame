@@ -123,6 +123,8 @@ void UFlecsArtillerySubsystem::RegisterFlecsComponents()
 	World.component<FWeaponInstance>();
 	World.component<FEquippedBy>();
 	World.component<FTagWeapon>();
+	World.component<FWeaponSlotState>();
+	World.component<FTagWeaponSlot>();
 
 	// ─────────────────────────────────────────────────────────
 	// MAGAZINE COMPONENTS

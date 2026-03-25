@@ -1,0 +1,12 @@
+CompileFlags:
+  Add:
+    - "-Wno-everything"
+    - "-ferror-limit=0"
+  Remove:
+    - "-Werror"
+
+Diagnostics:
+  Suppress:
+    - "builtin_definition"
+  UnusedIncludes: None
+  MissingIncludes: None

@@ -39,8 +39,10 @@ void AFlecsCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 	FatumInput->BindNativeAction(InputConfig, TAG_Input_Cancel,    ETriggerEvent::Started,   this, &AFlecsCharacter::OnInteractCancel);
 	FatumInput->BindNativeAction(InputConfig, TAG_Input_Sprint,    ETriggerEvent::Started,   this, &AFlecsCharacter::OnSprintStarted);
 	FatumInput->BindNativeAction(InputConfig, TAG_Input_Sprint,    ETriggerEvent::Completed, this, &AFlecsCharacter::OnSprintCompleted);
-	FatumInput->BindNativeAction(InputConfig, TAG_Input_Reload,    ETriggerEvent::Started,   this, &AFlecsCharacter::OnReload);
-	FatumInput->BindNativeAction(InputConfig, TAG_Input_ADS,       ETriggerEvent::Started,   this, &AFlecsCharacter::OnADSStarted);
+	FatumInput->BindNativeAction(InputConfig, TAG_Input_Reload,       ETriggerEvent::Started,   this, &AFlecsCharacter::OnReload);
+	FatumInput->BindNativeAction(InputConfig, TAG_Input_WeaponSlot1, ETriggerEvent::Started,   this, &AFlecsCharacter::OnWeaponSlot1);
+	FatumInput->BindNativeAction(InputConfig, TAG_Input_WeaponSlot2, ETriggerEvent::Started,   this, &AFlecsCharacter::OnWeaponSlot2);
+	FatumInput->BindNativeAction(InputConfig, TAG_Input_ADS,         ETriggerEvent::Started,   this, &AFlecsCharacter::OnADSStarted);
 	FatumInput->BindNativeAction(InputConfig, TAG_Input_ADS,       ETriggerEvent::Completed, this, &AFlecsCharacter::OnADSCompleted);
 	FatumInput->BindNativeAction(InputConfig, TAG_Input_Crouch,    ETriggerEvent::Started,   this, &AFlecsCharacter::OnCrouchStarted);
 	FatumInput->BindNativeAction(InputConfig, TAG_Input_Crouch,    ETriggerEvent::Completed, this, &AFlecsCharacter::OnCrouchCompleted);
@@ -228,28 +230,17 @@ void AFlecsCharacter::StartFire(const FInputActionValue& Value)
 		if (FatumMovement) FatumMovement->RequestSprint(false);
 	}
 
-	if (TestWeaponDefinition)
+	if (ActiveWeaponEntityId != 0)
 	{
-		if (TestWeaponEntityId == 0)
-		{
-			SpawnAndEquipTestWeapon();
-			bPendingFireAfterSpawn = true;
-			return;
-		}
 		StartFiringWeapon();
-	}
-	else
-	{
-		FireProjectile();
 	}
 }
 
 void AFlecsCharacter::StopFire(const FInputActionValue& Value)
 {
 	if (InputAtomics) InputAtomics->ClearInputBit(InputBit::FireHeld);
-	bPendingFireAfterSpawn = false;
 
-	if (TestWeaponEntityId != 0)
+	if (ActiveWeaponEntityId != 0)
 		StopFiringWeapon();
 
 	// ClearGameBit processes deferred transitions:
@@ -266,15 +257,15 @@ void AFlecsCharacter::StopFire(const FInputActionValue& Value)
 
 void AFlecsCharacter::OnReload(const FInputActionValue& Value)
 {
-	if (TestWeaponEntityId == 0) return;
+	if (ActiveWeaponEntityId == 0) return;
 
 	uint64 State = GetFullActionState();
 	if (HasBit(State, ActionBit::Reloading))
 	{
 		// Already reloading — send cancel request to sim thread.
 		// Do NOT clear the bit here. The sim thread is authoritative.
-		// InitReloadListener will clear the bit when sim confirms completion/cancel.
-		ReloadTestWeapon();
+		// InitWeaponListeners will clear the bit when sim confirms completion/cancel.
+		RequestReload();
 	}
 	else
 	{
@@ -289,7 +280,7 @@ void AFlecsCharacter::OnReload(const FInputActionValue& Value)
 			if (FatumMovement) FatumMovement->RequestSprint(false);
 		}
 
-		ReloadTestWeapon();
+		RequestReload();
 	}
 }
 

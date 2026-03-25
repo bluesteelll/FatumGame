@@ -52,6 +52,9 @@ struct FCharacterPhysBridge
 
 	// ── Rope visual bridge (sim→game, owned by AFlecsCharacter) ──
 	TSharedPtr<FRopeVisualAtomics> RopeVisualAtomics;
+
+	// ── Weapon equip signal (sim→game, owned by AFlecsCharacter) ──
+	FPendingWeaponEquip* PendingWeaponEquipPtr = nullptr;
 };
 
 /**
@@ -454,6 +457,7 @@ private:
 
 	/** Weapon tick, reload, and fire systems. */
 	void SetupWeaponSystems();
+	void SetupWeaponEquipSystem();
 	void SetupWeaponTickSystem();
 	void SetupWeaponReloadSystem();
 	void SetupWeaponFireSystem();
@@ -559,4 +563,31 @@ private:
 	// No lock needed — all access is sequential on sim thread.
 	// ═══════════════════════════════════════════════════════════════
 	TArray<FCharacterPhysBridge> CharacterBridges;
+
+	/** Find character bridge by Flecs entity. Returns nullptr if not found. Sim thread only. */
+	FCharacterPhysBridge* FindCharacterBridge(flecs::entity CharEntity)
+	{
+		for (auto& B : CharacterBridges)
+		{
+			if (B.Entity == CharEntity) return &B;
+		}
+		return nullptr;
+	}
+
+public:
+	/** Signal game thread with weapon equip/unequip data via PendingWeaponEquip atomics. Sim thread only. */
+	void EnqueueWeaponEquipSignal(flecs::entity CharEntity, int64 WeaponId, int32 SlotIndex,
+		USkeletalMesh* Mesh, class UFlecsWeaponProfile* Profile, const FTransform& AttachOffset)
+	{
+		FCharacterPhysBridge* Bridge = FindCharacterBridge(CharEntity);
+		if (!Bridge || !Bridge->PendingWeaponEquipPtr) return;
+
+		FPendingWeaponEquip& PEQ = *Bridge->PendingWeaponEquipPtr;
+		PEQ.Mesh = Mesh;
+		PEQ.AttachOffset = AttachOffset;
+		PEQ.WeaponProfile = Profile;
+		PEQ.SlotIndex.store(SlotIndex, std::memory_order_release);
+		PEQ.WeaponId.store(WeaponId, std::memory_order_release);
+		PEQ.bPending.store(true, std::memory_order_release);
+	}
 };

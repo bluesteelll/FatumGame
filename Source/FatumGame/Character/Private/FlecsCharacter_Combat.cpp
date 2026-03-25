@@ -22,7 +22,6 @@
 #include "FlecsMessageSubsystem.h"
 #include "FlecsUIMessages.h"
 #include "FlecsHUDWidget.h"
-#include "FSimStateCache.h"
 #include "FBarragePrimitive.h"
 #include "Camera/CameraComponent.h"
 #include "Components/SkeletalMeshComponent.h"
@@ -363,21 +362,18 @@ void AFlecsCharacter::DetachWeaponVisual()
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// WEAPON TESTING (ECS weapon system)
+// WEAPON SLOTS (ECS weapon system)
 // ═══════════════════════════════════════════════════════════════════════════
 
-void AFlecsCharacter::SpawnAndEquipTestWeapon()
+void AFlecsCharacter::SpawnWeaponIntoSlot(int32 SlotIndex, UFlecsEntityDefinition* WeaponDef,
+	UFlecsEntityDefinition* MagDef, int32 MagCount)
 {
-	if (!TestWeaponDefinition || !TestWeaponDefinition->WeaponProfile)
-	{
-		UE_LOG(LogTemp, Warning, TEXT("FlecsCharacter: TestWeaponDefinition is null or has no WeaponProfile!"));
-		return;
-	}
+	check(WeaponDef && WeaponDef->WeaponProfile);
+	checkf(SlotIndex >= 0 && SlotIndex < 2, TEXT("SpawnWeaponIntoSlot: SlotIndex %d out of range"), SlotIndex);
 
 	UFlecsArtillerySubsystem* FlecsSubsystem = GetWorld()->GetSubsystem<UFlecsArtillerySubsystem>();
 	if (!FlecsSubsystem) return;
 
-	// Get character's BarrageKey (from KeyCarry component)
 	FSkeletonKey CharKey = GetEntityKey();
 	if (!CharKey.IsValid())
 	{
@@ -385,58 +381,69 @@ void AFlecsCharacter::SpawnAndEquipTestWeapon()
 		return;
 	}
 
-	// Capture visual data on game thread (UObject pointers not safe across threads).
-	// Store in PendingWeaponEquip so Tick() can safely attach the visual.
-	PendingWeaponEquip.Mesh = TestWeaponDefinition->WeaponProfile->EquippedMesh;
-	PendingWeaponEquip.AttachOffset = TestWeaponDefinition->WeaponProfile->AttachOffset;
-
-	// Create weapon entity via EnqueueCommand
-	// IMPORTANT: Look up CharEntityId INSIDE the command, on simulation thread,
-	// to ensure BeginPlay's entity binding has already been processed.
-	FlecsSubsystem->EnqueueCommand([this, FlecsSubsystem, CharKey]()
+	FlecsSubsystem->EnqueueCommand([FlecsSubsystem, CharKey, SlotIndex, WeaponDef, MagDef, MagCount]()
 	{
 		flecs::world* World = FlecsSubsystem->GetFlecsWorld();
 		if (!World) return;
 
-		// Look up character entity on simulation thread (after BeginPlay binding)
 		flecs::entity CharEntity = FlecsSubsystem->GetEntityForBarrageKey(CharKey);
 		if (!CharEntity.is_valid())
 		{
-			UE_LOG(LogTemp, Warning, TEXT("FlecsCharacter: No Flecs entity for character key %llu!"),
+			UE_LOG(LogTemp, Warning, TEXT("SpawnWeaponIntoSlot: No Flecs entity for character key %llu!"),
 				static_cast<uint64>(CharKey));
 			return;
 		}
-		int64 CharEntityId = static_cast<int64>(CharEntity.id());
-		UE_LOG(LogTemp, Log, TEXT("FlecsCharacter: Found character entity %lld for key %llu"),
-			CharEntityId, static_cast<uint64>(CharKey));
 
-		// Get or create prefab for weapon
-		flecs::entity Prefab = FlecsSubsystem->GetOrCreateEntityPrefab(TestWeaponDefinition);
-		if (!Prefab.is_valid())
+		// Resolve weapon slot container from FWeaponSlotState
+		const FWeaponSlotState* SlotState = CharEntity.try_get<FWeaponSlotState>();
+		if (!SlotState || SlotState->WeaponSlotContainerId == 0)
 		{
-			UE_LOG(LogTemp, Warning, TEXT("FlecsCharacter: Failed to create weapon prefab!"));
+			UE_LOG(LogTemp, Warning, TEXT("SpawnWeaponIntoSlot: No weapon slot container on character!"));
+			return;
+		}
+		flecs::entity ContainerEntity = World->entity(
+			static_cast<flecs::entity_t>(SlotState->WeaponSlotContainerId));
+		if (!ContainerEntity.is_valid())
+		{
+			UE_LOG(LogTemp, Warning, TEXT("SpawnWeaponIntoSlot: Weapon slot container entity invalid!"));
+			return;
+		}
+
+		FContainerSlotsInstance* Slots = ContainerEntity.try_get_mut<FContainerSlotsInstance>();
+		check(Slots);
+
+		// Check if target slot is already occupied
+		if (!Slots->IsSlotEmpty(SlotIndex))
+		{
+			UE_LOG(LogTemp, Warning, TEXT("SpawnWeaponIntoSlot: Slot %d already occupied!"), SlotIndex);
 			return;
 		}
 
 		// Create weapon entity from prefab
+		flecs::entity Prefab = FlecsSubsystem->GetOrCreateEntityPrefab(WeaponDef);
+		if (!Prefab.is_valid())
+		{
+			UE_LOG(LogTemp, Warning, TEXT("SpawnWeaponIntoSlot: Failed to create weapon prefab!"));
+			return;
+		}
+
 		flecs::entity WeaponEntity = World->entity()
 			.is_a(Prefab)
 			.add<FTagWeapon>();
 
-		// Initialize FWeaponInstance
 		const FWeaponStatic* Static = WeaponEntity.try_get<FWeaponStatic>();
 		FWeaponInstance Instance;
-		Instance.CurrentBloom = 0.f;  // bloom starts at 0; BaseSpread is added separately
+		Instance.CurrentBloom = 0.f;
 
-		// Spawn test magazines if available
-		if (Static && !Static->bUnlimitedAmmo && TestMagazineDefinition && TestMagazineDefinition->MagazineProfile)
+		// Spawn magazines if available
+		if (Static && !Static->bUnlimitedAmmo && MagDef && MagDef->MagazineProfile)
 		{
-			const UFlecsMagazineProfile* MagProfile = TestMagazineDefinition->MagazineProfile;
+			const UFlecsMagazineProfile* MagProfile = MagDef->MagazineProfile;
 
-			flecs::entity MagPrefab = FlecsSubsystem->GetOrCreateEntityPrefab(TestMagazineDefinition);
+			flecs::entity MagPrefab = FlecsSubsystem->GetOrCreateEntityPrefab(MagDef);
 			if (MagPrefab.is_valid())
 			{
-				for (int32 i = 0; i < TestMagazineCount; ++i)
+				for (int32 i = 0; i < MagCount; ++i)
 				{
 					flecs::entity MagEntity = World->entity()
 						.is_a(MagPrefab)
@@ -468,25 +475,24 @@ void AFlecsCharacter::SpawnAndEquipTestWeapon()
 						Instance.InsertedMagazineId = static_cast<int64>(MagEntity.id());
 
 						// Chamber first round from magazine (if weapon has chamber)
-						if (Static && Static->bHasChamber && MagInst.AmmoCount > 0)
+						if (Static->bHasChamber && MagInst.AmmoCount > 0)
 						{
 							int32 Idx = MagInst.Pop();
 							Instance.bChambered = true;
 							Instance.ChamberedAmmoTypeIdx = static_cast<uint8>(Idx);
-							MagEntity.set<FMagazineInstance>(MagInst);  // write back after Pop
+							MagEntity.set<FMagazineInstance>(MagInst);
 						}
 
-						UE_LOG(LogTemp, Log, TEXT("WEAPON: First magazine %lld inserted into weapon (%d rounds, chambered=%d)"),
-							Instance.InsertedMagazineId, MagInst.AmmoCount, Instance.bChambered);
+						UE_LOG(LogTemp, Log, TEXT("WEAPON SLOT %d: First magazine %lld inserted (%d rounds, chambered=%d)"),
+							SlotIndex, Instance.InsertedMagazineId, MagInst.AmmoCount, Instance.bChambered);
 					}
 					else
 					{
-						// Remaining magazines go to inventory
-						// Read InventoryEntityId from Flecs entity (sim-thread safe), not from game-thread member
+						// Remaining magazines go to general inventory
 						int64 InvId = 0;
 						const FCharacterInventoryRef* InvRefPtr = CharEntity.try_get<FCharacterInventoryRef>();
 						if (InvRefPtr) InvId = InvRefPtr->InventoryEntityId;
-						UE_LOG(LogTemp, Log, TEXT("WEAPON: Placing mag in inventory, InvId=%lld (game-thread=%lld)"), InvId, InventoryEntityId);
+
 						FContainedIn Contained;
 						Contained.ContainerEntityId = InvId;
 						Contained.SlotIndex = -1;
@@ -496,8 +502,8 @@ void AFlecsCharacter::SpawnAndEquipTestWeapon()
 						ItemInst.Count = 1;
 						MagEntity.set<FItemInstance>(ItemInst);
 
-						UE_LOG(LogTemp, Log, TEXT("WEAPON: Magazine %lld added to inventory (%d rounds)"),
-							static_cast<int64>(MagEntity.id()), MagInst.AmmoCount);
+						UE_LOG(LogTemp, Log, TEXT("WEAPON SLOT %d: Magazine %lld added to inventory (%d rounds)"),
+							SlotIndex, static_cast<int64>(MagEntity.id()), MagInst.AmmoCount);
 					}
 				}
 			}
@@ -505,58 +511,29 @@ void AFlecsCharacter::SpawnAndEquipTestWeapon()
 
 		WeaponEntity.set<FWeaponInstance>(Instance);
 
-		// Equip to character
-		FEquippedBy Equipped;
-		Equipped.CharacterEntityId = CharEntityId;
-		Equipped.SlotId = 0;
-		WeaponEntity.set<FEquippedBy>(Equipped);
-
-		// Store weapon entity ID (thread-safe assignment via main thread later)
+		// Place weapon into slot container (NOT equipped — just slotted)
 		int64 WeaponId = static_cast<int64>(WeaponEntity.id());
+		Slots->SetSlot(SlotIndex, WeaponId);
 
-		// Get ammo info from inserted magazine for UI
-		// set() in EnqueueCommand is immediate (not deferred), so try_get sees post-Pop value
-		int32 InitAmmo = Instance.bChambered ? 1 : 0;  // chambered round
-		int32 InitMagSize = (Static && Static->bHasChamber) ? 1 : 0;  // +1 for chamber
-		if (Instance.InsertedMagazineId != 0)
+		FContainedIn Contained;
+		Contained.ContainerEntityId = SlotState->WeaponSlotContainerId;
+		Contained.SlotIndex = SlotIndex;
+		WeaponEntity.set<FContainedIn>(Contained);
+
+		// Update container counters
+		FContainerInstance* ContInst = ContainerEntity.try_get_mut<FContainerInstance>();
+		if (ContInst)
 		{
-			flecs::entity MagE = World->entity(static_cast<flecs::entity_t>(Instance.InsertedMagazineId));
-			if (MagE.is_valid())
-			{
-				const FMagazineStatic* MS = MagE.try_get<FMagazineStatic>();
-				if (MS) InitMagSize += MS->Capacity;
-				const FMagazineInstance* MI = MagE.try_get<FMagazineInstance>();
-				if (MI) InitAmmo += MI->AmmoCount;
-			}
+			ContInst->CurrentCount += 1;
 		}
 
-		// Register weapon in sim→game state cache with initial values
-		FlecsSubsystem->GetSimStateCache().Register(WeaponId);
-		FlecsSubsystem->GetSimStateCache().WriteWeapon(WeaponId, InitAmmo, InitMagSize, 0, false);
-
-		// Send initial ammo state to HUD (we're on sim thread, use EnqueueMessage)
-		if (UFlecsMessageSubsystem::SelfPtr)
-		{
-			FUIAmmoMessage AmmoMsg;
-			AmmoMsg.WeaponEntityId = WeaponId;
-			AmmoMsg.CurrentAmmo = InitAmmo;
-			AmmoMsg.MagazineSize = InitMagSize;
-			AmmoMsg.ReserveAmmo = 0;
-			UFlecsMessageSubsystem::SelfPtr->EnqueueMessage(TAG_UI_Ammo, AmmoMsg);
-		}
-
-		// Signal game thread via atomics (processed in Tick).
-		// AsyncTask(GameThread) can execute during post-tick component update → crash.
-		PendingWeaponEquip.WeaponId.store(WeaponId, std::memory_order_release);
-		PendingWeaponEquip.bPending.store(true, std::memory_order_release);
+		UE_LOG(LogTemp, Log, TEXT("WEAPON SLOT %d: Weapon %lld placed (not equipped)"), SlotIndex, WeaponId);
 	});
 }
 
-// IsFireBlocked() removed — fire blocking handled by rule table in SetGameBit(ActionBit::Firing)
-
 void AFlecsCharacter::StartFiringWeapon()
 {
-	if (TestWeaponEntityId == 0) return;
+	if (ActiveWeaponEntityId == 0) return;
 
 	// Firing blocks and sprint cancel are handled by SetGameBit(Firing) in StartFire.
 	// IsFireBlocked() is checked there via rule table. Sprint cancel via CanceledOnEntry.
@@ -582,17 +559,146 @@ void AFlecsCharacter::StartFiringWeapon()
 	}
 
 	// Start firing
-	UFlecsWeaponLibrary::StartFiring(this, TestWeaponEntityId);
+	UFlecsWeaponLibrary::StartFiring(this, ActiveWeaponEntityId);
 }
 
 void AFlecsCharacter::StopFiringWeapon()
 {
-	if (TestWeaponEntityId == 0) return;
-	UFlecsWeaponLibrary::StopFiring(this, TestWeaponEntityId);
+	if (ActiveWeaponEntityId == 0) return;
+	UFlecsWeaponLibrary::StopFiring(this, ActiveWeaponEntityId);
 }
 
-void AFlecsCharacter::ReloadTestWeapon()
+void AFlecsCharacter::RequestReload()
 {
-	if (TestWeaponEntityId == 0) return;
-	UFlecsWeaponLibrary::ToggleReload(this, TestWeaponEntityId);
+	if (ActiveWeaponEntityId == 0) return;
+	UFlecsWeaponLibrary::ToggleReload(this, ActiveWeaponEntityId);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// WEAPON SLOT SWITCHING
+// ═══════════════════════════════════════════════════════════════════════════
+
+void AFlecsCharacter::RequestWeaponSwitch(int32 SlotIndex)
+{
+	checkf(SlotIndex >= -1 && SlotIndex < 2, TEXT("RequestWeaponSwitch: SlotIndex %d out of range"), SlotIndex);
+
+	// Same slot as active — ignore
+	if (SlotIndex == ActiveWeaponSlotIndex && SlotIndex >= 0) return;
+
+	// Try to enter WeaponSwitching state
+	if (!SetGameBit(ActionBit::WeaponSwitching))
+		return;
+
+	// Sync sprint cancel to sim thread
+	if (!HasBit(GameActionState.load(std::memory_order_relaxed), ActionBit::Sprinting))
+	{
+		if (InputAtomics) InputAtomics->Sprinting.Write(false);
+		if (FatumMovement) FatumMovement->RequestSprint(false);
+	}
+
+	UFlecsArtillerySubsystem* FlecsSubsystem = GetWorld()->GetSubsystem<UFlecsArtillerySubsystem>();
+	if (!FlecsSubsystem) { ClearGameBit(ActionBit::WeaponSwitching); return; }
+
+	// Helper: signal game thread to clear WeaponSwitching (unequip/no-op)
+	auto SignalAbort = [FlecsSubsystem](flecs::entity CharEntity)
+	{
+		FlecsSubsystem->EnqueueWeaponEquipSignal(CharEntity, 0, -1, nullptr, nullptr, FTransform::Identity);
+	};
+
+	FSkeletonKey Key = CharacterKey;
+	FlecsSubsystem->EnqueueCommand([FlecsSubsystem, Key, SlotIndex, SignalAbort]()
+	{
+		flecs::world* World = FlecsSubsystem->GetFlecsWorld();
+		if (!World) return;
+
+		flecs::entity CharEntity = FlecsSubsystem->GetEntityForBarrageKey(Key);
+		if (!CharEntity.is_valid())
+		{
+			// Can't signal without a valid entity — game thread WeaponSwitching will be stuck.
+			// This only happens if character is already destroyed, so it's a non-issue.
+			return;
+		}
+
+		FWeaponSlotState* SlotState = CharEntity.try_get_mut<FWeaponSlotState>();
+		if (!SlotState || SlotState->WeaponSlotContainerId == 0)
+		{
+			SignalAbort(CharEntity);
+			return;
+		}
+
+		flecs::entity Container = World->entity(
+			static_cast<flecs::entity_t>(SlotState->WeaponSlotContainerId));
+		if (!Container.is_valid())
+		{
+			SignalAbort(CharEntity);
+			return;
+		}
+
+		const FContainerSlotsInstance* Slots = Container.try_get<FContainerSlotsInstance>();
+		if (!Slots)
+		{
+			SignalAbort(CharEntity);
+			return;
+		}
+
+		int64 TargetWeaponId = (SlotIndex >= 0) ? Slots->GetItemInSlot(SlotIndex) : 0;
+
+		// Empty slot pressed + no active weapon — nothing to do
+		if (TargetWeaponId == 0 && SlotState->ActiveSlotIndex < 0)
+		{
+			SignalAbort(CharEntity);
+			return;
+		}
+
+		// If already switching, interrupt with new target
+		if (SlotState->IsSwitching())
+		{
+			SlotState->PendingSlotIndex = (TargetWeaponId != 0) ? SlotIndex : -1;
+			return;
+		}
+
+		// Currently holding a weapon — start holstering
+		if (SlotState->ActiveSlotIndex >= 0)
+		{
+			int64 CurrentWeaponId = Slots->GetItemInSlot(SlotState->ActiveSlotIndex);
+			float HolsterTime = 0.2f;
+			if (CurrentWeaponId != 0)
+			{
+				flecs::entity CurWeapon = World->entity(static_cast<flecs::entity_t>(CurrentWeaponId));
+				if (CurWeapon.is_valid())
+				{
+					const FWeaponStatic* WS = CurWeapon.try_get<FWeaponStatic>();
+					if (WS) HolsterTime = WS->EquipTime * 0.5f;
+				}
+			}
+
+			SlotState->PendingSlotIndex = (TargetWeaponId != 0) ? SlotIndex : -1;
+			SlotState->EquipPhase = EWeaponEquipPhase::Holstering;
+			SlotState->EquipTimer = HolsterTime;
+		}
+		else
+		{
+			// Unarmed — go directly to Drawing
+			if (TargetWeaponId != 0)
+			{
+				flecs::entity NewWeapon = World->entity(static_cast<flecs::entity_t>(TargetWeaponId));
+				const FWeaponStatic* WS = NewWeapon.is_valid() ? NewWeapon.try_get<FWeaponStatic>() : nullptr;
+				float DrawTime = WS ? WS->EquipTime * 0.5f : 0.25f;
+
+				SlotState->PendingSlotIndex = SlotIndex;
+				SlotState->EquipPhase = EWeaponEquipPhase::Drawing;
+				SlotState->EquipTimer = DrawTime;
+			}
+		}
+	});
+}
+
+void AFlecsCharacter::OnWeaponSlot1(const FInputActionValue& Value)
+{
+	RequestWeaponSwitch(0);
+}
+
+void AFlecsCharacter::OnWeaponSlot2(const FInputActionValue& Value)
+{
+	RequestWeaponSwitch(1);
 }

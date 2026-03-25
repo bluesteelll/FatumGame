@@ -98,6 +98,7 @@ struct FCharacterStateAtomics
 // ═══════════════════════════════════════════════════════════════════════════
 
 class USkeletalMesh;
+class UFlecsWeaponProfile;
 
 /** Pending weapon equip data (sim thread → game thread via atomics).
  *  Processed in Tick() to avoid modifying components during post-tick update phase. */
@@ -105,8 +106,10 @@ struct FPendingWeaponEquip
 {
 	std::atomic<int64> WeaponId{0};
 	std::atomic<bool> bPending{false};
-	USkeletalMesh* Mesh = nullptr;       // Set on game thread before EnqueueCommand
-	FTransform AttachOffset;              // Set on game thread before EnqueueCommand
+	std::atomic<int32> SlotIndex{-1};
+	USkeletalMesh* Mesh = nullptr;                // UObject* safe: DataAsset outlives game
+	FTransform AttachOffset;
+	UFlecsWeaponProfile* WeaponProfile = nullptr;  // UObject* safe: DataAsset outlives game
 };
 
 /** Character position interpolation state (game thread only, updated in Tick).

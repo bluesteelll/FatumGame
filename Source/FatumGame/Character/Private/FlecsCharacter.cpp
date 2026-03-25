@@ -120,15 +120,9 @@ void AFlecsCharacter::BeginPlay()
 		FatumMovement->OnPostureChanged.AddUObject(this, &AFlecsCharacter::HandlePostureChanged);
 	}
 
-	// Auto-equip weapon if TestWeaponDefinition is set
-	if (TestWeaponDefinition && TestWeaponDefinition->WeaponProfile)
-	{
-		SpawnAndEquipTestWeapon();
-	}
-
 	InitInteractionTrace();  // _Interaction.cpp
 	InitUI();                // _UI.cpp
-	InitReloadListener();    // _ActionState.cpp
+	InitWeaponListeners();   // _ActionState.cpp
 
 #if !UE_BUILD_SHIPPING
 	InertiaDebugDrawHandle = UDebugDrawService::Register(
@@ -634,25 +628,55 @@ void AFlecsCharacter::ProcessPendingWeaponEquip()
 	PendingWeaponEquip.bPending.store(false, std::memory_order_relaxed);
 	int64 WeaponId = PendingWeaponEquip.WeaponId.load(std::memory_order_acquire);
 
-	TestWeaponEntityId = WeaponId;
+	if (WeaponId == 0)
+	{
+		// Unequip — holstered or aborted
+		ActiveWeaponEntityId = 0;
+		ActiveWeaponSlotIndex = -1;
+		ActiveWeaponProfile = nullptr;
+		RecoilState.Reset();
+		RecoilState.CachedProfile = nullptr;
+		DetachWeaponVisual();
 
-	// Cache weapon profile for recoil processing and reset recoil state
+		if (HUDWidget)
+			HUDWidget->SetWeaponEntityId(0);
+
+		ClearGameBit(ActionBit::WeaponSwitching);
+
+		// Sync deferred sprint restore
+		if (HasBit(GameActionState.load(std::memory_order_relaxed), ActionBit::Sprinting))
+		{
+			if (InputAtomics) InputAtomics->Sprinting.Write(true);
+			if (FatumMovement) FatumMovement->RequestSprint(true);
+		}
+
+		UE_LOG(LogTemp, Log, TEXT("WEAPON: Unequipped"));
+		return;
+	}
+
+	// Equip new weapon
+	ActiveWeaponEntityId = WeaponId;
+	ActiveWeaponSlotIndex = PendingWeaponEquip.SlotIndex.load(std::memory_order_acquire);
+	ActiveWeaponProfile = PendingWeaponEquip.WeaponProfile;
+
 	RecoilState.Reset();
-	RecoilState.CachedProfile = (TestWeaponDefinition && TestWeaponDefinition->WeaponProfile)
-		? TestWeaponDefinition->WeaponProfile.Get() : nullptr;
+	RecoilState.CachedProfile = ActiveWeaponProfile;
 
 	if (HUDWidget)
-	{
 		HUDWidget->SetWeaponEntityId(WeaponId);
-	}
-	AttachWeaponVisual(PendingWeaponEquip.Mesh, PendingWeaponEquip.AttachOffset);
-	UE_LOG(LogTemp, Log, TEXT("FlecsCharacter: Weapon spawned and equipped (EntityId=%lld)"), WeaponId);
 
-	if (bPendingFireAfterSpawn)
+	AttachWeaponVisual(PendingWeaponEquip.Mesh, PendingWeaponEquip.AttachOffset);
+
+	ClearGameBit(ActionBit::WeaponSwitching);
+
+	// Sync deferred sprint restore
+	if (HasBit(GameActionState.load(std::memory_order_relaxed), ActionBit::Sprinting))
 	{
-		bPendingFireAfterSpawn = false;
-		StartFiringWeapon();
+		if (InputAtomics) InputAtomics->Sprinting.Write(true);
+		if (FatumMovement) FatumMovement->RequestSprint(true);
 	}
+
+	UE_LOG(LogTemp, Log, TEXT("WEAPON: Equipped weapon %lld in slot %d"), WeaponId, ActiveWeaponSlotIndex);
 }
 
 void AFlecsCharacter::WriteAimDirection()

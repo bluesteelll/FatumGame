@@ -46,12 +46,24 @@ FContainerStatic FContainerStatic::FromProfile(const UFlecsContainerProfile* Pro
 
 	FContainerStatic S;
 	S.Type = Profile->ContainerType;
-	S.GridWidth = Profile->GridWidth;
-	S.GridHeight = Profile->GridHeight;
-	S.MaxItems = Profile->MaxListItems;
 	S.MaxWeight = Profile->MaxWeight;
 	S.bAllowNesting = Profile->bAllowNestedContainers;
 	S.bAutoStack = Profile->bAutoStackOnAdd;
+
+	if (Profile->ContainerType == EContainerType::Slot)
+	{
+		// Slot containers: map slots to a Nx1 grid for UI compatibility
+		S.GridWidth = FMath::Max(1, Profile->Slots.Num());
+		S.GridHeight = 1;
+		S.MaxItems = Profile->Slots.Num();
+	}
+	else
+	{
+		S.GridWidth = Profile->GridWidth;
+		S.GridHeight = Profile->GridHeight;
+		S.MaxItems = Profile->MaxListItems;
+	}
+
 	return S;
 }
 

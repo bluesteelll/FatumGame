@@ -10,6 +10,7 @@
 #include "FlecsArtillerySubsystem.h"
 #include "FlecsGameTags.h"
 #include "FlecsItemComponents.h"
+#include "FlecsWeaponComponents.h"
 #include "FlecsVitalsComponents.h"
 #include "GameFramework/PlayerController.h"
 #include "Async/Async.h"
@@ -128,6 +129,24 @@ void AFlecsCharacter::InitInventoryContainers()
 		int64 InvId = SpawnContainer(InvDef);
 		int64 WepInvId = SpawnContainer(WepInvDef);
 
+		// Tag weapon inventory as weapon-only slot container
+		if (WepInvId != 0)
+		{
+			flecs::entity WepContEntity = World->entity(static_cast<flecs::entity_t>(WepInvId));
+			if (WepContEntity.is_valid())
+			{
+				WepContEntity.add<FTagWeaponSlot>();
+			}
+		}
+
+		// Set FWeaponSlotState on character entity
+		if (CharEntity.is_valid() && WepInvId != 0)
+		{
+			FWeaponSlotState SlotState;
+			SlotState.WeaponSlotContainerId = WepInvId;
+			CharEntity.set<FWeaponSlotState>(SlotState);
+		}
+
 		// Update FCharacterInventoryRef on the character Flecs entity (vitals equipment scanning)
 		if (CharEntity.is_valid() && InvId != 0)
 		{
@@ -213,7 +232,7 @@ void AFlecsCharacter::ToggleInventory(const FInputActionValue& Value)
 	{
 		if (!SetGameBit(ActionBit::InventoryOpen)) return;
 		InventoryWidget->SetVisibility(ESlateVisibility::SelfHitTestInvisible);
-		InventoryWidget->OpenInventory(InventoryEntityId);
+		InventoryWidget->OpenInventory(InventoryEntityId, WeaponInventoryEntityId);
 	}
 }
 

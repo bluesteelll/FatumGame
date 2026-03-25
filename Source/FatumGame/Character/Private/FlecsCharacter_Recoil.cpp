@@ -29,7 +29,7 @@ void AFlecsCharacter::DrainShotEventsAndApplyRecoil()
 	while (Sub->GetPendingShotEvents().Dequeue(Event))
 	{
 		// Only process events from our weapon
-		if (Event.WeaponEntityId != TestWeaponEntityId) continue;
+		if (Event.WeaponEntityId != ActiveWeaponEntityId) continue;
 
 		// ── Pattern Recoil (permanent control rotation delta) ──
 		if (Profile->RecoilPatternCurve)

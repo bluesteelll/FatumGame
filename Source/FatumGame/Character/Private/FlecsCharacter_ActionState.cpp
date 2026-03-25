@@ -75,7 +75,7 @@ void AFlecsCharacter::HandleStateCanceled(uint64 CanceledBits)
 	// Firing canceled — stop weapon fire
 	if (HasBit(CanceledBits, ActionBit::Firing))
 	{
-		if (TestWeaponEntityId != 0)
+		if (ActiveWeaponEntityId != 0)
 			StopFiringWeapon();
 	}
 
@@ -88,8 +88,8 @@ void AFlecsCharacter::HandleStateCanceled(uint64 CanceledBits)
 	// Reloading canceled — signal cancel to sim thread
 	if (HasBit(CanceledBits, ActionBit::Reloading))
 	{
-		if (TestWeaponEntityId != 0)
-			UFlecsWeaponLibrary::ToggleReload(this, TestWeaponEntityId);
+		if (ActiveWeaponEntityId != 0)
+			UFlecsWeaponLibrary::ToggleReload(this, ActiveWeaponEntityId);
 	}
 }
 
@@ -103,7 +103,7 @@ bool AFlecsCharacter::IsSprintKeyHeld() const
 	return InputAtomics && HasBit(InputAtomics->ReadInputState(), InputBit::SprintHeld);
 }
 
-void AFlecsCharacter::InitReloadListener()
+void AFlecsCharacter::InitWeaponListeners()
 {
 	UFlecsMessageSubsystem* MsgSub = UFlecsMessageSubsystem::Get(this);
 	if (!ensure(MsgSub)) return;
@@ -112,7 +112,7 @@ void AFlecsCharacter::InitReloadListener()
 		TAG_UI_Reload, this,
 		[this](FGameplayTag Tag, const FUIReloadMessage& Msg)
 		{
-			if (Msg.WeaponEntityId != TestWeaponEntityId) return;
+			if (Msg.WeaponEntityId != ActiveWeaponEntityId) return;
 
 			if (!Msg.bStarted)
 			{

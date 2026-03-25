@@ -19,6 +19,7 @@ class UFlecsHUDWidget;
 class UFlecsInventoryWidget;
 class UFlecsLootPanel;
 class UFlecsInteractionProfile;
+class UFlecsWeaponProfile;
 class UFlecsUIPanel;
 class UFatumMovementComponent;
 class UFatumInputConfig;
@@ -205,40 +206,45 @@ public:
 	void DetachWeaponVisual();
 
 	// ═══════════════════════════════════════════════════════════════
-	// WEAPON TESTING
+	// WEAPON SLOTS
+	// 2 dedicated weapon slots. Weapons must be in a slot to fire.
 	// ═══════════════════════════════════════════════════════════════
 
-	/** Weapon definition for testing (must have WeaponProfile with ProjectileDefinition) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flecs|Weapon")
-	TObjectPtr<UFlecsEntityDefinition> TestWeaponDefinition;
+	/** Weapon definition for starting loadout slot 0 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flecs|Weapon|Starting Loadout")
+	TObjectPtr<UFlecsEntityDefinition> StartingWeaponDefinition;
 
-	/** Magazine definition for testing (spawned and inserted into test weapon) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flecs|Weapon")
-	TObjectPtr<UFlecsEntityDefinition> TestMagazineDefinition;
+	/** Magazine definition for starting loadout */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flecs|Weapon|Starting Loadout")
+	TObjectPtr<UFlecsEntityDefinition> StartingMagazineDefinition;
 
-	/** How many test magazines to spawn in inventory */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flecs|Weapon", meta = (ClampMin = "1", ClampMax = "10"))
-	int32 TestMagazineCount = 3;
+	/** How many starting magazines to spawn in inventory */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flecs|Weapon|Starting Loadout", meta = (ClampMin = "1", ClampMax = "10"))
+	int32 StartingMagazineCount = 3;
 
-	/** Flecs entity ID of spawned test weapon (0 = not spawned) */
+	/** Flecs entity ID of the currently equipped (drawn) weapon. 0 = unarmed. */
 	UPROPERTY(BlueprintReadOnly, Category = "Flecs|Weapon")
-	int64 TestWeaponEntityId = 0;
+	int64 ActiveWeaponEntityId = 0;
 
-	/** Spawn test weapon and equip it to character */
-	UFUNCTION(BlueprintCallable, Category = "Flecs|Weapon")
-	void SpawnAndEquipTestWeapon();
+	/** Currently active weapon slot index (-1 = none, 0 = slot 1, 1 = slot 2) */
+	UPROPERTY(BlueprintReadOnly, Category = "Flecs|Weapon")
+	int32 ActiveWeaponSlotIndex = -1;
 
-	/** Start firing test weapon (hold) */
+	/** Pointer to the weapon profile of the currently equipped weapon (game thread cache for recoil). */
+	UPROPERTY()
+	TObjectPtr<UFlecsWeaponProfile> ActiveWeaponProfile;
+
+	/** Start firing currently equipped weapon */
 	UFUNCTION(BlueprintCallable, Category = "Flecs|Weapon")
 	void StartFiringWeapon();
 
-	/** Stop firing test weapon (release) */
+	/** Stop firing currently equipped weapon */
 	UFUNCTION(BlueprintCallable, Category = "Flecs|Weapon")
 	void StopFiringWeapon();
 
-	/** Reload test weapon */
+	/** Request reload on currently equipped weapon */
 	UFUNCTION(BlueprintCallable, Category = "Flecs|Weapon")
-	void ReloadTestWeapon();
+	void RequestReload();
 
 	// ═══════════════════════════════════════════════════════════════
 	// ADS QUERIES
@@ -558,8 +564,7 @@ private:
 	bool IsFireHeld() const;
 	bool IsSprintKeyHeld() const;
 
-	/** Fire was requested before weapon finished spawning — apply after spawn completes. */
-	bool bPendingFireAfterSpawn = false; // NOT a state — one-time event flag
+	// bPendingFireAfterSpawn removed — weapon slot system handles equip timing
 
 	// IsFireBlocked() removed — fire blocking handled by rule table in SetGameBit(Firing)
 
@@ -576,7 +581,7 @@ private:
 	void InitInventoryContainers();  // in FlecsCharacter_UI.cpp
 	void InitInteractionTrace();     // in FlecsCharacter_Interaction.cpp
 	void InitUI();                   // in FlecsCharacter_UI.cpp
-	void InitReloadListener();       // in FlecsCharacter_ActionState.cpp
+	void InitWeaponListeners();      // in FlecsCharacter_ActionState.cpp
 	void CleanupUI();                // in FlecsCharacter_UI.cpp
 	void CleanupInteraction();       // in FlecsCharacter_Interaction.cpp
 	void UnregisterFromECS();
@@ -709,6 +714,19 @@ private:
 
 	/** Reload input handler (R key — toggle reload / cancel) */
 	void OnReload(const FInputActionValue& Value);
+
+	/** Weapon slot 1 pressed */
+	void OnWeaponSlot1(const FInputActionValue& Value);
+
+	/** Weapon slot 2 pressed */
+	void OnWeaponSlot2(const FInputActionValue& Value);
+
+	/** Request weapon slot switch (game thread). -1 = holster. */
+	void RequestWeaponSwitch(int32 SlotIndex);
+
+	/** Spawn weapon into a specific weapon slot (sim thread command). */
+	void SpawnWeaponIntoSlot(int32 SlotIndex, UFlecsEntityDefinition* WeaponDef,
+		UFlecsEntityDefinition* MagDef, int32 MagCount);
 
 	/** ADS input handlers */
 	void OnADSStarted(const FInputActionValue& Value);

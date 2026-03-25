@@ -9,6 +9,7 @@
 #include "FlecsAmmoTypeDefinition.h"
 #include "FlecsUISubsystem.h"
 #include "FlecsVitalsComponents.h"
+#include "FlecsWeaponComponents.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogFlecsContainer, Log, All);
 
@@ -185,6 +186,13 @@ static int32 AddItemToContainerDirect(
 			}
 			NewEntity.set<FMagazineInstance>(MagInst);
 			NewEntity.add<FTagMagazine>();
+		}
+
+		// Initialize weapon instance if this is a weapon entity
+		if (NewEntity.has<FTagWeapon>())
+		{
+			FWeaponInstance WepInst;
+			NewEntity.set<FWeaponInstance>(WepInst);
 		}
 
 		return NewEntity;
@@ -680,6 +688,15 @@ bool UFlecsContainerLibrary::TransferItem(
 			return;
 		}
 
+		// Weapon slot validation: only weapons can go in FTagWeaponSlot containers
+		if (DstEntity.has<FTagWeaponSlot>() && !ItemEntity.has<FTagWeapon>())
+		{
+			UE_LOG(LogFlecsContainer, Warning, TEXT("TransferItem: Only weapons can be placed in weapon slots"));
+			NotifyContainerUI(SourceContainerId);
+			NotifyContainerUI(DestContainerId);
+			return;
+		}
+
 		// Weight check on dest
 		const float TotalItemWeight = ItemWeight * ItemInstance->Count;
 		if (DstStatic->MaxWeight >= 0.f && DstInstance->CurrentWeight + TotalItemWeight > DstStatic->MaxWeight)
@@ -738,7 +755,26 @@ bool UFlecsContainerLibrary::TransferItem(
 			}
 		}
 
-		// Grid transfer — need occupancy management
+		// ── Free from source container ──
+		if (SrcStatic->Type == EContainerType::Grid && ContainedIn->IsInGrid())
+		{
+			if (FContainerGridInstance* SrcGrid = SrcEntity.try_get_mut<FContainerGridInstance>())
+			{
+				SrcGrid->Free(ContainedIn->GridPosition, ItemSize, SrcStatic->GridWidth);
+			}
+		}
+		else if (SrcStatic->Type == EContainerType::Slot && ContainedIn->IsInSlot())
+		{
+			if (FContainerSlotsInstance* SrcSlots = SrcEntity.try_get_mut<FContainerSlotsInstance>())
+			{
+				SrcSlots->ClearSlot(ContainedIn->SlotIndex);
+			}
+		}
+
+		// ── Place in dest container ──
+		FIntPoint NewGridPos = FIntPoint(-1, -1);
+		int32 NewSlotIndex = -1;
+
 		if (DstStatic->Type == EContainerType::Grid)
 		{
 			FContainerGridInstance* DstGrid = DstEntity.try_get_mut<FContainerGridInstance>();
@@ -759,28 +795,33 @@ bool UFlecsContainerLibrary::TransferItem(
 				return;
 			}
 
-			// Free from source grid
-			if (SrcStatic->Type == EContainerType::Grid && ContainedIn->IsInGrid())
+			DstGrid->Occupy(DestGridPosition, ItemSize, DstStatic->GridWidth);
+			NewGridPos = DestGridPosition;
+		}
+		else if (DstStatic->Type == EContainerType::Slot)
+		{
+			FContainerSlotsInstance* DstSlots = DstEntity.try_get_mut<FContainerSlotsInstance>();
+			if (!DstSlots)
 			{
-				if (FContainerGridInstance* SrcGrid = SrcEntity.try_get_mut<FContainerGridInstance>())
-				{
-					SrcGrid->Free(ContainedIn->GridPosition, ItemSize, SrcStatic->GridWidth);
-				}
+				UE_LOG(LogFlecsContainer, Warning, TEXT("TransferItem: Dest slot container %lld has no FContainerSlotsInstance"), DestContainerId);
+				NotifyContainerUI(SourceContainerId);
+				NotifyContainerUI(DestContainerId);
+				return;
 			}
 
-			// Occupy in dest grid
-			DstGrid->Occupy(DestGridPosition, ItemSize, DstStatic->GridWidth);
-		}
-		else
-		{
-			// Free from source grid if applicable
-			if (SrcStatic->Type == EContainerType::Grid && ContainedIn->IsInGrid())
+			// DestGridPosition.X is used as slot index for slot containers
+			int32 TargetSlot = DestGridPosition.X;
+			if (!DstSlots->IsSlotEmpty(TargetSlot))
 			{
-				if (FContainerGridInstance* SrcGrid = SrcEntity.try_get_mut<FContainerGridInstance>())
-				{
-					SrcGrid->Free(ContainedIn->GridPosition, ItemSize, SrcStatic->GridWidth);
-				}
+				UE_LOG(LogFlecsContainer, Warning, TEXT("TransferItem: Slot %d in container %lld is occupied"),
+					TargetSlot, DestContainerId);
+				NotifyContainerUI(SourceContainerId);
+				NotifyContainerUI(DestContainerId);
+				return;
 			}
+
+			DstSlots->SetSlot(TargetSlot, ItemEntityId);
+			NewSlotIndex = TargetSlot;
 		}
 
 		// Update counts and weights
@@ -791,8 +832,8 @@ bool UFlecsContainerLibrary::TransferItem(
 
 		// Reparent: update FContainedIn
 		ContainedIn->ContainerEntityId = DestContainerId;
-		ContainedIn->GridPosition = (DstStatic->Type == EContainerType::Grid) ? DestGridPosition : FIntPoint(-1, -1);
-		ContainedIn->SlotIndex = (DstStatic->Type == EContainerType::List) ? DstInstance->CurrentCount - 1 : -1;
+		ContainedIn->GridPosition = NewGridPos;
+		ContainedIn->SlotIndex = NewSlotIndex;
 
 		UE_LOG(LogFlecsContainer, Log, TEXT("TransferItem: Moved item %lld from container %lld to %lld at (%d,%d)"),
 			ItemEntityId, SourceContainerId, DestContainerId, DestGridPosition.X, DestGridPosition.Y);

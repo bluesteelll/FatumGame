@@ -219,6 +219,11 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Animations")
 	TObjectPtr<UAnimMontage> EquipMontage;
 
+	/** Time to equip this weapon when switching slots (seconds).
+	 *  Split 50/50 between holster of current weapon and draw of this weapon. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Animations", meta = (ClampMin = "0.1", ClampMax = "5.0"))
+	float EquipTime = 0.5f;
+
 	// ═══════════════════════════════════════════════════════════════
 	// SPREAD & BLOOM
 	// All spread values are in decidegrees (1 unit = 0.1°).

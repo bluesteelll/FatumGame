@@ -167,6 +167,9 @@ struct FWeaponStatic
 	/** Equip animation montage */
 	UAnimMontage* EquipMontage = nullptr;
 
+	/** Time to equip this weapon (seconds). Split 50/50 between holster and draw. */
+	float EquipTime = 0.5f;
+
 	// ─────────────────────────────────────────────────────────
 	// SPREAD & BLOOM (all values in decidegrees, 1 unit = 0.1°)
 	// ─────────────────────────────────────────────────────────
@@ -346,6 +349,44 @@ struct FEquippedBy
 };
 
 // ═══════════════════════════════════════════════════════════════
+// WEAPON EQUIP PHASE (for slot switching)
+// ═══════════════════════════════════════════════════════════════
+
+enum class EWeaponEquipPhase : uint8
+{
+	Idle = 0,
+	Holstering = 1,
+	Drawing = 2
+};
+
+// ═══════════════════════════════════════════════════════════════
+// WEAPON SLOT STATE (Per-Character)
+// ═══════════════════════════════════════════════════════════════
+
+/** Per-character weapon slot state. Lives on CHARACTER entity.
+ *  Tracks which weapon slot is active and manages equip transitions. */
+struct FWeaponSlotState
+{
+	/** Currently active weapon slot (-1 = no weapon, 0 = slot 1, 1 = slot 2) */
+	int32 ActiveSlotIndex = -1;
+
+	/** Slot being switched to during transition (-1 = unequip only) */
+	int32 PendingSlotIndex = -1;
+
+	/** Current equip phase */
+	EWeaponEquipPhase EquipPhase = EWeaponEquipPhase::Idle;
+
+	/** Countdown timer for current phase */
+	float EquipTimer = 0.f;
+
+	/** Cached weapon slot container entity ID */
+	int64 WeaponSlotContainerId = 0;
+
+	bool IsSwitching() const { return EquipPhase != EWeaponEquipPhase::Idle; }
+	bool HasActiveWeapon() const { return ActiveSlotIndex >= 0; }
+};
+
+// ═══════════════════════════════════════════════════════════════
 // TAG
 // ═══════════════════════════════════════════════════════════════
 
@@ -354,3 +395,6 @@ struct FTagWeapon {};
 
 /** Weapon is currently reloading (query optimization) */
 struct FTagReloading {};
+
+/** Tag on weapon slot container — enables weapon-only validation. */
+struct FTagWeaponSlot {};

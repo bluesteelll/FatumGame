@@ -365,7 +365,11 @@ FContainerSnapshot UFlecsUISubsystem::BuildContainerSnapshot(int64 ContainerEnti
 
 		FContainerItemSnapshot ItemSnap;
 		ItemSnap.ItemEntityId = static_cast<int64>(E.id());
-		ItemSnap.GridPosition = ContainedIn.GridPosition;
+		// Slot containers: map SlotIndex to grid position (SlotIndex → column, row 0)
+		if (ContainedIn.IsInSlot())
+			ItemSnap.GridPosition = FIntPoint(ContainedIn.SlotIndex, 0);
+		else
+			ItemSnap.GridPosition = ContainedIn.GridPosition;
 		ItemSnap.GridSize = StaticData ? StaticData->GridSize : FIntPoint(1, 1);
 		ItemSnap.TypeId = StaticData ? StaticData->ItemName : NAME_None;
 		ItemSnap.Count = ItemInst ? ItemInst->Count : 1;
