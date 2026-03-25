@@ -697,6 +697,9 @@ bool UFlecsContainerLibrary::TransferItem(
 			return;
 		}
 
+		// Track if we need to unequip after successful transfer
+		const bool bNeedsUnequip = SrcEntity.has<FTagWeaponSlot>() && ItemEntity.has<FEquippedBy>();
+
 		// Weight check on dest
 		const float TotalItemWeight = ItemWeight * ItemInstance->Count;
 		if (DstStatic->MaxWeight >= 0.f && DstInstance->CurrentWeight + TotalItemWeight > DstStatic->MaxWeight)
@@ -834,6 +837,41 @@ bool UFlecsContainerLibrary::TransferItem(
 		ContainedIn->ContainerEntityId = DestContainerId;
 		ContainedIn->GridPosition = NewGridPos;
 		ContainedIn->SlotIndex = NewSlotIndex;
+
+		// Unequip weapon AFTER successful transfer (not before — avoids unequip on failed placement)
+		if (bNeedsUnequip)
+		{
+			const FEquippedBy* Eq = ItemEntity.try_get<FEquippedBy>();
+			if (Eq && Eq->IsEquipped())
+			{
+				flecs::entity CharEntity = FlecsWorld->entity(static_cast<flecs::entity_t>(Eq->CharacterEntityId));
+				if (CharEntity.is_valid())
+				{
+					FWeaponSlotState* SlotState = CharEntity.try_get_mut<FWeaponSlotState>();
+					if (SlotState)
+					{
+						SlotState->ActiveSlotIndex = -1;
+						SlotState->PendingSlotIndex = -1;
+						SlotState->EquipPhase = EWeaponEquipPhase::Idle;
+						SlotState->EquipTimer = 0.f;
+					}
+
+					if (Subsystem)
+						Subsystem->EnqueueWeaponEquipSignal(CharEntity, 0, -1, nullptr, nullptr, FTransform::Identity);
+				}
+
+				FWeaponInstance* WI = ItemEntity.try_get_mut<FWeaponInstance>();
+				if (WI)
+				{
+					WI->bFireRequested = false;
+					WI->bFireTriggerPending = false;
+					WI->bReloadRequested = false;
+				}
+
+				ItemEntity.remove<FEquippedBy>();
+				UE_LOG(LogFlecsContainer, Log, TEXT("TransferItem: Unequipped weapon %lld (moved out of weapon slot)"), ItemEntityId);
+			}
+		}
 
 		UE_LOG(LogFlecsContainer, Log, TEXT("TransferItem: Moved item %lld from container %lld to %lld at (%d,%d)"),
 			ItemEntityId, SourceContainerId, DestContainerId, DestGridPosition.X, DestGridPosition.Y);

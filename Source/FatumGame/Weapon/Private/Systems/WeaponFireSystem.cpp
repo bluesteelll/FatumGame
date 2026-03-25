@@ -70,6 +70,9 @@ void UFlecsArtillerySubsystem::SetupWeaponFireSystem()
 			// Check if can fire (cooldown expired, has magazine, not reloading)
 			if (!Weapon.CanFire())
 			{
+				// No magazine inserted — consume trigger so it doesn't fire after reload
+				if (Weapon.InsertedMagazineId == 0)
+					Weapon.bFireTriggerPending = false;
 				return;
 			}
 
