@@ -38,6 +38,18 @@ void UFlecsArtillerySubsystem::SetupWeaponTickSystem()
 				Weapon.bHasFiredSincePress = false;
 			}
 
+			// Cycling timer (bolt/pump action)
+			if (Weapon.bCycling)
+			{
+				Weapon.CycleTimeRemaining -= DeltaTime;
+				if (Weapon.CycleTimeRemaining <= 0.f)
+				{
+					Weapon.bCycling = false;
+					Weapon.bNeedsCycle = false;
+					Weapon.CycleTimeRemaining = 0.f;
+				}
+			}
+
 			// Bloom decay (CurrentBloom = bloom only, decays to 0)
 			const FWeaponStatic* Static = Entity.try_get<FWeaponStatic>();
 			if (Static)

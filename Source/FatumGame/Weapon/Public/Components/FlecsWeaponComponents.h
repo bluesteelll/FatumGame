@@ -184,6 +184,35 @@ struct FWeaponStatic
 	bool bTriggerPullEveryShot = true;
 
 	// ─────────────────────────────────────────────────────────
+	// RELOAD TYPE
+	// ─────────────────────────────────────────────────────────
+
+	/** 0 = Magazine, 1 = SingleRound (cast from EWeaponReloadType) */
+	uint8 ReloadType = 0;
+
+	/** Time to open weapon for single-round reload (0 = skip). */
+	float OpenTime = 0.0f;
+
+	/** Time to insert one round during single-round reload. */
+	float InsertRoundTime = 0.45f;
+
+	/** Time to close weapon after single-round reload (0 = skip). */
+	float CloseTime = 0.0f;
+
+	bool IsSingleRoundReload() const { return ReloadType == 1; }
+	bool IsMagazineReload() const { return ReloadType == 0; }
+
+	// ─────────────────────────────────────────────────────────
+	// POST-FIRE CYCLING
+	// ─────────────────────────────────────────────────────────
+
+	/** Weapon requires cycling after each shot (bolt/pump). */
+	bool bRequiresCycling = false;
+
+	/** Time to complete one cycle action (seconds). */
+	float CycleTime = 0.7f;
+
+	// ─────────────────────────────────────────────────────────
 	// SPREAD & BLOOM (all values in decidegrees, 1 unit = 0.1°)
 	// ─────────────────────────────────────────────────────────
 
@@ -205,9 +234,14 @@ struct FWeaponStatic
 enum class EWeaponReloadPhase : uint8
 {
 	Idle = 0,
+	// Magazine reload phases
 	RemovingMag = 1,
 	InsertingMag = 2,
-	Chambering = 3
+	Chambering = 3,
+	// Single-round reload phases
+	Opening = 4,
+	InsertingRound = 5,
+	Closing = 6
 };
 
 // ═══════════════════════════════════════════════════════════════
@@ -290,6 +324,26 @@ struct FWeaponInstance
 	int32 ShotsFiredTotal = 0;
 
 	// ─────────────────────────────────────────────────────────
+	// POST-FIRE CYCLING STATE
+	// ─────────────────────────────────────────────────────────
+
+	/** Must complete cycle before next fire (bolt/pump). Persists across weapon switches. */
+	bool bNeedsCycle = false;
+
+	/** Currently cycling (timer active). */
+	bool bCycling = false;
+
+	/** Cycle countdown timer. */
+	float CycleTimeRemaining = 0.f;
+
+	// ─────────────────────────────────────────────────────────
+	// SINGLE-ROUND RELOAD STATE
+	// ─────────────────────────────────────────────────────────
+
+	/** How many rounds inserted so far in current reload. */
+	int32 RoundsInsertedThisReload = 0;
+
+	// ─────────────────────────────────────────────────────────
 	// INPUT FLAGS (Game Thread → Simulation Thread)
 	// Set by game thread via EnqueueCommand, consumed by systems.
 	// ─────────────────────────────────────────────────────────
@@ -311,13 +365,14 @@ struct FWeaponInstance
 	// HELPERS
 	// ─────────────────────────────────────────────────────────
 
-	/** Check if weapon can fire (cooldown expired, has magazine, not reloading) */
+	/** Check if weapon can fire (cooldown expired, has magazine, not reloading, not cycling) */
 	bool CanFire() const
 	{
 		return ReloadPhase == EWeaponReloadPhase::Idle
 			&& InsertedMagazineId != 0
 			&& FireCooldownRemaining <= 0.f
-			&& BurstCooldownRemaining <= 0.f;
+			&& BurstCooldownRemaining <= 0.f
+			&& !bNeedsCycle;
 	}
 
 	/** Check if weapon is currently reloading */

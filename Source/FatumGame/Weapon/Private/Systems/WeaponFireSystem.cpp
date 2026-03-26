@@ -51,6 +51,14 @@ void UFlecsArtillerySubsystem::SetupWeaponFireSystem()
 			// Only process equipped weapons
 			if (!EquippedBy.IsEquipped()) return;
 
+			// DBG: trace fire system processing
+			if (Weapon.bFireRequested || Weapon.bFireTriggerPending)
+			{
+				UE_LOG(LogTemp, Warning, TEXT("FIRE DBG: entity=%lld FireReq=%d TrigPend=%d Phase=%d NeedsCycle=%d Cycling=%d Chambered=%d MagId=%lld"),
+					static_cast<int64>(WeaponEntity.id()), Weapon.bFireRequested, Weapon.bFireTriggerPending,
+					static_cast<int>(Weapon.ReloadPhase), Weapon.bNeedsCycle, Weapon.bCycling, Weapon.bChambered, Weapon.InsertedMagazineId);
+			}
+
 			const FWeaponStatic* Static = WeaponEntity.try_get<FWeaponStatic>();
 			if (!Static) return;
 
@@ -83,9 +91,22 @@ void UFlecsArtillerySubsystem::SetupWeaponFireSystem()
 			if (!Static->bIsAutomatic && !Static->bIsBurst && Weapon.bHasFiredSincePress)
 				return;
 
+			// Post-fire cycling: must cycle before next shot (bolt/pump)
+			if (Static->bRequiresCycling && Weapon.bNeedsCycle && !Weapon.bCycling)
+			{
+				Weapon.bCycling = true;
+				Weapon.CycleTimeRemaining = Static->CycleTime;
+				return;
+			}
+			if (Weapon.bCycling)
+				return;
+
 			// Check if can fire (cooldown expired, has magazine, not reloading)
 			if (!Weapon.CanFire())
 			{
+				UE_LOG(LogTemp, Warning, TEXT("WEAPON FIRE DBG: CanFire=false (Phase=%d, MagId=%lld, Cooldown=%.3f, Burst=%.3f, NeedsCycle=%d)"),
+					static_cast<int>(Weapon.ReloadPhase), Weapon.InsertedMagazineId,
+					Weapon.FireCooldownRemaining, Weapon.BurstCooldownRemaining, Weapon.bNeedsCycle);
 				// No magazine inserted — consume trigger so it doesn't fire after reload
 				if (Weapon.InsertedMagazineId == 0)
 					Weapon.bFireTriggerPending = false;
@@ -509,6 +530,14 @@ void UFlecsArtillerySubsystem::SetupWeaponFireSystem()
 			// If cooldown was -0.003 when we fire, += FireInterval gives 0.097
 			// instead of 0.1, compensating for the overshoot.
 			Weapon.FireCooldownRemaining += Static->FireInterval;
+
+			// Start post-fire cycling (bolt/pump must cycle before next shot)
+			if (Static->bRequiresCycling)
+			{
+				Weapon.bNeedsCycle = true;
+				Weapon.bCycling = true;
+				Weapon.CycleTimeRemaining = Static->CycleTime;
+			}
 
 			// Consume pending trigger (one shot per click guaranteed)
 			Weapon.bFireTriggerPending = false;

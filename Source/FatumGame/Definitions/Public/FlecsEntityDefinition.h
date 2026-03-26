@@ -28,6 +28,7 @@ class UFlecsNoiseZoneProfile;
 class UFlecsVitalsProfile;
 class UFlecsTemperatureZoneProfile;
 class UFlecsMagazineProfile;
+class UFlecsAmmoTypeDefinition;
 
 /**
  * Unified entity definition - a preset combining multiple profiles.
@@ -111,6 +112,11 @@ public:
 	/** Magazine - makes entity a magazine with ammo capacity */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Instanced, Category = "Profiles")
 	TObjectPtr<UFlecsMagazineProfile> MagazineProfile;
+
+	/** Ammo type — makes this a loose ammo item (for single-round reload weapons).
+	 *  Set on DA_357Round, DA_12GaugeShell, etc. Must match magazine's AcceptedAmmoTypes. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Profiles")
+	TObjectPtr<UFlecsAmmoTypeDefinition> AmmoTypeDefinition;
 
 	/** Interaction - makes entity interactable (press E) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Instanced, Category = "Profiles")

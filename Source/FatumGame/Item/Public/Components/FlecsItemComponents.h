@@ -278,3 +278,15 @@ struct FMagazineInstance
 
 /** Tag: entity is a magazine */
 struct FTagMagazine {};
+
+/** Ammo type reference — on loose ammo items in inventory.
+ *  Stores the ammo type index (matching FMagazineStatic::AcceptedAmmoTypes)
+ *  for fast lookup during single-round reload. */
+struct FAmmoTypeRef
+{
+	/** Index into FMagazineStatic::AcceptedAmmoTypes (-1 = unresolved) */
+	int32 AmmoTypeIndex = -1;
+
+	/** Pointer to the AmmoTypeDefinition (for UI, not used in sim) */
+	UFlecsAmmoTypeDefinition* Definition = nullptr;
+};

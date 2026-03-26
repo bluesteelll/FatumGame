@@ -16,6 +16,16 @@ enum class ECharacterMoveMode : uint8;
 enum class ECharacterPosture : uint8;
 
 /**
+ * Weapon reload type.
+ */
+UENUM(BlueprintType)
+enum class EWeaponReloadType : uint8
+{
+	Magazine    UMETA(DisplayName = "Magazine (Standard)"),
+	SingleRound UMETA(DisplayName = "Single Round (Shotgun/Revolver)")
+};
+
+/**
  * Weapon firing mode.
  */
 UENUM(BlueprintType)
@@ -181,6 +191,49 @@ public:
 	/** Movement speed multiplier during reload (0.3-1.0). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ammunition|Reload", meta = (ClampMin = "0.3", ClampMax = "1.0"))
 	float ReloadMoveSpeedMultiplier = 0.7f;
+
+	// ═══════════════════════════════════════════════════════════════
+	// RELOAD TYPE
+	// ═══════════════════════════════════════════════════════════════
+
+	/** Reload method. Magazine = swap magazines. SingleRound = insert rounds one at a time (shotgun/revolver). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ammunition|Reload")
+	EWeaponReloadType ReloadType = EWeaponReloadType::Magazine;
+
+	/** Time to open weapon for single-round reload (revolver cylinder open). 0 = no open phase. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ammunition|Reload",
+		meta = (ClampMin = "0.0", ClampMax = "2.0", EditCondition = "ReloadType == EWeaponReloadType::SingleRound", EditConditionHides))
+	float OpenTime = 0.0f;
+
+	/** Time to insert one round. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ammunition|Reload",
+		meta = (ClampMin = "0.1", ClampMax = "2.0", EditCondition = "ReloadType == EWeaponReloadType::SingleRound", EditConditionHides))
+	float InsertRoundTime = 0.45f;
+
+	/** Time to close weapon after single-round reload. 0 = no close phase. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ammunition|Reload",
+		meta = (ClampMin = "0.0", ClampMax = "2.0", EditCondition = "ReloadType == EWeaponReloadType::SingleRound", EditConditionHides))
+	float CloseTime = 0.0f;
+
+	/** Internal magazine definition for single-round weapons (cylinder/tube).
+	 *  Must be a separate EntityDefinition with MagazineProfile.
+	 *  Created automatically when weapon is picked up. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ammunition|Reload",
+		meta = (EditCondition = "ReloadType == EWeaponReloadType::SingleRound", EditConditionHides))
+	TObjectPtr<UFlecsEntityDefinition> InternalMagazineDefinition;
+
+	// ═══════════════════════════════════════════════════════════════
+	// POST-FIRE CYCLING (Bolt / Pump)
+	// ═══════════════════════════════════════════════════════════════
+
+	/** Weapon requires manual cycling after each shot (bolt-action, pump shotgun). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Firing|Cycling")
+	bool bRequiresCycling = false;
+
+	/** Time to complete one cycle action (seconds). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Firing|Cycling",
+		meta = (ClampMin = "0.1", ClampMax = "3.0", EditCondition = "bRequiresCycling", EditConditionHides))
+	float CycleTime = 0.7f;
 
 	// ═══════════════════════════════════════════════════════════════
 	// MUZZLE

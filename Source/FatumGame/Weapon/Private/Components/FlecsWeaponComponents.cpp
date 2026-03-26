@@ -58,6 +58,16 @@ FWeaponStatic FWeaponStatic::FromProfile(const UFlecsWeaponProfile* Profile, con
 	S.TriggerPullTime = Profile->TriggerPullTime;
 	S.bTriggerPullEveryShot = Profile->bTriggerPullEveryShot;
 
+	// Reload Type
+	S.ReloadType = static_cast<uint8>(Profile->ReloadType);
+	S.OpenTime = Profile->OpenTime;
+	S.InsertRoundTime = Profile->InsertRoundTime;
+	S.CloseTime = Profile->CloseTime;
+
+	// Post-Fire Cycling
+	S.bRequiresCycling = Profile->bRequiresCycling;
+	S.CycleTime = Profile->CycleTime;
+
 	// Spread & Bloom (decidegrees)
 	S.BaseSpread = Profile->BaseSpread;
 	S.SpreadPerShot = Profile->SpreadPerShot;

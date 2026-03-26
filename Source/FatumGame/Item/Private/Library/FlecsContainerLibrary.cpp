@@ -10,6 +10,9 @@
 #include "FlecsUISubsystem.h"
 #include "FlecsVitalsComponents.h"
 #include "FlecsWeaponComponents.h"
+#include "FlecsWeaponProfile.h"
+#include "FlecsCaliberRegistry.h"
+#include "FatumGameSettings.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogFlecsContainer, Log, All);
 
@@ -192,7 +195,48 @@ static int32 AddItemToContainerDirect(
 		if (NewEntity.has<FTagWeapon>())
 		{
 			FWeaponInstance WepInst;
+			const FWeaponStatic* WepStatic = NewEntity.try_get<FWeaponStatic>();
+
+			// Single-round weapons need an internal magazine (tube/cylinder)
+			// Created from WeaponProfile->InternalMagazineDefinition (separate data asset)
+			if (WepStatic && WepStatic->IsSingleRoundReload()
+				&& EntityDefinition && EntityDefinition->WeaponProfile
+				&& EntityDefinition->WeaponProfile->InternalMagazineDefinition
+				&& EntityDefinition->WeaponProfile->InternalMagazineDefinition->MagazineProfile)
+			{
+				UFlecsEntityDefinition* MagDef = EntityDefinition->WeaponProfile->InternalMagazineDefinition;
+
+				const UFlecsCaliberRegistry* CaliberReg = nullptr;
+				if (const UFatumGameSettings* Settings = GetDefault<UFatumGameSettings>())
+				{
+					CaliberReg = Settings->CaliberRegistry.LoadSynchronous();
+				}
+
+				FMagazineStatic InternalMagStatic = FMagazineStatic::FromProfile(
+					MagDef->MagazineProfile, CaliberReg);
+				FMagazineInstance InternalMagInst;
+				// Internal magazine starts empty — player must reload rounds into it
+
+				flecs::entity InternalMag = FlecsWorld->entity()
+					.set<FMagazineStatic>(InternalMagStatic)
+					.set<FMagazineInstance>(InternalMagInst)
+					.add<FTagMagazine>();
+
+				WepInst.InsertedMagazineId = static_cast<int64>(InternalMag.id());
+				UE_LOG(LogFlecsContainer, Log, TEXT("Weapon: Created internal magazine (capacity=%d) from %s"),
+					InternalMagStatic.Capacity, *MagDef->GetName());
+			}
+
 			NewEntity.set<FWeaponInstance>(WepInst);
+		}
+
+		// Tag loose ammo items with FAmmoTypeRef for single-round reload lookup
+		if (EntityDefinition && EntityDefinition->AmmoTypeDefinition)
+		{
+			FAmmoTypeRef AmmoRef;
+			AmmoRef.Definition = EntityDefinition->AmmoTypeDefinition;
+			// AmmoTypeIndex resolved lazily per-weapon during reload (depends on magazine)
+			NewEntity.set<FAmmoTypeRef>(AmmoRef);
 		}
 
 		return NewEntity;

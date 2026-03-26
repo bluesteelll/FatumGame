@@ -59,6 +59,9 @@ void UFlecsArtillerySubsystem::SetupWeaponEquipSystem()
 								WI->bReloadRequested = false;
 								WI->bTriggerPulling = false;
 								WI->TriggerPullTimer = 0.f;
+								// Stop cycling timer but preserve bNeedsCycle (resumes on re-equip)
+								WI->bCycling = false;
+								WI->CycleTimeRemaining = 0.f;
 							}
 						}
 					}
@@ -129,6 +132,20 @@ void UFlecsArtillerySubsystem::SetupWeaponEquipSystem()
 				Eq.CharacterEntityId = static_cast<int64>(CharEntity.id());
 				Eq.SlotId = SlotState.PendingSlotIndex;
 				NewWeapon.set<FEquippedBy>(Eq);
+
+				// Auto-cycle on equip if weapon still needs cycling from previous use
+				{
+					FWeaponInstance* NewWI = NewWeapon.try_get_mut<FWeaponInstance>();
+					if (NewWI && NewWI->bNeedsCycle && !NewWI->bCycling)
+					{
+						const FWeaponStatic* NewWS = NewWeapon.try_get<FWeaponStatic>();
+						if (NewWS && NewWS->bRequiresCycling)
+						{
+							NewWI->bCycling = true;
+							NewWI->CycleTimeRemaining = NewWS->CycleTime;
+						}
+					}
+				}
 
 				SlotState.ActiveSlotIndex = SlotState.PendingSlotIndex;
 				SlotState.PendingSlotIndex = -1;
