@@ -171,6 +171,19 @@ struct FWeaponStatic
 	float EquipTime = 0.5f;
 
 	// ─────────────────────────────────────────────────────────
+	// TRIGGER PULL
+	// ─────────────────────────────────────────────────────────
+
+	/** Enable trigger pull delay (revolver double-action). If false, system skipped entirely. */
+	bool bEnableTriggerPull = false;
+
+	/** Time to complete trigger pull before shot fires (seconds). */
+	float TriggerPullTime = 0.15f;
+
+	/** Every shot requires trigger pull (double-action) vs only first (single-action while held). */
+	bool bTriggerPullEveryShot = true;
+
+	// ─────────────────────────────────────────────────────────
 	// SPREAD & BLOOM (all values in decidegrees, 1 unit = 0.1°)
 	// ─────────────────────────────────────────────────────────
 
@@ -266,6 +279,12 @@ struct FWeaponInstance
 
 	/** Seconds since last successful fire (for recovery delay) */
 	float TimeSinceLastShot = 999.f;
+
+	/** Trigger pull timer (counts down to 0, then fires). Only used when bEnableTriggerPull. */
+	float TriggerPullTimer = 0.f;
+
+	/** True while trigger is being pulled (holding fire, waiting for TriggerPullTime). */
+	bool bTriggerPulling = false;
 
 	/** Total shots fired since equip (monotonic, for pattern recoil indexing on game thread) */
 	int32 ShotsFiredTotal = 0;

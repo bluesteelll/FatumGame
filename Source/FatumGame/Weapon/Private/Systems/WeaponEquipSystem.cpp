@@ -57,6 +57,8 @@ void UFlecsArtillerySubsystem::SetupWeaponEquipSystem()
 								WI->bFireRequested = false;
 								WI->bFireTriggerPending = false;
 								WI->bReloadRequested = false;
+								WI->bTriggerPulling = false;
+								WI->TriggerPullTimer = 0.f;
 							}
 						}
 					}

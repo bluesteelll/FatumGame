@@ -126,6 +126,25 @@ public:
 	int32 ProjectilesPerShot = 1;
 
 	// ═══════════════════════════════════════════════════════════════
+	// TRIGGER PULL (revolver-style delayed fire)
+	// ═══════════════════════════════════════════════════════════════
+
+	/** Enable trigger pull delay before firing. When false, system is completely skipped. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Firing|Trigger Pull")
+	bool bEnableTriggerPull = false;
+
+	/** Time to pull trigger before shot fires (seconds). Player must hold fire for this duration. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Firing|Trigger Pull",
+		meta = (ClampMin = "0.01", ClampMax = "1.0", EditCondition = "bEnableTriggerPull", EditConditionHides))
+	float TriggerPullTime = 0.15f;
+
+	/** If true, every shot requires a full trigger pull (double-action).
+	 *  If false, only the first shot has a delay — subsequent shots while held fire normally (single-action). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Firing|Trigger Pull",
+		meta = (EditCondition = "bEnableTriggerPull", EditConditionHides))
+	bool bTriggerPullEveryShot = true;
+
+	// ═══════════════════════════════════════════════════════════════
 	// AMMUNITION & RELOAD
 	// ═══════════════════════════════════════════════════════════════
 

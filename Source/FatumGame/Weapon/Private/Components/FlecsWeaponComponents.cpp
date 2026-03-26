@@ -53,6 +53,11 @@ FWeaponStatic FWeaponStatic::FromProfile(const UFlecsWeaponProfile* Profile, con
 	S.EquipMontage = Profile->EquipMontage;
 	S.EquipTime = Profile->EquipTime;
 
+	// Trigger Pull
+	S.bEnableTriggerPull = Profile->bEnableTriggerPull;
+	S.TriggerPullTime = Profile->TriggerPullTime;
+	S.bTriggerPullEveryShot = Profile->bTriggerPullEveryShot;
+
 	// Spread & Bloom (decidegrees)
 	S.BaseSpread = Profile->BaseSpread;
 	S.SpreadPerShot = Profile->SpreadPerShot;

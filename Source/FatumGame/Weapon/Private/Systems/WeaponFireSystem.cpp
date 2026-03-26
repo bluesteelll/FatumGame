@@ -58,14 +58,30 @@ void UFlecsArtillerySubsystem::SetupWeaponFireSystem()
 			if (Static->bUnlimitedAmmo && !Static->ProjectileDefinition) return;
 
 			// Check fire request: continuous hold OR pending trigger (survives Start+Stop batching)
-			if (!Weapon.bFireRequested && !Weapon.bFireTriggerPending) return;
+			// Trigger pull weapons require CONTINUOUS hold — latched trigger not sufficient
+			if (Static->bEnableTriggerPull)
+			{
+				if (!Weapon.bFireRequested)
+				{
+					// Fire released — cancel trigger pull, consume pending trigger
+					if (Weapon.bTriggerPulling)
+					{
+						Weapon.bTriggerPulling = false;
+						Weapon.TriggerPullTimer = 0.f;
+					}
+					Weapon.bFireTriggerPending = false;
+					return;
+				}
+			}
+			else
+			{
+				if (!Weapon.bFireRequested && !Weapon.bFireTriggerPending)
+					return;
+			}
 
 			// Semi-auto: block if already fired while trigger held
 			if (!Static->bIsAutomatic && !Static->bIsBurst && Weapon.bHasFiredSincePress)
-			{
-				UE_LOG(LogTemp, Warning, TEXT("WEAPON: Blocked by semi-auto (bHasFiredSincePress=true)"));
 				return;
-			}
 
 			// Check if can fire (cooldown expired, has magazine, not reloading)
 			if (!Weapon.CanFire())
@@ -74,6 +90,37 @@ void UFlecsArtillerySubsystem::SetupWeaponFireSystem()
 				if (Weapon.InsertedMagazineId == 0)
 					Weapon.bFireTriggerPending = false;
 				return;
+			}
+
+			// ── Trigger pull delay (revolver double-action) ──
+			if (Static->bEnableTriggerPull)
+			{
+				const float DeltaTime = WeaponEntity.world().get_info()->delta_time;
+
+				if (!Weapon.bTriggerPulling)
+				{
+					// First shot always requires pull. Subsequent: only if bTriggerPullEveryShot.
+					bool bNeedsPull = (Weapon.ShotsFiredTotal == 0)
+						|| Static->bTriggerPullEveryShot
+						|| !Weapon.bFireRequested;  // re-press after release = new pull
+
+					if (bNeedsPull && Weapon.FireCooldownRemaining <= 0.f)
+					{
+						Weapon.bTriggerPulling = true;
+						Weapon.TriggerPullTimer = Static->TriggerPullTime;
+					}
+				}
+
+				if (Weapon.bTriggerPulling)
+				{
+					Weapon.TriggerPullTimer -= DeltaTime;
+					if (Weapon.TriggerPullTimer > 0.f)
+						return;  // still pulling — don't fire yet
+
+					// Pull complete — proceed to fire
+					Weapon.bTriggerPulling = false;
+					Weapon.TriggerPullTimer = 0.f;
+				}
 			}
 
 			// Check magazine has ammo or chambered round (only for non-unlimited)
