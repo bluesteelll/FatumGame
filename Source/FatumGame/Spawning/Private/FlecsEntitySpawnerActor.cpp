@@ -69,6 +69,10 @@ FSkeletonKey AFlecsEntitySpawner::SpawnEntity()
 
 	// Apply overrides
 	Request.InitialVelocity = InitialVelocity;
+	if (ItemCount > 1)
+	{
+		Request.ItemCount = ItemCount;
+	}
 
 	if (bOverrideFocusCamera)
 	{

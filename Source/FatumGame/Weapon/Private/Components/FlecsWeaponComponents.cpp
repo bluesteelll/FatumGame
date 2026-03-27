@@ -86,5 +86,23 @@ FWeaponStatic FWeaponStatic::FromProfile(const UFlecsWeaponProfile* Profile, con
 		S.BloomMultipliers[i] = M.BloomMultiplier;
 	}
 
+	// Pellet ring spread (Technique G)
+	S.PelletRingCount = FMath::Min(Profile->PelletRings.Num(), FWeaponStatic::MaxPelletRings);
+	for (int32 i = 0; i < S.PelletRingCount; ++i)
+	{
+		S.PelletRings[i].PelletCount = Profile->PelletRings[i].PelletCount;
+		S.PelletRings[i].RadiusRadians = FMath::DegreesToRadians(Profile->PelletRings[i].RadiusDecidegrees * 0.1f);
+		S.PelletRings[i].AngularJitterRadians = FMath::DegreesToRadians(Profile->PelletRings[i].AngularJitterDecidegrees * 0.1f);
+		S.PelletRings[i].RadialJitterRadians = FMath::DegreesToRadians(Profile->PelletRings[i].RadialJitterDecidegrees * 0.1f);
+	}
+	// If rings defined, derive ProjectilesPerShot from ring total (rings are authoritative)
+	if (S.PelletRingCount > 0)
+	{
+		int32 Total = 0;
+		for (int32 i = 0; i < S.PelletRingCount; ++i)
+			Total += S.PelletRings[i].PelletCount;
+		S.ProjectilesPerShot = Total;
+	}
+
 	return S;
 }

@@ -11,6 +11,8 @@
 #include "FlecsMovementComponents.h"
 #include "FlecsContainerLibrary.h"
 #include "FlecsVitalsComponents.h"
+#include "FlecsEntityComponents.h"
+#include "FlecsEntityDefinition.h"
 
 void UFlecsArtillerySubsystem::SetupWeaponReloadSystem()
 {
@@ -493,15 +495,18 @@ void UFlecsArtillerySubsystem::SetupWeaponReloadSystem()
 				if (InvId != 0)
 				{
 					Entity.world().each([&](flecs::entity AmmoEntity, const FContainedIn& CI,
-						FItemInstance& Item, const FAmmoTypeRef& AmmoRef)
+						FItemInstance& Item)
 					{
 						if (FoundAmmoEntity.is_valid()) return;  // already found one
 						if (CI.ContainerEntityId != InvId) return;  // wrong container
 						if (Item.Count <= 0) return;  // empty stack
-						if (!AmmoRef.Definition) return;  // no ammo type
+
+						// Get AmmoTypeDefinition via prefab → EntityDefinitionRef
+						const FEntityDefinitionRef* DefRef = AmmoEntity.try_get<FEntityDefinitionRef>();
+						if (!DefRef || !DefRef->Definition || !DefRef->Definition->AmmoTypeDefinition) return;
 
 						// Check if this ammo type is accepted by the magazine
-						int32 Idx = MagStatic->FindAmmoTypeIndex(AmmoRef.Definition);
+						int32 Idx = MagStatic->FindAmmoTypeIndex(DefRef->Definition->AmmoTypeDefinition);
 						if (Idx < 0) return;  // incompatible
 
 						FoundAmmoEntity = AmmoEntity;

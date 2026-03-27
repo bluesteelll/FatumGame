@@ -57,6 +57,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flecs Entity|Overrides")
 	FVector InitialVelocity = FVector::ZeroVector;
 
+	/** Item stack count (for items/ammo). 1 = use EntityDefinition default */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flecs Entity|Overrides", meta = (ClampMin = "1"))
+	int32 ItemCount = 1;
+
 	/** Override scale from RenderProfile */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flecs Entity|Overrides")
 	bool bOverrideScale = false;

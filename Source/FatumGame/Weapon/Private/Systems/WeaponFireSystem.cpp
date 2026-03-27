@@ -364,7 +364,69 @@ void UFlecsArtillerySubsystem::SetupWeaponFireSystem()
 			// Decidegrees → radians (÷10 → degrees → radians)
 			const float SpreadRadians = FMath::DegreesToRadians(EffectiveSpread * 0.1f);
 
-			for (int32 i = 0; i < Static->ProjectilesPerShot; ++i)
+			// ─────────────────────────────────────────────────────────
+			// PELLET DIRECTIONS
+			// Ring system (Technique G): fixed rings + random rotation per shot.
+			// Legacy path: independent VRandCone per pellet (single-projectile weapons).
+			// ─────────────────────────────────────────────────────────
+			TArray<FVector, TInlineAllocator<16>> PelletDirections;
+			PelletDirections.Reserve(Static->ProjectilesPerShot);
+
+			if (Static->PelletRingCount > 0)
+			{
+				// Sample bloom ONCE — all pellets share the same cone center drift
+				FVector BloomDirection = SpawnDirection;
+				if (SpreadRadians > KINDA_SMALL_NUMBER)
+					BloomDirection = FMath::VRandCone(SpawnDirection, SpreadRadians);
+
+				// Random rotation applied uniformly to all rings this shot
+				const float RandomRotation = FMath::FRandRange(0.f, TWO_PI);
+
+				// Build right/up basis perpendicular to bloom direction
+				FVector Right, Up;
+				BloomDirection.FindBestAxisVectors(Right, Up);
+
+				for (int32 RingIdx = 0; RingIdx < Static->PelletRingCount; ++RingIdx)
+				{
+					const FPelletRingData& Ring = Static->PelletRings[RingIdx];
+
+					const float AngleStep = Ring.PelletCount > 1 ? (TWO_PI / Ring.PelletCount) : 0.f;
+					for (int32 PelletIdx = 0; PelletIdx < Ring.PelletCount; ++PelletIdx)
+					{
+						// Per-pellet jitter: angular (along ring) and radial (toward/away from center)
+						const float AzimuthJitter = Ring.AngularJitterRadians > KINDA_SMALL_NUMBER
+							? FMath::FRandRange(-Ring.AngularJitterRadians, Ring.AngularJitterRadians) : 0.f;
+						const float RadiusJitter = Ring.RadialJitterRadians > KINDA_SMALL_NUMBER
+							? FMath::FRandRange(-Ring.RadialJitterRadians, Ring.RadialJitterRadians) : 0.f;
+
+						const float Azimuth = RandomRotation + PelletIdx * AngleStep + AzimuthJitter;
+						const float JitteredRadius = Ring.RadiusRadians + RadiusJitter;
+
+						float SinR, CosR;
+						FMath::SinCos(&SinR, &CosR, JitteredRadius);
+						float SinA, CosA;
+						FMath::SinCos(&SinA, &CosA, Azimuth);
+
+						FVector Dir = BloomDirection * CosR
+							+ Right * (SinR * CosA)
+							+ Up    * (SinR * SinA);
+						PelletDirections.Add(Dir.GetSafeNormal());
+					}
+				}
+			}
+			else
+			{
+				// Legacy: each pellet independently samples within spread cone
+				for (int32 i = 0; i < Static->ProjectilesPerShot; ++i)
+				{
+					FVector Dir = SpawnDirection;
+					if (SpreadRadians > KINDA_SMALL_NUMBER)
+						Dir = FMath::VRandCone(SpawnDirection, SpreadRadians);
+					PelletDirections.Add(Dir);
+				}
+			}
+
+			for (int32 i = 0; i < PelletDirections.Num(); ++i)
 			{
 				FSkeletonKey ProjectileKey = FBarrageSpawnUtils::GenerateUniqueKey(SKELLY::SFIX_GUN_SHOT);
 
@@ -392,12 +454,7 @@ void UFlecsArtillerySubsystem::SetupWeaponFireSystem()
 					continue;
 				}
 
-				// Apply bloom: perturb direction per pellet
-				FVector PelletDirection = SpawnDirection;
-				if (SpreadRadians > KINDA_SMALL_NUMBER)
-				{
-					PelletDirection = FMath::VRandCone(SpawnDirection, SpreadRadians);
-				}
+				FVector PelletDirection = PelletDirections[i];
 				FVector PelletVelocity = PelletDirection * Speed;
 
 				FBarragePrimitive::SetVelocity(PelletVelocity, Body);

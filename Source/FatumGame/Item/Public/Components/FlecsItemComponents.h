@@ -284,9 +284,6 @@ struct FTagMagazine {};
  *  for fast lookup during single-round reload. */
 struct FAmmoTypeRef
 {
-	/** Index into FMagazineStatic::AcceptedAmmoTypes (-1 = unresolved) */
+	/** Index into FMagazineStatic::AcceptedAmmoTypes (-1 = unresolved, resolved lazily per-weapon) */
 	int32 AmmoTypeIndex = -1;
-
-	/** Pointer to the AmmoTypeDefinition (for UI, not used in sim) */
-	UFlecsAmmoTypeDefinition* Definition = nullptr;
 };

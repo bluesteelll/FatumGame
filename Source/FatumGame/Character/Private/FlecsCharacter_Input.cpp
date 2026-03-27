@@ -215,6 +215,15 @@ void AFlecsCharacter::StartFire(const FInputActionValue& Value)
 {
 	if (InputAtomics) InputAtomics->SetInputBit(InputBit::FireHeld);
 
+	// If currently reloading, send fire request to weapon so reload system can cancel
+	// (single-round reload: fire interrupts and shoots immediately)
+	const uint64 State = GameActionState.load(std::memory_order_relaxed);
+	if (HasBit(State, ActionBit::Reloading) && ActiveWeaponEntityId != 0)
+	{
+		StartFiringWeapon();
+		return;
+	}
+
 	// Rule table handles blocks (Mantling, Climbing, LedgeHang, Dead, WeaponRetracted, etc.)
 	// CanceledOnEntry handles Sprinting cancel
 	if (!SetGameBit(ActionBit::Firing))

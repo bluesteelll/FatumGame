@@ -86,6 +86,29 @@ struct FWeaponStateMultipliers
  *  Priority: Slide > Airborne > Sprint > Crouch > Walk > Idle. */
 FATUMGAME_API EWeaponMoveState ResolveWeaponMoveState(uint8 MoveMode, uint8 Posture);
 
+/** Defines one ring of pellets in the shotgun spread pattern. */
+USTRUCT(BlueprintType)
+struct FPelletRing
+{
+	GENERATED_BODY()
+
+	/** Number of pellets evenly distributed around this ring */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta = (ClampMin = "1", ClampMax = "20"))
+	int32 PelletCount = 4;
+
+	/** Angular radius from cone center in decidegrees (0 = center, 30 = 3.0°) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta = (ClampMin = "0", ClampMax = "200"))
+	float RadiusDecidegrees = 20.f;
+
+	/** Per-pellet angular jitter around the ring (decidegrees). Breaks geometric regularity. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta = (ClampMin = "0", ClampMax = "50"))
+	float AngularJitterDecidegrees = 3.f;
+
+	/** Per-pellet radial jitter toward/away from center (decidegrees). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta = (ClampMin = "0", ClampMax = "50"))
+	float RadialJitterDecidegrees = 2.f;
+};
+
 /**
  * Weapon profile - defines weapon behavior and configuration.
  *
@@ -134,6 +157,12 @@ public:
 	/** Projectiles per shot (>1 for shotguns) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Firing", meta = (ClampMin = "1", ClampMax = "20"))
 	int32 ProjectilesPerShot = 1;
+
+	/** Pellet ring spread pattern (shotguns). If non-empty, overrides ProjectilesPerShot.
+	 *  Ring 0: center pellet(s) (RadiusDecidegrees=0). Remaining rings spread outward.
+	 *  All rings rotate by the same random angle per shot. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Firing")
+	TArray<FPelletRing> PelletRings;
 
 	// ═══════════════════════════════════════════════════════════════
 	// TRIGGER PULL (revolver-style delayed fire)

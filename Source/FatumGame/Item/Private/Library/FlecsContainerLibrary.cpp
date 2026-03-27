@@ -230,15 +230,6 @@ static int32 AddItemToContainerDirect(
 			NewEntity.set<FWeaponInstance>(WepInst);
 		}
 
-		// Tag loose ammo items with FAmmoTypeRef for single-round reload lookup
-		if (EntityDefinition && EntityDefinition->AmmoTypeDefinition)
-		{
-			FAmmoTypeRef AmmoRef;
-			AmmoRef.Definition = EntityDefinition->AmmoTypeDefinition;
-			// AmmoTypeIndex resolved lazily per-weapon during reload (depends on magazine)
-			NewEntity.set<FAmmoTypeRef>(AmmoRef);
-		}
-
 		return NewEntity;
 	};
 

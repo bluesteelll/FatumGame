@@ -12,6 +12,15 @@ class USkeletalMesh;
 class UStaticMesh;
 class UAnimMontage;
 
+/** Sim-thread ring data (no UObject dependencies). */
+struct FPelletRingData
+{
+	int32 PelletCount = 0;
+	float RadiusRadians = 0.f;        // pre-converted from decidegrees
+	float AngularJitterRadians = 0.f; // jitter along the ring (azimuth)
+	float RadialJitterRadians = 0.f;  // jitter toward/away from center
+};
+
 // ═══════════════════════════════════════════════════════════════
 // AIM DIRECTION (Per-Character)
 // ═══════════════════════════════════════════════════════════════
@@ -226,6 +235,11 @@ struct FWeaponStatic
 	static constexpr int32 NumMoveStates = 6;
 	float BaseSpreadMultipliers[NumMoveStates] = {1.f, 1.f, 1.f, 1.f, 1.f, 1.f};
 	float BloomMultipliers[NumMoveStates] = {1.f, 1.f, 1.f, 1.f, 1.f, 1.f};
+
+	/** Ring-based pellet spread (Technique G). PelletRingCount=0 -> legacy random VRandCone. */
+	static constexpr int32 MaxPelletRings = 4;
+	int32 PelletRingCount = 0;
+	FPelletRingData PelletRings[MaxPelletRings];
 
 	static FWeaponStatic FromProfile(const UFlecsWeaponProfile* Profile, const class UFlecsCaliberRegistry* CaliberRegistry = nullptr);
 };
