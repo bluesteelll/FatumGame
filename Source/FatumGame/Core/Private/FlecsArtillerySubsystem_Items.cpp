@@ -37,6 +37,7 @@
 #include "FlecsVitalsItemProfile.h"
 #include "FlecsTemperatureZoneProfile.h"
 #include "FlecsVitalsComponents.h"
+#include "FlecsQuickLoadProfile.h"
 
 // ═══════════════════════════════════════════════════════════════
 // ENTITY PREFAB REGISTRY IMPLEMENTATION
@@ -100,6 +101,12 @@ flecs::entity UFlecsArtillerySubsystem::GetOrCreateEntityPrefab(UFlecsEntityDefi
 
 	if (EntityDefinition->MagazineProfile)
 		Prefab.set<FMagazineStatic>(FMagazineStatic::FromProfile(EntityDefinition->MagazineProfile, CaliberRegistry));
+
+	if (EntityDefinition->QuickLoadProfile)
+	{
+		Prefab.set<FQuickLoadStatic>(FQuickLoadStatic::FromProfile(EntityDefinition->QuickLoadProfile, CaliberRegistry));
+		Prefab.add<FTagQuickLoadDevice>();
+	}
 
 	if (EntityDefinition->InteractionProfile)
 		Prefab.set<FInteractionStatic>(FInteractionStatic::FromProfile(EntityDefinition->InteractionProfile));
@@ -211,7 +218,7 @@ flecs::entity UFlecsArtillerySubsystem::GetOrCreateEntityPrefab(UFlecsEntityDefi
 	// Store in registry
 	EntityPrefabs.Add(EntityDefinition, Prefab);
 
-	UE_LOG(LogTemp, Log, TEXT("Created entity prefab: '%s' (Health=%d, Damage=%d, Projectile=%d, Container=%d, Item=%d, Weapon=%d, Interaction=%d, Destructible=%d, Door=%d, Movement=%d, Ability=%d, Resources=%d, Climb=%d, Swing=%d, StealthLight=%d, NoiseZone=%d, Vitals=%d, TempZone=%d)"),
+	UE_LOG(LogTemp, Log, TEXT("Created entity prefab: '%s' (Health=%d, Damage=%d, Projectile=%d, Container=%d, Item=%d, Weapon=%d, Interaction=%d, Destructible=%d, Door=%d, Movement=%d, Ability=%d, Resources=%d, Climb=%d, Swing=%d, StealthLight=%d, NoiseZone=%d, Vitals=%d, TempZone=%d, QuickLoad=%d)"),
 		*EntityDefinition->GetName(),
 		EntityDefinition->HealthProfile != nullptr,
 		EntityDefinition->DamageProfile != nullptr,
@@ -230,7 +237,8 @@ flecs::entity UFlecsArtillerySubsystem::GetOrCreateEntityPrefab(UFlecsEntityDefi
 		EntityDefinition->StealthLightProfile != nullptr,
 		EntityDefinition->NoiseZoneProfile != nullptr,
 		EntityDefinition->VitalsProfile != nullptr,
-		EntityDefinition->TemperatureZoneProfile != nullptr);
+		EntityDefinition->TemperatureZoneProfile != nullptr,
+		EntityDefinition->QuickLoadProfile != nullptr);
 
 	return Prefab;
 }

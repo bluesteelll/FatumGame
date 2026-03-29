@@ -135,6 +135,12 @@ void UFlecsArtillerySubsystem::RegisterFlecsComponents()
 	World.component<FTagReloading>();
 
 	// ─────────────────────────────────────────────────────────
+	// QUICK-LOAD DEVICE COMPONENTS
+	// ─────────────────────────────────────────────────────────
+	World.component<FQuickLoadStatic>();
+	World.component<FTagQuickLoadDevice>();
+
+	// ─────────────────────────────────────────────────────────
 	// MOVEMENT COMPONENTS
 	// ─────────────────────────────────────────────────────────
 	World.component<FMovementState>();

@@ -29,6 +29,7 @@ class UFlecsVitalsProfile;
 class UFlecsTemperatureZoneProfile;
 class UFlecsMagazineProfile;
 class UFlecsAmmoTypeDefinition;
+class UFlecsQuickLoadProfile;
 
 /**
  * Unified entity definition - a preset combining multiple profiles.
@@ -117,6 +118,10 @@ public:
 	 *  Set on DA_357Round, DA_12GaugeShell, etc. Must match magazine's AcceptedAmmoTypes. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Profiles")
 	TObjectPtr<UFlecsAmmoTypeDefinition> AmmoTypeDefinition;
+
+	/** Quick-load device profile — makes this item a stripper clip or speedloader. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Instanced, Category = "Profiles")
+	TObjectPtr<UFlecsQuickLoadProfile> QuickLoadProfile;
 
 	/** Interaction - makes entity interactable (press E) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Instanced, Category = "Profiles")
@@ -230,7 +235,8 @@ public:
 			|| StealthLightProfile != nullptr
 			|| NoiseZoneProfile != nullptr
 			|| VitalsProfile != nullptr
-			|| TemperatureZoneProfile != nullptr;
+			|| TemperatureZoneProfile != nullptr
+			|| QuickLoadProfile != nullptr;
 	}
 
 	/** Check if this will create a world entity (physics or render) */

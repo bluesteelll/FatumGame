@@ -287,3 +287,44 @@ struct FAmmoTypeRef
 	/** Index into FMagazineStatic::AcceptedAmmoTypes (-1 = unresolved, resolved lazily per-weapon) */
 	int32 AmmoTypeIndex = -1;
 };
+
+// ═══════════════════════════════════════════════════════════════
+// QUICK-LOAD DEVICES (Stripper Clips, Speedloaders)
+// ═══════════════════════════════════════════════════════════════
+
+/** Type of quick-load device. */
+enum class EQuickLoadDeviceType : uint8
+{
+	StripperClip = 0,
+	Speedloader  = 1
+};
+
+/** Bitmask constants for FWeaponStatic::AcceptedDeviceTypes */
+inline constexpr uint8 QUICKLOAD_BIT_STRIPPERCLIP = 1 << 0;
+inline constexpr uint8 QUICKLOAD_BIT_SPEEDLOADER  = 1 << 1;
+
+/** Convert device type to bitmask bit. */
+inline uint8 QuickLoadDeviceBit(EQuickLoadDeviceType Type)
+{
+	return 1 << static_cast<uint8>(Type);
+}
+
+class UFlecsQuickLoadProfile;
+class UFlecsCaliberRegistry;
+class UFlecsAmmoTypeDefinition;
+
+/** Static data for a quick-load device (on prefab). Sim thread only. */
+struct FQuickLoadStatic
+{
+	EQuickLoadDeviceType DeviceType = EQuickLoadDeviceType::StripperClip;
+	int32 RoundsHeld = 5;
+	uint8 CaliberId = 0xFF;
+	const UFlecsAmmoTypeDefinition* AmmoTypeDefinition = nullptr;
+	float InsertTime = 0.8f;
+	bool bRequiresEmptyMagazine = false;
+
+	static FQuickLoadStatic FromProfile(const UFlecsQuickLoadProfile* Profile, const UFlecsCaliberRegistry* CaliberRegistry);
+};
+
+/** Tag for quick query filtering. */
+struct FTagQuickLoadDevice {};

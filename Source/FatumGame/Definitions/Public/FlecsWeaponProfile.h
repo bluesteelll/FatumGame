@@ -252,6 +252,35 @@ public:
 	TObjectPtr<UFlecsEntityDefinition> InternalMagazineDefinition;
 
 	// ═══════════════════════════════════════════════════════════════
+	// QUICK-LOAD DEVICES
+	// ═══════════════════════════════════════════════════════════════
+
+	/** Accept stripper clips for batch loading. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ammunition|Quick Load",
+		meta = (EditCondition = "ReloadType == EWeaponReloadType::SingleRound", EditConditionHides))
+	bool bAcceptStripperClips = false;
+
+	/** Accept speedloaders for batch loading. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ammunition|Quick Load",
+		meta = (EditCondition = "ReloadType == EWeaponReloadType::SingleRound", EditConditionHides))
+	bool bAcceptSpeedloaders = false;
+
+	/** Disable quick-load devices entirely (overrides accept flags). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ammunition|Quick Load",
+		meta = (EditCondition = "ReloadType == EWeaponReloadType::SingleRound", EditConditionHides))
+	bool bDisableQuickLoadDevices = false;
+
+	/** Open phase duration when using a device (seconds). 0 = use standard OpenTime. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ammunition|Quick Load",
+		meta = (ClampMin = "0.0", ClampMax = "3.0", EditCondition = "ReloadType == EWeaponReloadType::SingleRound", EditConditionHides))
+	float OpenTimeDevice = 0.0f;
+
+	/** Close phase duration when using a device (seconds). 0 = use standard CloseTime. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ammunition|Quick Load",
+		meta = (ClampMin = "0.0", ClampMax = "3.0", EditCondition = "ReloadType == EWeaponReloadType::SingleRound", EditConditionHides))
+	float CloseTimeDevice = 0.0f;
+
+	// ═══════════════════════════════════════════════════════════════
 	// POST-FIRE CYCLING (Bolt / Pump)
 	// ═══════════════════════════════════════════════════════════════
 

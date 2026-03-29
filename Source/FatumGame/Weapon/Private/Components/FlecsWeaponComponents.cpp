@@ -3,6 +3,7 @@
 #include "FlecsWeaponComponents.h"
 #include "FlecsWeaponProfile.h"
 #include "FlecsCaliberRegistry.h"
+#include "FlecsItemComponents.h"
 
 FWeaponStatic FWeaponStatic::FromProfile(const UFlecsWeaponProfile* Profile, const UFlecsCaliberRegistry* CaliberRegistry)
 {
@@ -63,6 +64,14 @@ FWeaponStatic FWeaponStatic::FromProfile(const UFlecsWeaponProfile* Profile, con
 	S.OpenTime = Profile->OpenTime;
 	S.InsertRoundTime = Profile->InsertRoundTime;
 	S.CloseTime = Profile->CloseTime;
+
+	// Quick-Load Devices
+	S.AcceptedDeviceTypes = 0;
+	if (Profile->bAcceptStripperClips) S.AcceptedDeviceTypes |= QUICKLOAD_BIT_STRIPPERCLIP;
+	if (Profile->bAcceptSpeedloaders) S.AcceptedDeviceTypes |= QUICKLOAD_BIT_SPEEDLOADER;
+	S.bDisableQuickLoadDevices = Profile->bDisableQuickLoadDevices;
+	S.OpenTimeDevice = Profile->OpenTimeDevice;
+	S.CloseTimeDevice = Profile->CloseTimeDevice;
 
 	// Post-Fire Cycling
 	S.bRequiresCycling = Profile->bRequiresCycling;

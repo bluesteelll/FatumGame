@@ -27,10 +27,12 @@ public:
 	{
 		check(Config);
 		const UInputAction* IA = Config->FindNativeInputActionForTag(InputTag);
-		if (ensureMsgf(IA, TEXT("BindNativeAction: InputTag '%s' not found in InputConfig '%s'"),
-			*InputTag.ToString(), *GetNameSafe(Config)))
+		if (!IA)
 		{
-			BindAction(IA, TriggerEvent, Object, Func);
+			UE_LOG(LogTemp, Warning, TEXT("BindNativeAction: InputTag '%s' not found in InputConfig '%s' — skipping"),
+				*InputTag.ToString(), *GetNameSafe(Config));
+			return;
 		}
+		BindAction(IA, TriggerEvent, Object, Func);
 	}
 };

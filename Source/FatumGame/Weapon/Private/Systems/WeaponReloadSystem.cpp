@@ -1,5 +1,6 @@
 // FlecsArtillerySubsystem - WeaponReloadSystem
-// Phase-based reload state machine: Remove → Insert → Chamber.
+// Phase-based reload state machine: Remove -> Insert -> Chamber.
+// Single-round reload with quick-load device support (stripper clips, speedloaders).
 
 #include "FlecsArtillerySubsystem.h"
 #include "FlecsGameTags.h"
@@ -14,12 +15,102 @@
 #include "FlecsEntityComponents.h"
 #include "FlecsEntityDefinition.h"
 
+// ─────────────────────────────────────────────────────────
+// Quick-load device scan helper (used at reload start and after each batch)
+// ─────────────────────────────────────────────────────────
+struct FDeviceScanResult
+{
+	flecs::entity DeviceEntity;
+	EActiveLoadMethod Method = EActiveLoadMethod::None;
+	int32 BatchSize = 0;
+	float InsertTime = 0.f;
+	uint8 AmmoTypeIdx = 0;
+
+	bool IsValid() const { return DeviceEntity.is_valid(); }
+};
+
+static FDeviceScanResult ScanForQuickLoadDevice(
+	flecs::world World,
+	int64 InvId,
+	const FWeaponStatic* WeaponStatic,
+	const FMagazineStatic* MagStatic,
+	const FMagazineInstance* MagInst,
+	int32 AvailableSlots)
+{
+	FDeviceScanResult Result;
+
+	if (WeaponStatic->AcceptedDeviceTypes == 0 || WeaponStatic->bDisableQuickLoadDevices)
+		return Result;
+	if (AvailableSlots <= 0)
+		return Result;
+
+	flecs::entity BestSpeedloader;
+	const FQuickLoadStatic* BestSpeedloaderData = nullptr;
+	flecs::entity BestClip;
+	const FQuickLoadStatic* BestClipData = nullptr;
+
+	World.each([&](flecs::entity ItemEntity, const FContainedIn& CI, const FItemInstance& Item)
+	{
+		if (CI.ContainerEntityId != InvId) return;
+		if (Item.Count <= 0) return;
+
+		const FQuickLoadStatic* QLS = ItemEntity.try_get<FQuickLoadStatic>();
+		if (!QLS) return;
+		if (!WeaponStatic->AcceptsCaliber(QLS->CaliberId)) return;
+		if (!WeaponStatic->AcceptsDeviceType(QuickLoadDeviceBit(QLS->DeviceType))) return;
+		if (!QLS->AmmoTypeDefinition) return;
+		if (MagStatic->FindAmmoTypeIndex(QLS->AmmoTypeDefinition) < 0) return;
+		if (QLS->bRequiresEmptyMagazine && MagInst->AmmoCount > 0) return;
+
+		if (QLS->DeviceType == EQuickLoadDeviceType::Speedloader)
+		{
+			if (!BestSpeedloaderData || QLS->RoundsHeld > BestSpeedloaderData->RoundsHeld)
+			{
+				BestSpeedloader = ItemEntity;
+				BestSpeedloaderData = QLS;
+			}
+		}
+		else
+		{
+			if (!BestClipData || QLS->RoundsHeld > BestClipData->RoundsHeld)
+			{
+				BestClip = ItemEntity;
+				BestClipData = QLS;
+			}
+		}
+	});
+
+	// Priority: Speedloader > StripperClip
+	const FQuickLoadStatic* ChosenData = nullptr;
+	if (BestSpeedloader.is_valid())
+	{
+		Result.DeviceEntity = BestSpeedloader;
+		ChosenData = BestSpeedloaderData;
+		Result.Method = EActiveLoadMethod::Speedloader;
+	}
+	else if (BestClip.is_valid())
+	{
+		Result.DeviceEntity = BestClip;
+		ChosenData = BestClipData;
+		Result.Method = EActiveLoadMethod::StripperClip;
+	}
+
+	if (ChosenData)
+	{
+		Result.BatchSize = FMath::Min(ChosenData->RoundsHeld, AvailableSlots);
+		Result.InsertTime = ChosenData->InsertTime;
+		Result.AmmoTypeIdx = static_cast<uint8>(MagStatic->FindAmmoTypeIndex(ChosenData->AmmoTypeDefinition));
+	}
+
+	return Result;
+}
+
 void UFlecsArtillerySubsystem::SetupWeaponReloadSystem()
 {
 	flecs::world& World = *FlecsWorld;
 
 	// ─────────────────────────────────────────────────────────
-	// WEAPON RELOAD SYSTEM (Phase-based: Remove → Insert → Chamber)
+	// WEAPON RELOAD SYSTEM (Phase-based: Remove -> Insert -> Chamber)
 	// ─────────────────────────────────────────────────────────
 	World.system<FWeaponInstance>("WeaponReloadSystem")
 		.with<FTagWeapon>()
@@ -31,7 +122,7 @@ void UFlecsArtillerySubsystem::SetupWeaponReloadSystem()
 
 			const float DeltaTime = Entity.world().get_info()->delta_time;
 
-			// ── Handle reload request (Idle → first phase) ──
+			// ── Handle reload request (Idle -> first phase) ──
 			if (Weapon.bReloadRequested && Weapon.ReloadPhase == EWeaponReloadPhase::Idle)
 			{
 				Weapon.bReloadRequested = false;
@@ -59,7 +150,7 @@ void UFlecsArtillerySubsystem::SetupWeaponReloadSystem()
 					const FMagazineInstance* MagInst = MagEntity.try_get<FMagazineInstance>();
 					if (!MagStatic || !MagInst) return;
 
-					// Already full — nothing to reload
+					// Already full -- nothing to reload
 					if (MagInst->IsFull(MagStatic->Capacity))
 					{
 						if (auto* MsgSub = UFlecsMessageSubsystem::SelfPtr)
@@ -72,23 +163,69 @@ void UFlecsArtillerySubsystem::SetupWeaponReloadSystem()
 						return;
 					}
 
-					// TODO: Check inventory for compatible loose ammo.
-					// For now, single-round reload uses ammo type index 0 directly.
+					// Reset device state for new reload
+					Weapon.ActiveLoadMethod = EActiveLoadMethod::None;
+					Weapon.ActiveDeviceEntityId = 0;
+					Weapon.BatchSize = 0;
+					Weapon.BatchInsertTime = 0.f;
+					Weapon.DeviceAmmoTypeIdx = 0;
+					Weapon.bUsedDeviceThisReload = false;
+
+					const int64 InvId = InvRef->InventoryEntityId;
+					const int32 FreeSlots = MagStatic->Capacity - MagInst->AmmoCount;
+
+					// ── Scan inventory for best quick-load device ──
+					FDeviceScanResult DeviceResult = ScanForQuickLoadDevice(
+						Entity.world(), InvId, Static, MagStatic, MagInst, FreeSlots);
+
+					if (DeviceResult.IsValid())
+					{
+						Weapon.ActiveLoadMethod = DeviceResult.Method;
+						Weapon.ActiveDeviceEntityId = static_cast<uint64>(DeviceResult.DeviceEntity.id());
+						Weapon.BatchSize = DeviceResult.BatchSize;
+						Weapon.BatchInsertTime = DeviceResult.InsertTime;
+						Weapon.DeviceAmmoTypeIdx = DeviceResult.AmmoTypeIdx;
+						Weapon.bUsedDeviceThisReload = true;
+					}
+
+					bool bFoundDevice = DeviceResult.IsValid();
+
+					// Fallback to loose rounds if no device found
+					if (!bFoundDevice)
+					{
+						Weapon.ActiveLoadMethod = EActiveLoadMethod::LooseRound;
+					}
 
 					Weapon.RoundsInsertedThisReload = 0;
 					Entity.add<FTagReloading>();
 
-					if (Static->OpenTime > 0.f)
+					// Determine effective open time
+					float EffectiveOpenTime = Static->OpenTime;
+					if (Weapon.ActiveLoadMethod != EActiveLoadMethod::LooseRound
+						&& Weapon.ActiveLoadMethod != EActiveLoadMethod::None
+						&& Static->OpenTimeDevice > 0.f)
+					{
+						EffectiveOpenTime = Static->OpenTimeDevice;
+					}
+
+					if (EffectiveOpenTime > 0.f)
 					{
 						Weapon.ReloadPhase = EWeaponReloadPhase::Opening;
-						Weapon.ReloadPhaseTimer = Static->OpenTime;
-						UE_LOG(LogTemp, Log, TEXT("WEAPON: Single-round reload started (Opening, %.2fs)"), Static->OpenTime);
+						Weapon.ReloadPhaseTimer = EffectiveOpenTime;
+						UE_LOG(LogTemp, Log, TEXT("WEAPON: Single-round reload started (Opening, %.2fs, method=%d)"),
+							EffectiveOpenTime, static_cast<uint8>(Weapon.ActiveLoadMethod));
 					}
 					else
 					{
+						// Skip Opening -- go directly to InsertingRound
+						float InsertTimer = (Weapon.ActiveLoadMethod != EActiveLoadMethod::LooseRound
+							&& Weapon.ActiveLoadMethod != EActiveLoadMethod::None)
+							? Weapon.BatchInsertTime : Static->InsertRoundTime;
+
 						Weapon.ReloadPhase = EWeaponReloadPhase::InsertingRound;
-						Weapon.ReloadPhaseTimer = Static->InsertRoundTime;
-						UE_LOG(LogTemp, Log, TEXT("WEAPON: Single-round reload started (InsertingRound, %.2fs)"), Static->InsertRoundTime);
+						Weapon.ReloadPhaseTimer = InsertTimer;
+						UE_LOG(LogTemp, Log, TEXT("WEAPON: Single-round reload started (InsertingRound, %.2fs, method=%d)"),
+							InsertTimer, static_cast<uint8>(Weapon.ActiveLoadMethod));
 					}
 
 					if (auto* MsgSub = UFlecsMessageSubsystem::SelfPtr)
@@ -107,7 +244,7 @@ void UFlecsArtillerySubsystem::SetupWeaponReloadSystem()
 					// ── MAGAZINE RELOAD (standard) ──
 					// Find best magazine in inventory
 					// NOTE: FMagazineStatic is on prefab (inherited via IsA), so we can't use it
-					// as a typed param in each() — read it via try_get() instead.
+					// as a typed param in each() -- read it via try_get() instead.
 					int64 BestMagId = 0;
 					int32 BestAmmoCount = 0;
 					const int64 InvId = InvRef->InventoryEntityId;
@@ -195,7 +332,7 @@ void UFlecsArtillerySubsystem::SetupWeaponReloadSystem()
 						MsgSub->EnqueueMessage(TAG_UI_Reload, ReloadMsg);
 					}
 
-					// Update sim→game state cache (reload started)
+					// Update sim->game state cache (reload started)
 					SimStateCache.WriteWeapon(static_cast<int64>(Entity.id()), 0, 0, 0, true);
 
 					UE_LOG(LogTemp, Log, TEXT("WEAPON: Reload started (RemovingMag, %.2fs)"), Weapon.ReloadPhaseTimer);
@@ -251,6 +388,9 @@ void UFlecsArtillerySubsystem::SetupWeaponReloadSystem()
 					Weapon.ReloadPhase = EWeaponReloadPhase::Idle;
 					Weapon.ReloadPhaseTimer = 0.f;
 					Weapon.RoundsInsertedThisReload = 0;
+					Weapon.ActiveLoadMethod = EActiveLoadMethod::None;
+					Weapon.ActiveDeviceEntityId = 0;
+					Weapon.bUsedDeviceThisReload = false;
 					Entity.remove<FTagReloading>();
 
 					if (auto* MsgSub = UFlecsMessageSubsystem::SelfPtr)
@@ -264,14 +404,14 @@ void UFlecsArtillerySubsystem::SetupWeaponReloadSystem()
 				}
 				else if (Weapon.ReloadPhase == EWeaponReloadPhase::InsertingRound)
 				{
-					// Cancel during InsertingRound: let current round finish (timer expires),
-					// then Close phase begins. Leave bReloadCancelRequested set — the
+					// Cancel during InsertingRound: let current round/batch finish (timer expires),
+					// then Close phase begins. Leave bReloadCancelRequested set -- the
 					// InsertingRound phase transition will consume it.
 					UE_LOG(LogTemp, Log, TEXT("WEAPON: Single-round reload cancel requested during InsertingRound"));
 				}
 				else
 				{
-					// Closing and Chambering are non-cancellable — just consume the flag
+					// Closing and Chambering are non-cancellable -- just consume the flag
 					Weapon.bReloadCancelRequested = false;
 				}
 			}
@@ -287,7 +427,7 @@ void UFlecsArtillerySubsystem::SetupWeaponReloadSystem()
 			{
 			case EWeaponReloadPhase::RemovingMag:
 			{
-				// Old magazine removed from weapon → return to inventory
+				// Old magazine removed from weapon -> return to inventory
 				const FEquippedBy* Equip = Entity.try_get<FEquippedBy>();
 				if (Equip && Equip->IsEquipped() && Weapon.InsertedMagazineId != 0)
 				{
@@ -405,7 +545,7 @@ void UFlecsArtillerySubsystem::SetupWeaponReloadSystem()
 
 			case EWeaponReloadPhase::Chambering:
 			{
-				// Chambering complete — chamber first round from magazine
+				// Chambering complete -- chamber first round from magazine
 				flecs::entity InsertedMag = Entity.world().entity(static_cast<flecs::entity_t>(Weapon.InsertedMagazineId));
 				if (InsertedMag.is_valid())
 				{
@@ -461,16 +601,21 @@ void UFlecsArtillerySubsystem::SetupWeaponReloadSystem()
 
 			case EWeaponReloadPhase::Opening:
 			{
-				// Opening complete → start inserting rounds
+				// Opening complete -> start inserting rounds
+				float InsertTimer = (Weapon.ActiveLoadMethod != EActiveLoadMethod::LooseRound
+					&& Weapon.ActiveLoadMethod != EActiveLoadMethod::None)
+					? Weapon.BatchInsertTime : Static->InsertRoundTime;
+
 				Weapon.ReloadPhase = EWeaponReloadPhase::InsertingRound;
-				Weapon.ReloadPhaseTimer = Static->InsertRoundTime;
-				UE_LOG(LogTemp, Log, TEXT("WEAPON: Opening complete → InsertingRound (%.2fs)"), Static->InsertRoundTime);
+				Weapon.ReloadPhaseTimer = InsertTimer;
+				UE_LOG(LogTemp, Log, TEXT("WEAPON: Opening complete -> InsertingRound (%.2fs, method=%d)"),
+					InsertTimer, static_cast<uint8>(Weapon.ActiveLoadMethod));
 				break;
 			}
 
 			case EWeaponReloadPhase::InsertingRound:
 			{
-				// Round insertion timer expired → find ammo in inventory and commit one round
+				// Round/batch insertion timer expired
 				checkf(Weapon.InsertedMagazineId != 0, TEXT("InsertingRound: No magazine in weapon"));
 				flecs::entity MagEntity = Entity.world().entity(static_cast<flecs::entity_t>(Weapon.InsertedMagazineId));
 				checkf(MagEntity.is_valid(), TEXT("InsertingRound: Magazine entity invalid"));
@@ -479,82 +624,148 @@ void UFlecsArtillerySubsystem::SetupWeaponReloadSystem()
 				const FMagazineStatic* MagStatic = MagEntity.try_get<FMagazineStatic>();
 				checkf(MagInst && MagStatic, TEXT("InsertingRound: Magazine missing components"));
 
-				// Find compatible ammo in character's inventory
-				const FEquippedBy* Equip = Entity.try_get<FEquippedBy>();
-				flecs::entity CharEntity = Equip ? Entity.world().entity(
-					static_cast<flecs::entity_t>(Equip->CharacterEntityId)) : flecs::entity();
-				const FCharacterInventoryRef* InvRef = CharEntity.is_valid()
-					? CharEntity.try_get<FCharacterInventoryRef>() : nullptr;
-				const int64 InvId = InvRef ? InvRef->InventoryEntityId : 0;
-
-				// Search inventory for a loose ammo item matching magazine's accepted types
-				flecs::entity FoundAmmoEntity;
-				int32 FoundAmmoTypeIdx = -1;
 				bool bRoundInserted = false;
 
-				if (InvId != 0)
+				// ── DEVICE BATCH PATH ──
+				if (Weapon.ActiveLoadMethod == EActiveLoadMethod::StripperClip
+					|| Weapon.ActiveLoadMethod == EActiveLoadMethod::Speedloader)
 				{
-					Entity.world().each([&](flecs::entity AmmoEntity, const FContainedIn& CI,
-						FItemInstance& Item)
+					// Push BatchSize rounds into magazine
+					int32 RoundsPushed = 0;
+					for (int32 i = 0; i < Weapon.BatchSize; ++i)
 					{
-						if (FoundAmmoEntity.is_valid()) return;  // already found one
-						if (CI.ContainerEntityId != InvId) return;  // wrong container
-						if (Item.Count <= 0) return;  // empty stack
+						if (MagInst->IsFull(MagStatic->Capacity)) break;
+						if (MagInst->Push(Weapon.DeviceAmmoTypeIdx))
+							++RoundsPushed;
+					}
 
-						// Get AmmoTypeDefinition via prefab → EntityDefinitionRef
-						const FEntityDefinitionRef* DefRef = AmmoEntity.try_get<FEntityDefinitionRef>();
-						if (!DefRef || !DefRef->Definition || !DefRef->Definition->AmmoTypeDefinition) return;
-
-						// Check if this ammo type is accepted by the magazine
-						int32 Idx = MagStatic->FindAmmoTypeIndex(DefRef->Definition->AmmoTypeDefinition);
-						if (Idx < 0) return;  // incompatible
-
-						FoundAmmoEntity = AmmoEntity;
-						FoundAmmoTypeIdx = Idx;
-					});
-				}
-
-				if (FoundAmmoEntity.is_valid() && FoundAmmoTypeIdx >= 0)
-				{
-					// Consume one round from inventory
-					FItemInstance* AmmoItem = FoundAmmoEntity.try_get_mut<FItemInstance>();
-					if (AmmoItem)
+					// Consume the device from inventory
+					if (Weapon.ActiveDeviceEntityId != 0)
 					{
-						AmmoItem->Count -= 1;
-						if (AmmoItem->Count <= 0)
+						flecs::entity DeviceEntity = Entity.world().entity(
+							static_cast<flecs::entity_t>(Weapon.ActiveDeviceEntityId));
+						if (DeviceEntity.is_alive())
 						{
-							// Stack depleted — free grid space and destroy entity
-							const FContainedIn* AmmoCI = FoundAmmoEntity.try_get<FContainedIn>();
-							if (AmmoCI && AmmoCI->ContainerEntityId != 0)
+							FItemInstance* DeviceItem = DeviceEntity.try_get_mut<FItemInstance>();
+							if (DeviceItem)
 							{
-								flecs::entity AmmoContainer = Entity.world().entity(
-									static_cast<flecs::entity_t>(AmmoCI->ContainerEntityId));
-								if (AmmoContainer.is_valid())
+								DeviceItem->Count -= 1;
+								if (DeviceItem->Count <= 0)
 								{
-									FContainerGridInstance* Grid = AmmoContainer.try_get_mut<FContainerGridInstance>();
-									const FItemStaticData* ASD = FoundAmmoEntity.try_get<FItemStaticData>();
-									if (Grid && ASD && AmmoCI->IsInGrid())
-										Grid->Free(AmmoCI->GridPosition, ASD->GridSize, 10); // TODO: read actual width
+									// Stack depleted -- free grid space and destroy entity
+									const FContainedIn* DeviceCI = DeviceEntity.try_get<FContainedIn>();
+									if (DeviceCI && DeviceCI->ContainerEntityId != 0)
+									{
+										flecs::entity DeviceContainer = Entity.world().entity(
+											static_cast<flecs::entity_t>(DeviceCI->ContainerEntityId));
+										if (DeviceContainer.is_valid())
+										{
+											FContainerGridInstance* Grid = DeviceContainer.try_get_mut<FContainerGridInstance>();
+											const FItemStaticData* DSD = DeviceEntity.try_get<FItemStaticData>();
+											const FContainerStatic* ContStatic = DeviceContainer.try_get<FContainerStatic>();
+											if (Grid && DSD && ContStatic && DeviceCI->IsInGrid())
+												Grid->Free(DeviceCI->GridPosition, DSD->GridSize, ContStatic->GridWidth);
 
-									FContainerInstance* CI = AmmoContainer.try_get_mut<FContainerInstance>();
-									if (CI) CI->CurrentCount = FMath::Max(0, CI->CurrentCount - 1);
+											FContainerInstance* CI = DeviceContainer.try_get_mut<FContainerInstance>();
+											if (CI) CI->CurrentCount = FMath::Max(0, CI->CurrentCount - 1);
+										}
+									}
+									DeviceEntity.destruct();
 								}
 							}
-							FoundAmmoEntity.destruct();
 						}
 					}
 
-					// Push round into magazine
-					MagInst->Push(static_cast<uint8>(FoundAmmoTypeIdx));
-					++Weapon.RoundsInsertedThisReload;
-					bRoundInserted = true;
+					Weapon.ActiveDeviceEntityId = 0;
+					Weapon.RoundsInsertedThisReload += RoundsPushed;
+					bRoundInserted = (RoundsPushed > 0);
 
-					UE_LOG(LogTemp, Log, TEXT("WEAPON: Inserted round %d (mag now %d/%d, ammoType=%d)"),
-						Weapon.RoundsInsertedThisReload, MagInst->AmmoCount, MagStatic->Capacity, FoundAmmoTypeIdx);
+					UE_LOG(LogTemp, Log, TEXT("WEAPON: Batch inserted %d rounds (mag now %d/%d, method=%d)"),
+						RoundsPushed, MagInst->AmmoCount, MagStatic->Capacity,
+						static_cast<uint8>(Weapon.ActiveLoadMethod));
 				}
+				// ── LOOSE ROUND PATH ──
 				else
 				{
-					UE_LOG(LogTemp, Log, TEXT("WEAPON: No compatible ammo in inventory — ending reload"));
+					// Find compatible ammo in character's inventory
+					const FEquippedBy* Equip = Entity.try_get<FEquippedBy>();
+					flecs::entity CharEntity = Equip ? Entity.world().entity(
+						static_cast<flecs::entity_t>(Equip->CharacterEntityId)) : flecs::entity();
+					const FCharacterInventoryRef* InvRef = CharEntity.is_valid()
+						? CharEntity.try_get<FCharacterInventoryRef>() : nullptr;
+					const int64 InvId = InvRef ? InvRef->InventoryEntityId : 0;
+
+					// Search inventory for a loose ammo item matching magazine's accepted types
+					flecs::entity FoundAmmoEntity;
+					int32 FoundAmmoTypeIdx = -1;
+
+					if (InvId != 0)
+					{
+						Entity.world().each([&](flecs::entity AmmoEntity, const FContainedIn& CI,
+							FItemInstance& Item)
+						{
+							if (FoundAmmoEntity.is_valid()) return;  // already found one
+							if (CI.ContainerEntityId != InvId) return;  // wrong container
+							if (Item.Count <= 0) return;  // empty stack
+
+							// Get AmmoTypeDefinition via prefab -> EntityDefinitionRef
+							const FEntityDefinitionRef* DefRef = AmmoEntity.try_get<FEntityDefinitionRef>();
+							if (!DefRef || !DefRef->Definition || !DefRef->Definition->AmmoTypeDefinition) return;
+
+							// Check if this ammo type is accepted by the magazine
+							int32 Idx = MagStatic->FindAmmoTypeIndex(DefRef->Definition->AmmoTypeDefinition);
+							if (Idx < 0) return;  // incompatible
+
+							FoundAmmoEntity = AmmoEntity;
+							FoundAmmoTypeIdx = Idx;
+						});
+					}
+
+					if (FoundAmmoEntity.is_valid() && FoundAmmoTypeIdx >= 0)
+					{
+						// Push round into magazine FIRST (don't consume ammo if push fails)
+						if (MagInst->Push(static_cast<uint8>(FoundAmmoTypeIdx)))
+						{
+							++Weapon.RoundsInsertedThisReload;
+							bRoundInserted = true;
+
+							// Consume one round from inventory
+							FItemInstance* AmmoItem = FoundAmmoEntity.try_get_mut<FItemInstance>();
+							if (AmmoItem)
+							{
+								AmmoItem->Count -= 1;
+								if (AmmoItem->Count <= 0)
+								{
+									// Stack depleted -- free grid space and destroy entity
+									const FContainedIn* AmmoCI = FoundAmmoEntity.try_get<FContainedIn>();
+									if (AmmoCI && AmmoCI->ContainerEntityId != 0)
+									{
+										flecs::entity AmmoContainer = Entity.world().entity(
+											static_cast<flecs::entity_t>(AmmoCI->ContainerEntityId));
+										if (AmmoContainer.is_valid())
+										{
+											FContainerGridInstance* Grid = AmmoContainer.try_get_mut<FContainerGridInstance>();
+											const FItemStaticData* ASD = FoundAmmoEntity.try_get<FItemStaticData>();
+											const FContainerStatic* ContStatic = AmmoContainer.try_get<FContainerStatic>();
+											if (Grid && ASD && ContStatic && AmmoCI->IsInGrid())
+												Grid->Free(AmmoCI->GridPosition, ASD->GridSize, ContStatic->GridWidth);
+
+											FContainerInstance* CI = AmmoContainer.try_get_mut<FContainerInstance>();
+											if (CI) CI->CurrentCount = FMath::Max(0, CI->CurrentCount - 1);
+										}
+									}
+									FoundAmmoEntity.destruct();
+								}
+							}
+						}
+
+						UE_LOG(LogTemp, Log, TEXT("WEAPON: Inserted loose round %d (mag now %d/%d, ammoType=%d)"),
+							Weapon.RoundsInsertedThisReload, MagInst->AmmoCount, MagStatic->Capacity, FoundAmmoTypeIdx);
+					}
+					else
+					{
+						UE_LOG(LogTemp, Log, TEXT("WEAPON: No compatible ammo in inventory -- ending reload"));
+					}
 				}
 
 				// Send per-round ammo update
@@ -569,7 +780,7 @@ void UFlecsArtillerySubsystem::SetupWeaponReloadSystem()
 
 				// Decide: continue inserting, or transition to Close/Idle?
 				const bool bFull = MagInst->IsFull(MagStatic->Capacity);
-				const bool bNoAmmo = !bRoundInserted;  // no more ammo in inventory
+				const bool bNoAmmo = !bRoundInserted;
 				const bool bCancel = Weapon.bReloadCancelRequested
 					|| Weapon.bFireRequested
 					|| Weapon.bFireTriggerPending;
@@ -578,18 +789,25 @@ void UFlecsArtillerySubsystem::SetupWeaponReloadSystem()
 				{
 					Weapon.bReloadCancelRequested = false;
 
-					if (Static->CloseTime > 0.f)
+					// Determine effective close time
+					float EffectiveCloseTime = Static->CloseTime;
+					if (Weapon.bUsedDeviceThisReload && Static->CloseTimeDevice > 0.f)
+						EffectiveCloseTime = Static->CloseTimeDevice;
+
+					if (EffectiveCloseTime > 0.f)
 					{
 						Weapon.ReloadPhase = EWeaponReloadPhase::Closing;
-						Weapon.ReloadPhaseTimer = Static->CloseTime;
-						UE_LOG(LogTemp, Log, TEXT("WEAPON: InsertingRound → Closing (%.2fs)%s"),
-							Static->CloseTime, bCancel ? TEXT(" [cancelled]") : TEXT(" [full]"));
+						Weapon.ReloadPhaseTimer = EffectiveCloseTime;
+						UE_LOG(LogTemp, Log, TEXT("WEAPON: InsertingRound -> Closing (%.2fs)%s"),
+							EffectiveCloseTime, bCancel ? TEXT(" [cancelled]") : (bFull ? TEXT(" [full]") : TEXT(" [no ammo]")));
 					}
 					else
 					{
-						// No close phase — finish immediately
+						// No close phase -- finish immediately
 						Weapon.ReloadPhase = EWeaponReloadPhase::Idle;
-						Weapon.RoundsInsertedThisReload = 0;
+						Weapon.ActiveLoadMethod = EActiveLoadMethod::None;
+						Weapon.ActiveDeviceEntityId = 0;
+						Weapon.bUsedDeviceThisReload = false;
 						Entity.remove<FTagReloading>();
 
 						if (auto* MsgSub = UFlecsMessageSubsystem::SelfPtr)
@@ -602,20 +820,74 @@ void UFlecsArtillerySubsystem::SetupWeaponReloadSystem()
 							MsgSub->EnqueueMessage(TAG_UI_Reload, ReloadMsg);
 						}
 						UE_LOG(LogTemp, Log, TEXT("WEAPON: Single-round reload complete (%d rounds)"), Weapon.RoundsInsertedThisReload);
+						Weapon.RoundsInsertedThisReload = 0;
 					}
 				}
 				else
 				{
-					// Loop: insert another round
-					Weapon.ReloadPhaseTimer = Static->InsertRoundTime;
+					// Continue inserting -- determine next timer based on load method
+
+					// If we just finished a device batch, re-scan for another device
+					if (Weapon.ActiveLoadMethod == EActiveLoadMethod::StripperClip
+						|| Weapon.ActiveLoadMethod == EActiveLoadMethod::Speedloader)
+					{
+						// Re-scan for next device
+						const FEquippedBy* Equip = Entity.try_get<FEquippedBy>();
+						flecs::entity CharEntity = Equip ? Entity.world().entity(
+							static_cast<flecs::entity_t>(Equip->CharacterEntityId)) : flecs::entity();
+						const FCharacterInventoryRef* InvRef = CharEntity.is_valid()
+							? CharEntity.try_get<FCharacterInventoryRef>() : nullptr;
+						const int64 InvId = InvRef ? InvRef->InventoryEntityId : 0;
+						const int32 RemainingSlots = MagStatic->Capacity - MagInst->AmmoCount;
+
+						FDeviceScanResult NextDevice;
+						if (InvId != 0)
+						{
+							NextDevice = ScanForQuickLoadDevice(
+								Entity.world(), InvId, Static, MagStatic, MagInst, RemainingSlots);
+						}
+
+						if (NextDevice.IsValid())
+						{
+							Weapon.ActiveLoadMethod = NextDevice.Method;
+							Weapon.ActiveDeviceEntityId = static_cast<uint64>(NextDevice.DeviceEntity.id());
+							Weapon.BatchSize = NextDevice.BatchSize;
+							Weapon.BatchInsertTime = NextDevice.InsertTime;
+							Weapon.DeviceAmmoTypeIdx = NextDevice.AmmoTypeIdx;
+							Weapon.ReloadPhaseTimer = Weapon.BatchInsertTime;
+
+							UE_LOG(LogTemp, Log, TEXT("WEAPON: Found next device (method=%d, batch=%d, timer=%.2f)"),
+								static_cast<uint8>(NextDevice.Method), Weapon.BatchSize, Weapon.BatchInsertTime);
+						}
+
+						if (!NextDevice.IsValid())
+						{
+							// Fallback to loose rounds
+							Weapon.ActiveLoadMethod = EActiveLoadMethod::LooseRound;
+							Weapon.ActiveDeviceEntityId = 0;
+							Weapon.BatchSize = 0;
+							Weapon.ReloadPhaseTimer = Static->InsertRoundTime;
+
+							UE_LOG(LogTemp, Log, TEXT("WEAPON: No more devices, falling back to loose rounds (%.2fs)"),
+								Static->InsertRoundTime);
+						}
+					}
+					else
+					{
+						// Loose round path: loop with standard insert time
+						Weapon.ReloadPhaseTimer = Static->InsertRoundTime;
+					}
 				}
 				break;
 			}
 
 			case EWeaponReloadPhase::Closing:
 			{
-				// Closing complete → return to Idle
+				// Closing complete -> return to Idle
 				Weapon.ReloadPhase = EWeaponReloadPhase::Idle;
+				Weapon.ActiveLoadMethod = EActiveLoadMethod::None;
+				Weapon.ActiveDeviceEntityId = 0;
+				Weapon.bUsedDeviceThisReload = false;
 				Entity.remove<FTagReloading>();
 
 				// Send final ammo update

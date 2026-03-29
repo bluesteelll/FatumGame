@@ -212,6 +212,24 @@ struct FWeaponStatic
 	bool IsMagazineReload() const { return ReloadType == 0; }
 
 	// ─────────────────────────────────────────────────────────
+	// QUICK-LOAD DEVICES
+	// ─────────────────────────────────────────────────────────
+
+	/** Bitmask of accepted device types (QUICKLOAD_BIT_STRIPPERCLIP | QUICKLOAD_BIT_SPEEDLOADER). */
+	uint8 AcceptedDeviceTypes = 0;
+
+	/** Disable quick-load devices entirely for this weapon (overrides AcceptedDeviceTypes). */
+	bool bDisableQuickLoadDevices = false;
+
+	/** Open phase duration when using a device (seconds). 0 = use standard OpenTime. */
+	float OpenTimeDevice = 0.0f;
+
+	/** Close phase duration when using a device (seconds). 0 = use standard CloseTime. */
+	float CloseTimeDevice = 0.0f;
+
+	bool AcceptsDeviceType(uint8 DeviceBit) const { return !bDisableQuickLoadDevices && (AcceptedDeviceTypes & DeviceBit) != 0; }
+
+	// ─────────────────────────────────────────────────────────
 	// POST-FIRE CYCLING
 	// ─────────────────────────────────────────────────────────
 
@@ -242,6 +260,15 @@ struct FWeaponStatic
 	FPelletRingData PelletRings[MaxPelletRings];
 
 	static FWeaponStatic FromProfile(const UFlecsWeaponProfile* Profile, const class UFlecsCaliberRegistry* CaliberRegistry = nullptr);
+};
+
+/** Active loading method during single-round reload. */
+enum class EActiveLoadMethod : uint8
+{
+	None = 0,
+	LooseRound = 1,
+	StripperClip = 2,
+	Speedloader = 3
 };
 
 /** Weapon reload phase state machine. */
@@ -356,6 +383,28 @@ struct FWeaponInstance
 
 	/** How many rounds inserted so far in current reload. */
 	int32 RoundsInsertedThisReload = 0;
+
+	// ─────────────────────────────────────────────────────────
+	// QUICK-LOAD DEVICE STATE
+	// ─────────────────────────────────────────────────────────
+
+	/** Active loading method for current reload cycle. */
+	EActiveLoadMethod ActiveLoadMethod = EActiveLoadMethod::None;
+
+	/** Flecs entity ID of the device currently being consumed. 0 = none. */
+	uint64 ActiveDeviceEntityId = 0;
+
+	/** Rounds to insert in current batch. */
+	int32 BatchSize = 0;
+
+	/** Time for one batch insert action (from FQuickLoadStatic::InsertTime). */
+	float BatchInsertTime = 0.f;
+
+	/** Ammo type index for the device's ammo (into FMagazineStatic::AcceptedAmmoTypes). */
+	uint8 DeviceAmmoTypeIdx = 0;
+
+	/** True if a device was used at any point during this reload. */
+	bool bUsedDeviceThisReload = false;
 
 	// ─────────────────────────────────────────────────────────
 	// INPUT FLAGS (Game Thread → Simulation Thread)

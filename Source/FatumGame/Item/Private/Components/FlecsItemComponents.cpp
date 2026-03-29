@@ -5,6 +5,7 @@
 #include "FlecsEntityDefinition.h"
 #include "FlecsContainerProfile.h"
 #include "FlecsMagazineProfile.h"
+#include "FlecsQuickLoadProfile.h"
 #include "FlecsAmmoTypeDefinition.h"
 #include "FlecsCaliberRegistry.h"
 #include "Properties/FlecsComponentProperties.h"
@@ -160,6 +161,40 @@ FIntPoint FContainerGridInstance::FindFreeSpace(FIntPoint Size, int32 GridWidth,
 		}
 	}
 	return FIntPoint(-1, -1);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// MAGAZINE
+// ═══════════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════════
+// QUICK-LOAD DEVICE
+// ═══════════════════════════════════════════════════════════════
+
+FQuickLoadStatic FQuickLoadStatic::FromProfile(const UFlecsQuickLoadProfile* Profile, const UFlecsCaliberRegistry* CaliberRegistry)
+{
+	check(Profile);
+
+	static_assert(static_cast<uint8>(EQuickLoadDeviceTypeUI::StripperClip) == static_cast<uint8>(EQuickLoadDeviceType::StripperClip));
+	static_assert(static_cast<uint8>(EQuickLoadDeviceTypeUI::Speedloader) == static_cast<uint8>(EQuickLoadDeviceType::Speedloader));
+
+	FQuickLoadStatic S;
+	S.DeviceType = static_cast<EQuickLoadDeviceType>(Profile->DeviceType);
+	S.RoundsHeld = Profile->RoundsHeld;
+	S.CaliberId = CaliberRegistry ? CaliberRegistry->GetCaliberIndex(Profile->Caliber) : 0xFF;
+	if (S.CaliberId == 0xFF)
+	{
+		UE_LOG(LogTemp, Error, TEXT("QuickLoadProfile: caliber '%s' not found in CaliberRegistry — device will not work!"),
+			*Profile->Caliber.ToString());
+	}
+	S.AmmoTypeDefinition = Profile->AmmoTypeDefinition;
+	if (!S.AmmoTypeDefinition)
+	{
+		UE_LOG(LogTemp, Error, TEXT("QuickLoadProfile: AmmoTypeDefinition is null — device will not work!"));
+	}
+	S.InsertTime = Profile->InsertTime;
+	S.bRequiresEmptyMagazine = Profile->bRequiresEmptyMagazine;
+	return S;
 }
 
 // ═══════════════════════════════════════════════════════════════
