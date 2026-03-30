@@ -187,6 +187,15 @@ Source/FatumGame/
 │   │   └── FatumInputTags.h              Константы Gameplay Tag
 │   └── Private/
 │
+├── Vitals/                                Система жизненных показателей / выживания
+│   ├── Public/
+│   │   ├── Components/FlecsVitalsComponents.h  FVitalsStatic, FVitalsInstance, FVitalsItemStatic
+│   │   └── Library/FlecsVitalsLibrary.h        BP: запросы и мутации показателей
+│   └── Private/
+│       ├── Components/FlecsVitalsComponents.cpp
+│       ├── Library/FlecsVitalsLibrary.cpp
+│       └── Systems/FlecsArtillerySubsystem_VitalsSystems.cpp
+│
 ├── Definitions/                           ВСЕ Data Assets и профили
 │   └── Public/
 │       ├── FlecsEntityDefinition.h        Мастер data asset
@@ -213,7 +222,14 @@ Source/FatumGame/
 │       ├── FlecsNoiseZoneProfile.h
 │       ├── FlecsContainerDefinition.h
 │       ├── FlecsProjectileDefinition.h
-│       └── FlecsConstrainedGroupDefinition.h
+│       ├── FlecsConstrainedGroupDefinition.h
+│       ├── FlecsCaliberRegistry.h         Синглтон реестра калибров
+│       ├── FlecsAmmoTypeDefinition.h      Data asset типа боеприпасов
+│       ├── FlecsMagazineProfile.h         Профиль внутреннего магазина
+│       ├── FlecsQuickLoadProfile.h        Профиль устройств быстрой зарядки (спидлоадеры, обоймы)
+│       ├── FlecsVitalsProfile.h           Жизненные показатели персонажа (голод, жажда и т.д.)
+│       ├── FlecsVitalsItemProfile.h       Эффекты предметов на показатели
+│       └── FlecsTemperatureZoneProfile.h  Данные температурной зоны
 │
 └── Utils/                                 Общие утилиты
     ├── Public/

@@ -22,23 +22,27 @@ graph TD
     S8["8. DestructibleCollisionSystem"]
     S9["9. ConstraintBreakSystem"]
     S10["10. FragmentationSystem"]
-    S11["11. TriggerUnlockSystem"]
-    S12["12. DoorTickSystem"]
-    S13["13. WeaponTickSystem"]
-    S14["14. WeaponReloadSystem"]
-    S15["15. WeaponFireSystem"]
-    S16["16. DeathCheckSystem"]
-    S17["17. DeadEntityCleanupSystem"]
-    S18["18. CollisionPairCleanupSystem"]
+    S11["11. WeaponEquipSystem"]
+    S12["12. WeaponTickSystem"]
+    S13["13. WeaponReloadSystem"]
+    S14["14. WeaponFireSystem"]
+    S15["15. TriggerUnlockSystem"]
+    S16["16. DoorTickSystem"]
+    S17["17. StealthUpdateSystem"]
+    S18["18. VitalsSystems<br/>(Equip → Drain → Recalc → HPDrain)"]
+    S19["19. DeathCheckSystem"]
+    S20["20. DeadEntityCleanupSystem"]
+    S21["21. CollisionPairCleanupSystem"]
 
     S1 --> S2 --> S3 --> S4
     S4 --> S5 --> S6 --> S7 --> S8
     S8 --> S9 --> S10
-    S10 --> S11 --> S12
-    S12 --> S13 --> S14 --> S15
-    S15 --> S16 --> S17 --> S18
+    S10 --> S11 --> S12 --> S13 --> S14
+    S14 --> S15 --> S16
+    S16 --> S17 --> S18
+    S18 --> S19 --> S20 --> S21
 
-    DamageObs -.->|"fires during S5"| S16
+    DamageObs -.->|"fires during S5"| S19
 ```
 
 ---
@@ -127,24 +131,16 @@ graph TD
 | **Immediately** | Invalidates `FDestructibleStatic.Profile`, moves body to DEBRIS layer (no deferred wait). |
 | **Setup** | `SetupDestructibleCollisionSystems()` |
 
-### 11. TriggerUnlockSystem
+### 11. WeaponEquipSystem
 
 | Property | Value |
 |----------|-------|
-| **Queries** | `FDoorTriggerLink`, `FTagDoorTrigger` |
-| **Does** | Resolves trigger → door linkage. Sets `FDoorInstance.bUnlocked = true`. |
-| **Why before DoorTick** | Door must know it's unlocked before the state machine ticks. |
-| **Setup** | `SetupDoorSystems()` |
+| **Queries** | `FWeaponSlotState`, `FTagWeaponSlot` |
+| **Does** | Processes weapon equip/unequip requests. Manages slot transitions and weapon entity binding. |
+| **Why before WeaponTick** | Equip state must be resolved before weapon systems tick. |
+| **Setup** | `SetupWeaponSystems()` |
 
-### 12. DoorTickSystem
-
-| Property | Value |
-|----------|-------|
-| **Queries** | `FDoorStatic`, `FDoorInstance` |
-| **Does** | 5-state machine: Locked → Closed → Opening → Open → Closing. Controls constraint motor. Auto-close timer. |
-| **Setup** | `SetupDoorSystems()` |
-
-### 13. WeaponTickSystem
+### 12. WeaponTickSystem
 
 | Property | Value |
 |----------|-------|
@@ -152,7 +148,7 @@ graph TD
 | **Does** | Fire cooldown decay. Burst cooldown. Semi-auto trigger reset. Bloom decay. |
 | **Setup** | `SetupWeaponSystems()` |
 
-### 14. WeaponReloadSystem
+### 13. WeaponReloadSystem
 
 | Property | Value |
 |----------|-------|
@@ -160,7 +156,7 @@ graph TD
 | **Does** | Reload timer countdown. Ammo transfer (reserve → magazine). UI notification. |
 | **Setup** | `SetupWeaponSystems()` |
 
-### 15. WeaponFireSystem
+### 14. WeaponFireSystem
 
 | Property | Value |
 |----------|-------|
@@ -169,7 +165,70 @@ graph TD
 | **Why after reload** | Reload must complete before fire system checks ammo. |
 | **Setup** | `SetupWeaponSystems()` |
 
-### 16. DeathCheckSystem
+### 15. TriggerUnlockSystem
+
+| Property | Value |
+|----------|-------|
+| **Queries** | `FDoorTriggerLink`, `FTagDoorTrigger` |
+| **Does** | Resolves trigger → door linkage. Sets `FDoorInstance.bUnlocked = true`. |
+| **Why before DoorTick** | Door must know it's unlocked before the state machine ticks. |
+| **Setup** | `SetupDoorSystems()` |
+
+### 16. DoorTickSystem
+
+| Property | Value |
+|----------|-------|
+| **Queries** | `FDoorStatic`, `FDoorInstance` |
+| **Does** | 5-state machine: Locked → Closed → Opening → Open → Closing. Controls constraint motor. Auto-close timer. |
+| **Setup** | `SetupDoorSystems()` |
+
+### 17. StealthUpdateSystem
+
+| Property | Value |
+|----------|-------|
+| **Queries** | `FStealthInstance`, `FWorldPosition` |
+| **Does** | Updates stealth state based on light zones and noise zones. Calculates visibility/audibility for AI. |
+| **Setup** | `SetupStealthSystems()` |
+
+### 18. VitalsSystems
+
+Four sub-systems that run in sequence:
+
+#### 18a. EquipmentModifierSystem
+
+| Property | Value |
+|----------|-------|
+| **Queries** | `FEquipmentVitalsCache`, `FCharacterInventoryRef` |
+| **Does** | Scans equipped items for `FVitalsItemStatic` modifiers. Caches aggregated stat modifiers. |
+| **Why first** | Equipment modifiers must be calculated before drain/regen systems use them. |
+| **Setup** | `SetupVitalsSystems()` |
+
+#### 18b. VitalDrainSystem
+
+| Property | Value |
+|----------|-------|
+| **Queries** | `FVitalsStatic`, `FVitalsInstance`, `FStatModifiers` |
+| **Does** | Applies per-tick drain to vitals (hunger, thirst, stamina). Modulated by equipment and temperature. |
+| **Setup** | `SetupVitalsSystems()` |
+
+#### 18c. VitalModifierRecalcSystem
+
+| Property | Value |
+|----------|-------|
+| **Queries** | `FVitalsInstance`, `FStatModifiers` |
+| **Does** | Recalculates derived stat modifiers based on current vital levels (e.g., low hunger reduces max stamina). |
+| **Setup** | `SetupVitalsSystems()` |
+
+#### 18d. VitalHPDrainSystem
+
+| Property | Value |
+|----------|-------|
+| **Queries** | `FVitalsInstance`, `FHealthInstance` |
+| **Does** | Applies HP damage when vitals reach critical levels (starvation, dehydration). |
+| **Why last** | Must run after drain and recalc so HP penalty reflects current-tick vital state. |
+| **Setup** | `SetupVitalsSystems()` |
+
+### 19. DeathCheckSystem
 
 | Property | Value |
 |----------|-------|
@@ -177,7 +236,7 @@ graph TD
 | **Does** | Adds `FTagDead` if `CurrentHP ≤ 0`. |
 | **Why here** | All damage sources (collision systems, observers) have processed by this point. |
 
-### 17. DeadEntityCleanupSystem
+### 20. DeadEntityCleanupSystem
 
 | Property | Value |
 |----------|-------|
@@ -185,7 +244,7 @@ graph TD
 | **Does** | Tombstone body. Cleanup constraints. Remove ISM. Trigger death VFX. Release to pool. `entity.destruct()`. |
 | **Why second-to-last** | Must process after all systems that may add `FTagDead`. |
 
-### 18. CollisionPairCleanupSystem
+### 21. CollisionPairCleanupSystem
 
 | Property | Value |
 |----------|-------|
@@ -213,17 +272,25 @@ Systems are grouped by domain. Each domain has a setup method called from `Setup
 ```cpp
 void SetupFlecsSystems()
 {
-    RegisterFlecsComponents();          // All ~50 components
+    RegisterFlecsComponents();          // All components
+    InitAbilityTickFunctions();
 
-    SetupDamageObserver();              // Reactive
-    SetupLifetimeSystems();             // WorldItemDespawn, PickupGrace, ProjectileLifetime, DebrisLifetime
-    SetupDamageCollisionSystems();      // DamageCollision, BounceCollision
-    SetupPickupCollisionSystems();      // PickupCollision
-    SetupDestructibleCollisionSystems();// Destructible, ConstraintBreak, Fragmentation
+    // DamageObserver (reactive, inline)
+    // WorldItemDespawnSystem (inline)
+    // PickupGraceSystem (inline)
+    // ProjectileLifetimeSystem (inline)
+    // DebrisLifetimeSystem (inline)
+
+    SetupCollisionSystems();            // DamageCollision, BounceCollision, PickupCollision, Destructible
+    SetupFragmentationSystems();        // ConstraintBreak, Fragmentation
+    SetupWeaponSystems();               // WeaponEquip, WeaponTick, WeaponReload, WeaponFire
     SetupDoorSystems();                 // TriggerUnlock, DoorTick
-    SetupWeaponSystems();              // WeaponTick, WeaponReload, WeaponFire
-    SetupDeathSystems();               // DeathCheck, DeadEntityCleanup
-    SetupCleanupSystems();             // CollisionPairCleanup (ALWAYS LAST)
+    SetupStealthSystems();              // StealthUpdateSystem
+    SetupVitalsSystems();               // EquipmentModifier, VitalDrain, VitalModifierRecalc, VitalHPDrain
+
+    // DeathCheckSystem (inline)
+    // DeadEntityCleanupSystem (inline)
+    // CollisionPairCleanupSystem (ALWAYS LAST, inline)
 }
 ```
 
@@ -236,8 +303,12 @@ void SetupFlecsSystems()
 | Lifetime systems before collision systems | Expired entities should be dead before collision processing |
 | PickupGrace before PickupCollision | Grace timer must be checked before allowing pickup |
 | ConstraintBreak before Fragmentation | Existing breaks must be processed before new fragments are created |
-| TriggerUnlock before DoorTick | Door must know it's unlocked before state machine ticks |
+| WeaponEquip before WeaponTick | Equip/unequip must resolve before weapon systems tick |
 | WeaponReload before WeaponFire | Reload must complete before fire checks ammo |
+| TriggerUnlock before DoorTick | Door must know it's unlocked before state machine ticks |
+| Vitals after Stealth | Temperature zones affect vital drain rates |
+| EquipmentModifier before VitalDrain | Equipment stat bonuses must be cached before drain calculates |
+| VitalHPDrain before DeathCheck | HP damage from critical vitals must be applied before death check |
 | All damage sources before DeathCheck | All hits in a tick must be applied before checking for death |
 | DeadEntityCleanup before CollisionPairCleanup | Dead entities must be cleaned up while collision data still exists |
 | CollisionPairCleanup LAST always | All systems must finish processing pairs first |

@@ -22,23 +22,27 @@ graph TD
     S8["8. DestructibleCollisionSystem"]
     S9["9. ConstraintBreakSystem"]
     S10["10. FragmentationSystem"]
-    S11["11. TriggerUnlockSystem"]
-    S12["12. DoorTickSystem"]
-    S13["13. WeaponTickSystem"]
-    S14["14. WeaponReloadSystem"]
-    S15["15. WeaponFireSystem"]
-    S16["16. DeathCheckSystem"]
-    S17["17. DeadEntityCleanupSystem"]
-    S18["18. CollisionPairCleanupSystem"]
+    S11["11. WeaponEquipSystem"]
+    S12["12. WeaponTickSystem"]
+    S13["13. WeaponReloadSystem"]
+    S14["14. WeaponFireSystem"]
+    S15["15. TriggerUnlockSystem"]
+    S16["16. DoorTickSystem"]
+    S17["17. StealthUpdateSystem"]
+    S18["18. VitalsSystems<br/>(Equip → Drain → Recalc → HPDrain)"]
+    S19["19. DeathCheckSystem"]
+    S20["20. DeadEntityCleanupSystem"]
+    S21["21. CollisionPairCleanupSystem"]
 
     S1 --> S2 --> S3 --> S4
     S4 --> S5 --> S6 --> S7 --> S8
     S8 --> S9 --> S10
-    S10 --> S11 --> S12
-    S12 --> S13 --> S14 --> S15
-    S15 --> S16 --> S17 --> S18
+    S10 --> S11 --> S12 --> S13 --> S14
+    S14 --> S15 --> S16
+    S16 --> S17 --> S18
+    S18 --> S19 --> S20 --> S21
 
-    DamageObs -.->|"срабатывает во время S5"| S16
+    DamageObs -.->|"срабатывает во время S5"| S19
 ```
 
 ---
@@ -127,24 +131,16 @@ graph TD
 | **Немедленно** | Инвалидирует `FDestructibleStatic.Profile`, переводит тело на слой DEBRIS (без отложенного ожидания). |
 | **Setup** | `SetupDestructibleCollisionSystems()` |
 
-### 11. TriggerUnlockSystem
+### 11. WeaponEquipSystem
 
 | Свойство | Значение |
 |----------|----------|
-| **Запросы** | `FDoorTriggerLink`, `FTagDoorTrigger` |
-| **Действие** | Разрешает связь триггер → дверь. Устанавливает `FDoorInstance.bUnlocked = true`. |
-| **Почему до DoorTick** | Дверь должна знать о разблокировке до тика конечного автомата. |
-| **Setup** | `SetupDoorSystems()` |
+| **Запросы** | `FWeaponSlotState`, `FTagWeaponSlot` |
+| **Действие** | Обрабатывает запросы на экипировку/снятие оружия. Управляет переходами слотов и привязкой entity оружия. |
+| **Почему до WeaponTick** | Состояние экипировки должно быть определено до тика систем оружия. |
+| **Setup** | `SetupWeaponSystems()` |
 
-### 12. DoorTickSystem
-
-| Свойство | Значение |
-|----------|----------|
-| **Запросы** | `FDoorStatic`, `FDoorInstance` |
-| **Действие** | 5-состоянный автомат: Locked → Closed → Opening → Open → Closing. Управление мотором constraint. Таймер автозакрытия. |
-| **Setup** | `SetupDoorSystems()` |
-
-### 13. WeaponTickSystem
+### 12. WeaponTickSystem
 
 | Свойство | Значение |
 |----------|----------|
@@ -152,7 +148,7 @@ graph TD
 | **Действие** | Убывание кулдауна стрельбы. Кулдаун очереди. Сброс полуавтомата. Убывание разброса. |
 | **Setup** | `SetupWeaponSystems()` |
 
-### 14. WeaponReloadSystem
+### 13. WeaponReloadSystem
 
 | Свойство | Значение |
 |----------|----------|
@@ -160,7 +156,7 @@ graph TD
 | **Действие** | Обратный отсчёт перезарядки. Перенос патронов (запас → магазин). Уведомление UI. |
 | **Setup** | `SetupWeaponSystems()` |
 
-### 15. WeaponFireSystem
+### 14. WeaponFireSystem
 
 | Свойство | Значение |
 |----------|----------|
@@ -169,7 +165,70 @@ graph TD
 | **Почему после перезарядки** | Перезарядка должна завершиться до проверки боезапаса системой стрельбы. |
 | **Setup** | `SetupWeaponSystems()` |
 
-### 16. DeathCheckSystem
+### 15. TriggerUnlockSystem
+
+| Свойство | Значение |
+|----------|----------|
+| **Запросы** | `FDoorTriggerLink`, `FTagDoorTrigger` |
+| **Действие** | Разрешает связь триггер → дверь. Устанавливает `FDoorInstance.bUnlocked = true`. |
+| **Почему до DoorTick** | Дверь должна знать о разблокировке до тика конечного автомата. |
+| **Setup** | `SetupDoorSystems()` |
+
+### 16. DoorTickSystem
+
+| Свойство | Значение |
+|----------|----------|
+| **Запросы** | `FDoorStatic`, `FDoorInstance` |
+| **Действие** | 5-состоянный автомат: Locked → Closed → Opening → Open → Closing. Управление мотором constraint. Таймер автозакрытия. |
+| **Setup** | `SetupDoorSystems()` |
+
+### 17. StealthUpdateSystem
+
+| Свойство | Значение |
+|----------|----------|
+| **Запросы** | `FStealthInstance`, `FWorldPosition` |
+| **Действие** | Обновляет состояние скрытности на основе зон освещения и шума. Рассчитывает видимость/слышимость для ИИ. |
+| **Setup** | `SetupStealthSystems()` |
+
+### 18. VitalsSystems
+
+Четыре подсистемы, выполняемые последовательно:
+
+#### 18a. EquipmentModifierSystem
+
+| Свойство | Значение |
+|----------|----------|
+| **Запросы** | `FEquipmentVitalsCache`, `FCharacterInventoryRef` |
+| **Действие** | Сканирует экипированные предметы на наличие модификаторов `FVitalsItemStatic`. Кэширует агрегированные модификаторы характеристик. |
+| **Почему первая** | Модификаторы экипировки должны быть рассчитаны до использования системами расхода/регенерации. |
+| **Setup** | `SetupVitalsSystems()` |
+
+#### 18b. VitalDrainSystem
+
+| Свойство | Значение |
+|----------|----------|
+| **Запросы** | `FVitalsStatic`, `FVitalsInstance`, `FStatModifiers` |
+| **Действие** | Применяет потиковый расход витальных показателей (голод, жажда, выносливость). Модулируется экипировкой и температурой. |
+| **Setup** | `SetupVitalsSystems()` |
+
+#### 18c. VitalModifierRecalcSystem
+
+| Свойство | Значение |
+|----------|----------|
+| **Запросы** | `FVitalsInstance`, `FStatModifiers` |
+| **Действие** | Пересчитывает производные модификаторы характеристик на основе текущих уровней витальных показателей (напр., низкий голод снижает макс. выносливость). |
+| **Setup** | `SetupVitalsSystems()` |
+
+#### 18d. VitalHPDrainSystem
+
+| Свойство | Значение |
+|----------|----------|
+| **Запросы** | `FVitalsInstance`, `FHealthInstance` |
+| **Действие** | Наносит урон HP при критических уровнях витальных показателей (голодание, обезвоживание). |
+| **Почему последняя** | Должна выполниться после расхода и пересчёта, чтобы штраф HP отражал состояние витальных показателей текущего тика. |
+| **Setup** | `SetupVitalsSystems()` |
+
+### 19. DeathCheckSystem
 
 | Свойство | Значение |
 |----------|----------|
@@ -177,7 +236,7 @@ graph TD
 | **Действие** | Добавляет `FTagDead` если `CurrentHP <= 0`. |
 | **Почему здесь** | Все источники урона (системы столкновений, observer) уже обработаны к этому моменту. |
 
-### 17. DeadEntityCleanupSystem
+### 20. DeadEntityCleanupSystem
 
 | Свойство | Значение |
 |----------|----------|
@@ -185,7 +244,7 @@ graph TD
 | **Действие** | Tombstone тела. Очистка constraints. Удаление ISM. Запуск VFX смерти. Возврат в пул. `entity.destruct()`. |
 | **Почему предпоследняя** | Должна обработать после всех систем, которые могут добавить `FTagDead`. |
 
-### 18. CollisionPairCleanupSystem
+### 21. CollisionPairCleanupSystem
 
 | Свойство | Значение |
 |----------|----------|
@@ -213,17 +272,25 @@ graph TD
 ```cpp
 void SetupFlecsSystems()
 {
-    RegisterFlecsComponents();          // Все ~50 компонентов
+    RegisterFlecsComponents();          // Все компоненты
+    InitAbilityTickFunctions();
 
-    SetupDamageObserver();              // Реактивный
-    SetupLifetimeSystems();             // WorldItemDespawn, PickupGrace, ProjectileLifetime, DebrisLifetime
-    SetupDamageCollisionSystems();      // DamageCollision, BounceCollision
-    SetupPickupCollisionSystems();      // PickupCollision
-    SetupDestructibleCollisionSystems();// Destructible, ConstraintBreak, Fragmentation
+    // DamageObserver (реактивный, инлайн)
+    // WorldItemDespawnSystem (инлайн)
+    // PickupGraceSystem (инлайн)
+    // ProjectileLifetimeSystem (инлайн)
+    // DebrisLifetimeSystem (инлайн)
+
+    SetupCollisionSystems();            // DamageCollision, BounceCollision, PickupCollision, Destructible
+    SetupFragmentationSystems();        // ConstraintBreak, Fragmentation
+    SetupWeaponSystems();               // WeaponEquip, WeaponTick, WeaponReload, WeaponFire
     SetupDoorSystems();                 // TriggerUnlock, DoorTick
-    SetupWeaponSystems();              // WeaponTick, WeaponReload, WeaponFire
-    SetupDeathSystems();               // DeathCheck, DeadEntityCleanup
-    SetupCleanupSystems();             // CollisionPairCleanup (ВСЕГДА ПОСЛЕДНЯЯ)
+    SetupStealthSystems();              // StealthUpdateSystem
+    SetupVitalsSystems();               // EquipmentModifier, VitalDrain, VitalModifierRecalc, VitalHPDrain
+
+    // DeathCheckSystem (инлайн)
+    // DeadEntityCleanupSystem (инлайн)
+    // CollisionPairCleanupSystem (ВСЕГДА ПОСЛЕДНЯЯ, инлайн)
 }
 ```
 
@@ -236,8 +303,12 @@ void SetupFlecsSystems()
 | Системы времени жизни до систем столкновений | Истёкшие сущности должны быть мертвы до обработки столкновений |
 | PickupGrace до PickupCollision | Таймер защиты должен быть проверен перед разрешением подбора |
 | ConstraintBreak до Fragmentation | Существующие разрывы должны быть обработаны до создания новых фрагментов |
-| TriggerUnlock до DoorTick | Дверь должна знать о разблокировке до тика конечного автомата |
+| WeaponEquip до WeaponTick | Экипировка/снятие должны быть определены до тика систем оружия |
 | WeaponReload до WeaponFire | Перезарядка должна завершиться до проверки боезапаса |
+| TriggerUnlock до DoorTick | Дверь должна знать о разблокировке до тика конечного автомата |
+| Vitals после Stealth | Температурные зоны влияют на скорость расхода витальных показателей |
+| EquipmentModifier до VitalDrain | Бонусы экипировки должны быть кэшированы до расчёта расхода |
+| VitalHPDrain до DeathCheck | Урон HP от критических витальных показателей должен быть применён до проверки смерти |
 | Все источники урона до DeathCheck | Все попадания за тик должны быть применены до проверки смерти |
 | DeadEntityCleanup до CollisionPairCleanup | Мёртвые entity должны быть очищены, пока данные столкновений ещё существуют |
 | CollisionPairCleanup ВСЕГДА ПОСЛЕДНЯЯ | Все системы должны закончить обработку пар первыми |

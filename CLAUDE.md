@@ -71,13 +71,13 @@ Utils/          — FTimeDilationStack, ConeImpulse, LedgeDetector, BarrageSpawn
 | `FlecsEntityComponents.h` | FEntityDefinitionRef, FFocusCameraOverride, FLootStatic |
 | `FlecsInteractionComponents.h` | FInteractionStatic, FInteractionInstance, FInteractionAngleOverride |
 | `FlecsProjectileComponents.h` | FProjectileStatic, FProjectileInstance |
-| `FlecsItemComponents.h` | FItemStaticData, FContainerStatic, FItemInstance, FContainerInstance, etc. |
+| `FlecsItemComponents.h` | FItemStaticData, FContainerStatic, FItemInstance, FContainerInstance, FQuickLoadStatic, FTagQuickLoadDevice, etc. |
 | `FlecsDestructibleComponents.h` | FDestructibleStatic, FDebrisInstance, FFragmentationData |
-| `FlecsWeaponComponents.h` | FAimDirection, FWeaponStatic, FWeaponInstance, FEquippedBy |
+| `FlecsWeaponComponents.h` | FAimDirection, FPelletRingData, FWeaponStatic, FWeaponInstance, FEquippedBy, EActiveLoadMethod, EWeaponReloadPhase |
 | `FlecsDoorComponents.h` | FDoorStatic, FDoorInstance |
 | **Plugin:** `FlecsBarrageComponents.h` | FBarrageBody, FISMRender, FCollisionPair, FTagCollision* |
 
-**Profiles:** PhysicsProfile, RenderProfile, HealthProfile, DamageProfile, ProjectileProfile, ContainerProfile, ItemDefinition, WeaponProfile, InteractionProfile
+**Profiles:** PhysicsProfile, RenderProfile, HealthProfile, DamageProfile, ProjectileProfile, ContainerProfile, ItemDefinition, WeaponProfile, InteractionProfile, QuickLoadProfile
 
 ---
 
@@ -93,6 +93,7 @@ PREFAB (one per type) ───────────────────�
   FItemStaticData   { TypeId, MaxStack, Weight, GridSize, EntityDefinition* }
   FContainerStatic  { Type, GridWidth, GridHeight, MaxItems, MaxWeight }
   FInteractionStatic { MaxRange, bSingleUse }
+  FQuickLoadStatic   { DeviceType, RoundsHeld, CaliberId, AmmoTypeDefinition*, InsertTime }
   FEntityDefinitionRef { EntityDefinition* }
          ↑ IsA (inheritance)
 ENTITY (each instance) ─────────────────────────────────────
@@ -123,10 +124,16 @@ OnBarrageContact → FCollisionPair + Tags → Systems process by tag → Collis
 | FTagCollisionDestructible | DestructibleCollisionSystem |
 
 ### System Execution Order
-1. WorldItemDespawnSystem → 2. PickupGraceSystem → 3. ProjectileLifetimeSystem
-4. DamageCollisionSystem → 5. BounceCollisionSystem → 6. PickupCollisionSystem → 7. DestructibleCollisionSystem
-8. WeaponTickSystem → 9. WeaponReloadSystem → 10. WeaponFireSystem
-11. DeathCheckSystem → 12. DeadEntityCleanupSystem → 13. CollisionPairCleanupSystem (LAST)
+
+```text
+DamageObserver (event-driven)
+WorldItemDespawnSystem → PickupGraceSystem → ProjectileLifetimeSystem → DebrisLifetimeSystem
+DamageCollisionSystem → BounceCollisionSystem → PickupCollisionSystem → DestructibleCollisionSystem
+ConstraintBreakSystem → FragmentationSystem
+WeaponEquipSystem → WeaponTickSystem → WeaponReloadSystem → WeaponFireSystem
+DoorSystems → StealthUpdateSystem → VitalsSystems
+DeathCheckSystem → DeadEntityCleanupSystem → CollisionPairCleanupSystem (LAST)
+```
 
 ---
 
@@ -254,6 +261,47 @@ E Key (OnSpawnItem):
 | `UFlecsInteractionProfile` | Data Asset | InteractionPrompt, InteractionRange, bSingleUse |
 
 **Prompt text** is NOT stored in ECS — read via `FEntityDefinitionRef → EntityDefinition → InteractionProfile → InteractionPrompt`.
+
+---
+
+## Quick-Load Devices (Stripper Clips, Speedloaders)
+
+Batch-insert reload for internal magazines. Devices are pre-loaded inventory items that load multiple rounds at once.
+
+- **Speedloader**: loads all chambers, requires empty mag, consumed on use
+- **Stripper Clip**: loads N rounds (configurable), needs free slots, consumed on use
+
+```text
+Reload Start → Scan inventory (Speedloader > StripperClip > LooseRound)
+  → Opening (OpenTimeDevice if device)
+  → InsertingRound:
+      Device? → BatchInsertTime → Push N rounds → Consume device → Re-scan or fallback
+      Loose?  → InsertRoundTime → Push 1 round (existing behavior)
+  → Closing (CloseTimeDevice if device used) → Idle
+```
+
+- **Batch non-cancellable**: cancel deferred until batch timer expires
+- **Auto-fallback**: device depleted → switches to loose rounds automatically
+- **Config**: WeaponProfile `bAcceptSpeedloaders`/`bAcceptStripperClips`, `OpenTimeDevice`, `CloseTimeDevice`
+- **Data Asset**: `UFlecsQuickLoadProfile` on `UFlecsEntityDefinition::QuickLoadProfile`
+- **ECS**: `FQuickLoadStatic` (prefab), `FTagQuickLoadDevice` (tag), `EActiveLoadMethod` (weapon instance state)
+- **Key file**: `WeaponReloadSystem.cpp` — `ScanForQuickLoadDevice()` + batch insert logic
+
+---
+
+## Shotgun Pellet Spread (Ring-Based)
+
+Fixed concentric rings with random rotation per shot (Overwatch-style Technique G).
+
+```text
+Config: FPelletRing { PelletCount, RadiusDecidegrees, AngularJitterDecidegrees, RadialJitterDecidegrees }
+  → FWeaponStatic::PelletRings[4] (radians, via FromProfile)
+  → WeaponFireSystem: bloom once → rotate pattern → per-pellet dual-axis jitter → spawn
+```
+
+- Legacy fallback: weapons without PelletRings use VRandCone per pellet
+- `TArray<FVector, TInlineAllocator<16>>` for stack-allocated pellet directions
+- **Key file**: `WeaponFireSystem.cpp`, `FlecsWeaponProfile.h` (FPelletRing USTRUCT)
 
 ---
 

@@ -168,3 +168,31 @@ A custom input router that manages cursor visibility, mouse capture, and look/mo
 
 ### Optimistic Drag-Drop
 The inventory UI pattern where items are moved visually immediately on drag, without waiting for sim-thread confirmation. If the sim thread rejects the operation, the UI reverts.
+
+---
+
+## Weapon System
+
+### Quick-Load Device
+
+An item that batch-loads rounds into a weapon's internal magazine. Configured via `UFlecsQuickLoadProfile` on the entity definition. Two subtypes: Speedloader and Stripper Clip.
+
+### Speedloader
+
+A quick-load device that inserts all rounds simultaneously into a revolver cylinder. Requires the magazine to be completely empty (`bRequiresEmptyMagazine = true`).
+
+### Stripper Clip
+
+A quick-load device that feeds rounds into an internal magazine (e.g., bolt-action rifle). Does not require an empty magazine -- can top off partially loaded weapons.
+
+### Pellet Ring
+
+A concentric ring of pellets in a shotgun spread pattern. Defined by `FPelletRing` in `UFlecsWeaponProfile`. Each ring has a radius, pellet count, and jitter values. Multiple rings create realistic shotgun patterns (e.g., inner tight ring + outer wide ring). When `PelletRings` is non-empty, it overrides `ProjectilesPerShot`.
+
+### Caliber
+
+A named ammunition size (e.g., "9x19mm", "12ga"). Registered in `UFlecsCaliberRegistry`. Weapons and ammo types reference calibers by `FName` to enforce compatibility.
+
+### Magazine Profile
+
+`UFlecsFlecsMagazineProfile` -- defines a weapon's internal magazine: capacity, caliber, compatible ammo types, and reload behavior (single-round vs full-magazine). Produces the `FMagazineStatic` ECS component on the weapon prefab.

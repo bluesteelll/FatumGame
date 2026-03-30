@@ -40,10 +40,12 @@
 
 | Компонент | Уровень | Поля |
 |-----------|---------|------|
-| `FAimDirection` | Экземпляр | `AimWorldDirection`, `AimWorldOrigin`, `MuzzleWorldPosition` |
-| `FWeaponStatic` | Prefab | Все данные стрельбы, боеприпасов, разброса, отдачи, дульного среза, визуала, ADS, движения оружия |
-| `FWeaponInstance` | Экземпляр | `CurrentMag`, `CurrentReserve`, `FireCooldown`, `bReloading`, `ReloadTimer`, `CurrentBloom`, флаги ввода |
-| `FEquippedBy` | Экземпляр | `OwnerEntityId`, `SlotId` |
+| `FAimDirection` | Экземпляр | `Direction`, `CharacterPosition`, `MuzzleWorldPosition` |
+| `FWeaponStatic` | Prefab | Стрельба (ProjectileDefinition, FireInterval, BurstCount, ProjectilesPerShot, bIsAutomatic, bIsBurst), Боеприпасы (AcceptedCaliberIds, AmmoPerShot, bHasChamber, bUnlimitedAmmo, RemoveMagTime, InsertMagTime, ChamberTime), Тип перезарядки (ReloadType, OpenTime, InsertRoundTime, CloseTime), Быстрая загрузка (AcceptedDeviceTypes, bDisableQuickLoadDevices, OpenTimeDevice, CloseTimeDevice), Циклирование (bRequiresCycling, CycleTime), Нажатие спуска (bEnableTriggerPull, TriggerPullTime, bTriggerPullEveryShot), Разброс (BaseSpread, SpreadPerShot, MaxBloom, BloomDecayRate, BaseSpreadMultipliers[], BloomMultipliers[]), Кольца дроби (PelletRingCount, PelletRings[4]), данные дульного среза, визуала, анимаций |
+| `FWeaponInstance` | Экземпляр | Магазин (InsertedMagazineId), Стрельба (FireCooldownRemaining, BurstShotsRemaining, BurstCooldownRemaining, bHasFiredSincePress), Перезарядка (ReloadPhase, ReloadPhaseTimer, SelectedMagazineId, bPrevMagWasEmpty, bChambered, ChamberedAmmoTypeIdx, RoundsInsertedThisReload), Быстрая загрузка (ActiveLoadMethod, ActiveDeviceEntityId, BatchSize, BatchInsertTime, DeviceAmmoTypeIdx, bUsedDeviceThisReload), Разброс (CurrentBloom, TimeSinceLastShot), Спуск (TriggerPullTimer, bTriggerPulling), Циклирование (bNeedsCycle, bCycling, CycleTimeRemaining), ShotsFiredTotal, флаги ввода |
+| `FEquippedBy` | Экземпляр | `CharacterEntityId`, `SlotId` |
+| `FPelletRingData` | (вложенный) | `PelletCount`, `RadiusRadians`, `AngularJitterRadians`, `RadialJitterRadians` |
+| `FWeaponSlotState` | Экземпляр (персонаж) | `ActiveSlotIndex`, `PendingSlotIndex`, `EquipPhase`, `EquipTimer`, `WeaponSlotContainerId` |
 
 **Заголовок:** `Weapon/Public/Components/FlecsProjectileComponents.h`
 
@@ -69,6 +71,10 @@
 | `FContainerSlotsInstance` | Экземпляр | Карта `SlotToItemEntity` |
 | `FWorldItemInstance` | Экземпляр | `DespawnTimer`, `PickupGraceTimer`, `DroppedByEntityId` |
 | `FContainedIn` | Экземпляр | `ContainerEntityId`, `GridPosition`, `SlotIndex` |
+| `FMagazineStatic` | Prefab | `CaliberId`, `Capacity`, `WeightPerRound`, `ReloadSpeedModifier`, `AcceptedAmmoTypes[8]`, `AcceptedAmmoTypeCount` |
+| `FMagazineInstance` | Экземпляр | `AmmoSlots[60]` (LIFO uint8 индексы типов патронов), `AmmoCount` |
+| `FAmmoTypeRef` | Экземпляр | `AmmoTypeIndex` (индекс в `FMagazineStatic::AcceptedAmmoTypes`) |
+| `FQuickLoadStatic` | Prefab | `DeviceType` (EQuickLoadDeviceType), `RoundsHeld`, `CaliberId`, `AmmoTypeDefinition*`, `InsertTime`, `bRequiresEmptyMagazine` |
 
 ---
 
@@ -187,6 +193,10 @@
 | `FTagConsumable` | Расходуемый предмет |
 | `FTagDebrisFragment` | Фрагмент обломков (возврат в пул) |
 | `FTagWeapon` | Сущность-оружие |
+| `FTagReloading` | Оружие перезаряжается (оптимизация запросов) |
+| `FTagWeaponSlot` | Контейнер слота оружия |
+| `FTagMagazine` | Сущность-магазин |
+| `FTagQuickLoadDevice` | Устройство быстрой загрузки (обойма / спидлоадер) |
 | `FTagDoor` | Сущность-дверь |
 | `FTagDoorTrigger` | Триггер двери |
 | `FTagTelekinesisHeld` | Удерживается телекинезом |

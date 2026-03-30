@@ -40,10 +40,12 @@
 
 | Component | Level | Fields |
 |-----------|-------|--------|
-| `FAimDirection` | Instance | `AimWorldDirection`, `AimWorldOrigin`, `MuzzleWorldPosition` |
-| `FWeaponStatic` | Prefab | All firing, ammo, bloom, recoil, muzzle, visual, ADS, weapon motion data |
-| `FWeaponInstance` | Instance | `CurrentMag`, `CurrentReserve`, `FireCooldown`, `bReloading`, `ReloadTimer`, `CurrentBloom`, input flags |
-| `FEquippedBy` | Instance | `OwnerEntityId`, `SlotId` |
+| `FAimDirection` | Instance | `Direction`, `CharacterPosition`, `MuzzleWorldPosition` |
+| `FWeaponStatic` | Prefab | Firing (ProjectileDefinition, FireInterval, BurstCount, ProjectilesPerShot, bIsAutomatic, bIsBurst), Ammo (AcceptedCaliberIds, AmmoPerShot, bHasChamber, bUnlimitedAmmo, RemoveMagTime, InsertMagTime, ChamberTime), ReloadType (ReloadType, OpenTime, InsertRoundTime, CloseTime), Quick-Load (AcceptedDeviceTypes, bDisableQuickLoadDevices, OpenTimeDevice, CloseTimeDevice), Cycling (bRequiresCycling, CycleTime), Trigger Pull (bEnableTriggerPull, TriggerPullTime, bTriggerPullEveryShot), Bloom (BaseSpread, SpreadPerShot, MaxBloom, BloomDecayRate, BaseSpreadMultipliers[], BloomMultipliers[]), Pellet Rings (PelletRingCount, PelletRings[4]), Muzzle, Visual, Animation data |
+| `FWeaponInstance` | Instance | Magazine (InsertedMagazineId), Firing (FireCooldownRemaining, BurstShotsRemaining, BurstCooldownRemaining, bHasFiredSincePress), Reload (ReloadPhase, ReloadPhaseTimer, SelectedMagazineId, bPrevMagWasEmpty, bChambered, ChamberedAmmoTypeIdx, RoundsInsertedThisReload), Quick-Load (ActiveLoadMethod, ActiveDeviceEntityId, BatchSize, BatchInsertTime, DeviceAmmoTypeIdx, bUsedDeviceThisReload), Bloom (CurrentBloom, TimeSinceLastShot), Trigger (TriggerPullTimer, bTriggerPulling), Cycling (bNeedsCycle, bCycling, CycleTimeRemaining), ShotsFiredTotal, input flags |
+| `FEquippedBy` | Instance | `CharacterEntityId`, `SlotId` |
+| `FPelletRingData` | (nested) | `PelletCount`, `RadiusRadians`, `AngularJitterRadians`, `RadialJitterRadians` |
+| `FWeaponSlotState` | Instance (character) | `ActiveSlotIndex`, `PendingSlotIndex`, `EquipPhase`, `EquipTimer`, `WeaponSlotContainerId` |
 
 **Header:** `Weapon/Public/Components/FlecsProjectileComponents.h`
 
@@ -69,6 +71,10 @@
 | `FContainerSlotsInstance` | Instance | `SlotToItemEntity` map |
 | `FWorldItemInstance` | Instance | `DespawnTimer`, `PickupGraceTimer`, `DroppedByEntityId` |
 | `FContainedIn` | Instance | `ContainerEntityId`, `GridPosition`, `SlotIndex` |
+| `FMagazineStatic` | Prefab | `CaliberId`, `Capacity`, `WeightPerRound`, `ReloadSpeedModifier`, `AcceptedAmmoTypes[8]`, `AcceptedAmmoTypeCount` |
+| `FMagazineInstance` | Instance | `AmmoSlots[60]` (LIFO uint8 ammo type indices), `AmmoCount` |
+| `FAmmoTypeRef` | Instance | `AmmoTypeIndex` (index into `FMagazineStatic::AcceptedAmmoTypes`) |
+| `FQuickLoadStatic` | Prefab | `DeviceType` (EQuickLoadDeviceType), `RoundsHeld`, `CaliberId`, `AmmoTypeDefinition*`, `InsertTime`, `bRequiresEmptyMagazine` |
 
 ---
 
@@ -187,6 +193,10 @@ All tags are zero-size structs (`sizeof == 0`):
 | `FTagConsumable` | Consumable item |
 | `FTagDebrisFragment` | Debris fragment (pool return) |
 | `FTagWeapon` | Weapon entity |
+| `FTagReloading` | Weapon is currently reloading (query optimization) |
+| `FTagWeaponSlot` | Weapon slot container |
+| `FTagMagazine` | Magazine entity |
+| `FTagQuickLoadDevice` | Quick-load device entity (stripper clip / speedloader) |
 | `FTagDoor` | Door entity |
 | `FTagDoorTrigger` | Door trigger |
 | `FTagTelekinesisHeld` | Held by telekinesis |

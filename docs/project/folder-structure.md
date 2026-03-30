@@ -187,6 +187,15 @@ Source/FatumGame/
 │   │   └── FatumInputTags.h              Gameplay tag constants
 │   └── Private/
 │
+├── Vitals/                                Vitals / survival system
+│   ├── Public/
+│   │   ├── Components/FlecsVitalsComponents.h  FVitalsStatic, FVitalsInstance, FVitalsItemStatic
+│   │   └── Library/FlecsVitalsLibrary.h        BP: vitals queries and mutations
+│   └── Private/
+│       ├── Components/FlecsVitalsComponents.cpp
+│       ├── Library/FlecsVitalsLibrary.cpp
+│       └── Systems/FlecsArtillerySubsystem_VitalsSystems.cpp
+│
 ├── Definitions/                           ALL Data Assets & Profiles
 │   └── Public/
 │       ├── FlecsEntityDefinition.h        Master data asset
@@ -213,7 +222,14 @@ Source/FatumGame/
 │       ├── FlecsNoiseZoneProfile.h
 │       ├── FlecsContainerDefinition.h
 │       ├── FlecsProjectileDefinition.h
-│       └── FlecsConstrainedGroupDefinition.h
+│       ├── FlecsConstrainedGroupDefinition.h
+│       ├── FlecsCaliberRegistry.h         Caliber name registry singleton
+│       ├── FlecsAmmoTypeDefinition.h      Ammo type data asset
+│       ├── FlecsMagazineProfile.h         Internal magazine profile
+│       ├── FlecsQuickLoadProfile.h        Quick-load device profile (speedloaders, stripper clips)
+│       ├── FlecsVitalsProfile.h           Character vitals (hunger, thirst, etc.)
+│       ├── FlecsVitalsItemProfile.h       Item vitals effects
+│       └── FlecsTemperatureZoneProfile.h  Temperature zone data
 │
 └── Utils/                                 Shared utilities
     ├── Public/

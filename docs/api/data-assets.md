@@ -20,6 +20,9 @@ The master data asset. Created in Content Browser → Data Asset → `FlecsEntit
 | `ProjectileProfile` | `UFlecsProjectileProfile*` | Speed, lifetime, bounces |
 | `WeaponProfile` | `UFlecsWeaponProfile*` | Fire rate, ammo, recoil |
 | `ContainerProfile` | `UFlecsContainerProfile*` | Grid, slots, weight |
+| `MagazineProfile` | `UFlecsMagazineProfile*` | Caliber, capacity, ammo types |
+| `AmmoTypeDefinition` | `UFlecsAmmoTypeDefinition*` | Loose ammo item type |
+| `QuickLoadProfile` | `UFlecsQuickLoadProfile*` | Stripper clip / speedloader |
 | `InteractionProfile` | `UFlecsInteractionProfile*` | Range, type, prompt |
 | `NiagaraProfile` | `UFlecsNiagaraProfile*` | Attached/death VFX |
 | `DestructibleProfile` | `UFlecsDestructibleProfile*` | Fragmentation, constraints |
@@ -31,6 +34,8 @@ The master data asset. Created in Content Browser → Data Asset → `FlecsEntit
 | `RopeSwingProfile` | `UFlecsRopeSwingProfile*` | Swing force, radius |
 | `StealthLightProfile` | `UFlecsStealthLightProfile*` | Light type, intensity |
 | `NoiseZoneProfile` | `UFlecsNoiseZoneProfile*` | Surface noise zone |
+| `VitalsProfile` | `UFlecsVitalsProfile*` | Hunger, thirst, warmth |
+| `TemperatureZoneProfile` | `UFlecsTemperatureZoneProfile*` | Ambient temperature zone |
 
 ### Tag Flags
 
@@ -121,18 +126,35 @@ Large profile — key fields:
 
 | Group | Fields |
 |-------|--------|
-| **Firing** | FireMode, FireRate, BurstCount, ProjectilesPerShot, AmmoPerShot |
-| **Ammo** | MagazineSize, MaxReserveAmmo, ReloadTime |
+| **Firing** | FireMode, FireRate, BurstCount, ProjectilesPerShot, AmmoPerShot, PelletRings (`TArray<FPelletRing>`) |
+| **Trigger Pull** | bEnableTriggerPull, TriggerPullTime, bTriggerPullEveryShot |
+| **Ammo & Reload** | AcceptedCalibers, AmmoPerShot, bHasChamber, bUnlimitedAmmo, RemoveMagTime, InsertMagTime, ChamberTime, ReloadMoveSpeedMultiplier |
+| **Reload Type** | ReloadType (Magazine / SingleRound), OpenTime, InsertRoundTime, CloseTime, InternalMagazineDefinition |
+| **Quick-Load Devices** | bAcceptStripperClips, bAcceptSpeedloaders, bDisableQuickLoadDevices, OpenTimeDevice, CloseTimeDevice |
+| **Cycling** | bRequiresCycling, CycleTime |
 | **Projectile** | ProjectileDefinition, ProjectileSpeedMultiplier, DamageMultiplier |
 | **Muzzle** | MuzzleOffset, MuzzleSocketName |
-| **Bloom** | BaseSpread, SpreadPerShot, MaxSpread, SpreadDecayRate, SpreadRecoveryDelay, MovingSpreadAdd, JumpingSpreadAdd |
+| **Bloom** | BaseSpread, SpreadPerShot, MaxSpread, SpreadDecayRate, SpreadRecoveryDelay, per-state multipliers (FWeaponStateMultipliers) |
 | **Recoil** | KickPitch/Yaw Min/Max, KickRecoverySpeed, KickDamping, RecoilPatternCurve, PatternScale |
 | **Screen Shake** | ShakeAmplitude, ShakeFrequency, ShakeDecaySpeed |
 | **ADS** | ADSFOV, ADSTransitionIn/OutSpeed, ADSSensitivityMultiplier, SightAnchorSocket |
 | **Weapon Motion** | InertiaStiffness, InertiaDamping, IdleSway, WalkBob, StrafeTilt, LandingImpact, SprintPose |
 | **Collision** | CollisionTraceDistance, RetractDistances, ReadyPoseOffsets |
 | **Visuals** | EquippedMesh, AttachSocket, AttachOffset, DroppedMesh, DroppedScale |
-| **Animations** | FireMontage, ReloadMontage, EquipMontage |
+| **Animations** | FireMontage, ReloadMontage, EquipMontage, EquipTime |
+
+### UFlecsQuickLoadProfile
+
+Data asset for quick-load devices (stripper clips, speedloaders). Attach to `UFlecsEntityDefinition` to make an item a quick-load device.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `DeviceType` | `EQuickLoadDeviceTypeUI` | StripperClip | Stripper Clip or Speedloader |
+| `RoundsHeld` | `int32` | 5 | Rounds loaded per use (1-30) |
+| `Caliber` | `FName` | — | Must match CaliberRegistry entry |
+| `AmmoTypeDefinition` | `UFlecsAmmoTypeDefinition*` | — | Ammo type pre-loaded in device |
+| `InsertTime` | `float` | 0.8 | Batch insert duration (seconds) |
+| `bRequiresEmptyMagazine` | `bool` | false | Magazine must be empty (speedloaders) |
 
 ### UFlecsContainerProfile
 

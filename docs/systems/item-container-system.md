@@ -154,6 +154,87 @@ Called by `PickupCollisionSystem` when a character touches a pickupable item:
 
 ---
 
+## Magazine Components
+
+Magazines are item entities with additional ammo-tracking components. Defined in `FlecsItemComponents.h`.
+
+### FMagazineStatic (Prefab)
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `CaliberId` | `uint8` | Index from CaliberRegistry (0xFF = invalid) |
+| `Capacity` | `int32` | Maximum rounds (default 30) |
+| `WeightPerRound` | `float` | Weight per round (kg) |
+| `ReloadSpeedModifier` | `float` | Reload speed multiplier |
+| `AcceptedAmmoTypes[8]` | `UFlecsAmmoTypeDefinition*[]` | Accepted ammo type definitions |
+| `AcceptedAmmoTypeCount` | `int32` | Number of accepted ammo types |
+
+### FMagazineInstance (Instance)
+
+LIFO ammo stack. `AmmoSlots[AmmoCount-1]` = next round to fire.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `AmmoSlots[60]` | `uint8[]` | Ammo type indices (into `FMagazineStatic::AcceptedAmmoTypes`) |
+| `AmmoCount` | `int32` | Current rounds in magazine |
+
+Methods: `Pop()` (returns ammo type index or -1), `Push(uint8)` (returns false if full), `IsEmpty()`, `IsFull(Capacity)`.
+
+### FAmmoTypeRef (Instance)
+
+On loose ammo items in inventory. Stores ammo type index for fast lookup during single-round reload.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `AmmoTypeIndex` | `int32` | Index into `FMagazineStatic::AcceptedAmmoTypes` (-1 = unresolved) |
+
+### Magazine Tag
+
+| Tag | Purpose |
+|-----|---------|
+| `FTagMagazine` | Entity is a magazine |
+
+---
+
+## Quick-Load Devices
+
+Stripper clips and speedloaders are item entities that batch-insert rounds into single-round-reload weapons. Defined in `FlecsItemComponents.h`.
+
+### EQuickLoadDeviceType
+
+| Value | Description |
+|-------|-------------|
+| `StripperClip` | Strips rounds into internal magazine |
+| `Speedloader` | Loads all rounds at once (requires empty magazine) |
+
+### FQuickLoadStatic (Prefab)
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `DeviceType` | `EQuickLoadDeviceType` | StripperClip or Speedloader |
+| `RoundsHeld` | `int32` | Rounds loaded per use |
+| `CaliberId` | `uint8` | Caliber index from CaliberRegistry |
+| `AmmoTypeDefinition` | `UFlecsAmmoTypeDefinition*` | Ammo type pre-loaded in device |
+| `InsertTime` | `float` | Batch insert duration (seconds) |
+| `bRequiresEmptyMagazine` | `bool` | Magazine must be empty to use |
+
+### Bitmask Constants
+
+Used in `FWeaponStatic::AcceptedDeviceTypes`:
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `QUICKLOAD_BIT_STRIPPERCLIP` | `1 << 0` | Weapon accepts stripper clips |
+| `QUICKLOAD_BIT_SPEEDLOADER` | `1 << 1` | Weapon accepts speedloaders |
+
+### Quick-Load Tag
+
+| Tag | Purpose |
+|-----|---------|
+| `FTagQuickLoadDevice` | Entity is a quick-load device |
+
+---
+
 ## World Items
 
 Items dropped in the world have additional components:

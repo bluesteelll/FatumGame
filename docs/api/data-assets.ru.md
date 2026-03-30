@@ -20,6 +20,9 @@
 | `ProjectileProfile` | `UFlecsProjectileProfile*` | Скорость, время жизни, отскоки |
 | `WeaponProfile` | `UFlecsWeaponProfile*` | Скорострельность, боезапас, отдача |
 | `ContainerProfile` | `UFlecsContainerProfile*` | Сетка, слоты, вес |
+| `MagazineProfile` | `UFlecsMagazineProfile*` | Калибр, ёмкость, типы патронов |
+| `AmmoTypeDefinition` | `UFlecsAmmoTypeDefinition*` | Тип россыпных патронов |
+| `QuickLoadProfile` | `UFlecsQuickLoadProfile*` | Обойма / спидлоадер |
 | `InteractionProfile` | `UFlecsInteractionProfile*` | Дальность, тип, подсказка |
 | `NiagaraProfile` | `UFlecsNiagaraProfile*` | Прикреплённые VFX / VFX смерти |
 | `DestructibleProfile` | `UFlecsDestructibleProfile*` | Фрагментация, констрейнты |
@@ -31,6 +34,8 @@
 | `RopeSwingProfile` | `UFlecsRopeSwingProfile*` | Сила раскачивания, радиус |
 | `StealthLightProfile` | `UFlecsStealthLightProfile*` | Тип света, интенсивность |
 | `NoiseZoneProfile` | `UFlecsNoiseZoneProfile*` | Зона поверхностного шума |
+| `VitalsProfile` | `UFlecsVitalsProfile*` | Голод, жажда, тепло |
+| `TemperatureZoneProfile` | `UFlecsTemperatureZoneProfile*` | Зона окружающей температуры |
 
 ### Флаги тегов
 
@@ -121,18 +126,35 @@
 
 | Группа | Поля |
 |--------|------|
-| **Стрельба** | FireMode, FireRate, BurstCount, ProjectilesPerShot, AmmoPerShot |
-| **Боеприпасы** | MagazineSize, MaxReserveAmmo, ReloadTime |
+| **Стрельба** | FireMode, FireRate, BurstCount, ProjectilesPerShot, AmmoPerShot, PelletRings (`TArray<FPelletRing>`) |
+| **Нажатие спуска** | bEnableTriggerPull, TriggerPullTime, bTriggerPullEveryShot |
+| **Боеприпасы и перезарядка** | AcceptedCalibers, AmmoPerShot, bHasChamber, bUnlimitedAmmo, RemoveMagTime, InsertMagTime, ChamberTime, ReloadMoveSpeedMultiplier |
+| **Тип перезарядки** | ReloadType (Magazine / SingleRound), OpenTime, InsertRoundTime, CloseTime, InternalMagazineDefinition |
+| **Устройства быстрой загрузки** | bAcceptStripperClips, bAcceptSpeedloaders, bDisableQuickLoadDevices, OpenTimeDevice, CloseTimeDevice |
+| **Циклирование** | bRequiresCycling, CycleTime |
 | **Снаряд** | ProjectileDefinition, ProjectileSpeedMultiplier, DamageMultiplier |
 | **Дульный срез** | MuzzleOffset, MuzzleSocketName |
-| **Разброс** | BaseSpread, SpreadPerShot, MaxSpread, SpreadDecayRate, SpreadRecoveryDelay, MovingSpreadAdd, JumpingSpreadAdd |
+| **Разброс** | BaseSpread, SpreadPerShot, MaxSpread, SpreadDecayRate, SpreadRecoveryDelay, множители по состояниям (FWeaponStateMultipliers) |
 | **Отдача** | KickPitch/Yaw Min/Max, KickRecoverySpeed, KickDamping, RecoilPatternCurve, PatternScale |
 | **Тряска экрана** | ShakeAmplitude, ShakeFrequency, ShakeDecaySpeed |
 | **Прицеливание (ADS)** | ADSFOV, ADSTransitionIn/OutSpeed, ADSSensitivityMultiplier, SightAnchorSocket |
 | **Движение оружия** | InertiaStiffness, InertiaDamping, IdleSway, WalkBob, StrafeTilt, LandingImpact, SprintPose |
 | **Коллизия** | CollisionTraceDistance, RetractDistances, ReadyPoseOffsets |
 | **Визуал** | EquippedMesh, AttachSocket, AttachOffset, DroppedMesh, DroppedScale |
-| **Анимации** | FireMontage, ReloadMontage, EquipMontage |
+| **Анимации** | FireMontage, ReloadMontage, EquipMontage, EquipTime |
+
+### UFlecsQuickLoadProfile
+
+Data asset для устройств быстрой загрузки (обоймы, спидлоадеры). Прикрепляется к `UFlecsEntityDefinition`, чтобы сделать предмет устройством быстрой загрузки.
+
+| Поле | Тип | По умолчанию | Описание |
+|------|-----|-------------|----------|
+| `DeviceType` | `EQuickLoadDeviceTypeUI` | StripperClip | Обойма или спидлоадер |
+| `RoundsHeld` | `int32` | 5 | Количество заряжаемых патронов за использование (1-30) |
+| `Caliber` | `FName` | -- | Должен совпадать с записью CaliberRegistry |
+| `AmmoTypeDefinition` | `UFlecsAmmoTypeDefinition*` | -- | Тип патронов, предзаряженных в устройство |
+| `InsertTime` | `float` | 0.8 | Длительность пакетной вставки (секунды) |
+| `bRequiresEmptyMagazine` | `bool` | false | Магазин должен быть пуст (спидлоадеры) |
 
 ### UFlecsContainerProfile
 

@@ -50,6 +50,17 @@ This is the definitive list of bugs encountered in FatumGame development, their 
 
 ---
 
+### Flecs Component Registration Order (Prefab Crash)
+
+**Symptom:** Crash with `0x80000003` (breakpoint) inside Flecs when calling `Prefab.set<T>()`.
+
+**Cause:** The component type `T` was not registered with `World.component<T>()` before being used in a `Prefab.set<T>()` call. Flecs needs the component metadata (size, alignment) to exist before it can store data on any entity, including prefabs.
+
+!!! danger "Fix"
+    Register every component type with `World.component<T>()` in `RegisterFlecsComponents()` inside `FlecsArtillerySubsystem_Systems.cpp` BEFORE any prefab or system references it. This is especially easy to forget when adding new Static components for new profiles.
+
+---
+
 ### Iterator Drain Rules
 
 #### `.run()` with Query Terms: MUST Drain
