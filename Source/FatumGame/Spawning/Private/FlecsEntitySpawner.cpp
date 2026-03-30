@@ -581,6 +581,7 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 			ProjInst.LifetimeRemaining = PS->MaxLifetime;
 			ProjInst.BounceCount = 0;
 			ProjInst.GraceFramesRemaining = PS->GracePeriodFrames;
+			ProjInst.FuseRemaining = PS->FuseTime;
 			ProjInst.OwnerEntityId = Data.OwnerEntityId;
 			Entity.set<FProjectileInstance>(ProjInst);
 			Entity.add<FTagProjectile>();

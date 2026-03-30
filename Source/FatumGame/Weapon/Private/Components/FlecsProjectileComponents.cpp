@@ -15,6 +15,7 @@ FProjectileStatic FProjectileStatic::FromProfile(const UFlecsProjectileProfile* 
 	S.MaxBounces = Profile->MaxBounces;
 	S.GracePeriodFrames = Profile->GetGraceFrames();
 	S.MinVelocity = Profile->MinVelocity;
+	S.FuseTime = Profile->FuseTime;
 	S.bMaintainSpeed = Profile->bMaintainSpeed;
 	S.TargetSpeed = Profile->DefaultSpeed;
 	return S;

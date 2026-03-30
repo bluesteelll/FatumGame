@@ -1007,7 +1007,16 @@ void UBarrageDispatch::HandleContactAdded(const JPH::Body& inBody1, const JPH::B
                                           const JPH::ContactManifold& inManifold,
                                           JPH::ContactSettings& ioSettings)
 {
-	HandleContactAdded(inBody1, inBody2, ioSettings, FVector(CoordinateUtils::FromJoltCoordinates(inManifold.mBaseOffset + inManifold.mRelativeContactPointsOn1[0])));
+	FVector ContactPoint = FVector(CoordinateUtils::FromJoltCoordinates(inManifold.mBaseOffset + inManifold.mRelativeContactPointsOn1[0]));
+
+	// Extract manifold normal: axis swap only (direction, NOT position — no x100)
+	const JPH::Vec3 JoltNormal = inManifold.mWorldSpaceNormal;
+	FVector ContactNormal(JoltNormal.GetX(), -JoltNormal.GetZ(), JoltNormal.GetY());
+
+	BarrageContactEvent ContactEventToEnqueue = ConstructContactEvent(EBarrageContactEventType::ADDED, this, inBody1,
+																	  inBody2, ioSettings, ContactPoint);
+	ContactEventToEnqueue.NormalIfAny = ContactNormal;
+	ContactEventPump->Enqueue(ContactEventToEnqueue);
 }
 
 void UBarrageDispatch::HandleContactAdded(const BarrageContactEntity Ent1, const BarrageContactEntity Ent2)

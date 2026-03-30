@@ -30,6 +30,7 @@ class UFlecsTemperatureZoneProfile;
 class UFlecsMagazineProfile;
 class UFlecsAmmoTypeDefinition;
 class UFlecsQuickLoadProfile;
+class UFlecsExplosionProfile;
 
 /**
  * Unified entity definition - a preset combining multiple profiles.
@@ -122,6 +123,10 @@ public:
 	/** Quick-load device profile — makes this item a stripper clip or speedloader. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Instanced, Category = "Profiles")
 	TObjectPtr<UFlecsQuickLoadProfile> QuickLoadProfile;
+
+	/** Explosion - makes entity produce a blast wave on detonation */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Instanced, Category = "Profiles")
+	TObjectPtr<UFlecsExplosionProfile> ExplosionProfile;
 
 	/** Interaction - makes entity interactable (press E) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Instanced, Category = "Profiles")
@@ -223,6 +228,7 @@ public:
 			|| ContainerProfile != nullptr
 			|| WeaponProfile != nullptr
 			|| MagazineProfile != nullptr
+			|| ExplosionProfile != nullptr
 			|| InteractionProfile != nullptr
 			|| NiagaraProfile != nullptr
 			|| DestructibleProfile != nullptr

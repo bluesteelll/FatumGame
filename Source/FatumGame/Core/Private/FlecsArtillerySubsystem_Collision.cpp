@@ -8,6 +8,7 @@
 #include "FlecsHealthComponents.h"
 #include "FlecsProjectileComponents.h"
 #include "FlecsDestructibleComponents.h"
+#include "FlecsExplosionComponents.h"
 #include "FlecsNiagaraManager.h"
 
 void UFlecsArtillerySubsystem::SubscribeToBarrageEvents()
@@ -63,6 +64,7 @@ void UFlecsArtillerySubsystem::OnBarrageContact(const BarrageContactEvent& Event
 	Pair.Key1 = Key1;
 	Pair.Key2 = Key2;
 	Pair.ContactPoint = Event.PointIfAny;
+	Pair.ContactNormal = Event.NormalIfAny;
 	Pair.bBody1IsProjectile = bBody1IsProjectile;
 	Pair.bBody2IsProjectile = bBody2IsProjectile;
 
@@ -210,8 +212,9 @@ void UFlecsArtillerySubsystem::OnBarrageContact(const BarrageContactEvent& Event
 	// (physics body position is WRONG — StepWorld already bounced it).
 	// ─────────────────────────────────────────────────────────
 	FVector ContactPoint = Event.PointIfAny;
+	FVector ContactNormal = Event.NormalIfAny;
 
-	auto TryKillNonBouncingProjectile = [&World, ContactPoint](uint64 ProjEntityId, uint64 OtherEntityId)
+	auto TryKillNonBouncingProjectile = [&World, ContactPoint, ContactNormal](uint64 ProjEntityId, uint64 OtherEntityId)
 	{
 		if (ProjEntityId == 0) return;
 
@@ -232,10 +235,20 @@ void UFlecsArtillerySubsystem::OnBarrageContact(const BarrageContactEvent& Event
 			return;
 		}
 
-		// Store contact point for death VFX (physics position is post-bounce = wrong)
+		// Store contact point for death VFX / explosion epicenter
 		FDeathContactPoint DCP;
 		DCP.Position = ContactPoint;
 		ProjEntity.set<FDeathContactPoint>(DCP);
+
+		// Explosive projectiles: detonate instead of die
+		if (ProjEntity.try_get<FExplosionStatic>())
+		{
+			FExplosionContactData ECD;
+			ECD.ContactNormal = ContactNormal;
+			ProjEntity.set<FExplosionContactData>(ECD);
+			ProjEntity.add<FTagDetonate>();
+			return;
+		}
 
 		ProjEntity.add<FTagDead>();
 		UE_LOG(LogTemp, Log, TEXT("COLLISION: Projectile %llu killed on contact (MaxBounces=0) at (%.0f,%.0f,%.0f)"),

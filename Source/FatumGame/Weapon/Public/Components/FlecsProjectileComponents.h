@@ -31,6 +31,9 @@ struct FProjectileStatic
 	/** Minimum velocity before projectile is killed (units/sec) */
 	float MinVelocity = 50.f;
 
+	/** Fuse time in seconds (0 = no fuse, detonates on contact only) */
+	float FuseTime = 0.f;
+
 	/** Should maintain constant speed? */
 	bool bMaintainSpeed = false;
 
@@ -64,6 +67,10 @@ struct FProjectileInstance
 	/** Grace frames remaining before velocity check */
 	UPROPERTY(BlueprintReadWrite, Category = "Projectile")
 	int32 GraceFramesRemaining = 30;
+
+	/** Fuse countdown remaining (0 = no fuse active) */
+	UPROPERTY(BlueprintReadWrite, Category = "Projectile")
+	float FuseRemaining = 0.f;
 
 	/** Entity that spawned this projectile (for friendly fire, damage attribution) */
 	UPROPERTY(BlueprintReadWrite, Category = "Projectile")

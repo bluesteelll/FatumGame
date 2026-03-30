@@ -38,6 +38,11 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Lifetime", meta = (ClampMin = "0.1"))
 	float Lifetime = 10.f;
 
+	/** Fuse time in seconds (0 = no fuse, detonates on contact only).
+	 *  When > 0, projectile detonates after this delay regardless of contact. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Lifetime", meta = (ClampMin = "0"))
+	float FuseTime = 0.f;
+
 	/**
 	 * Maximum number of bounces before destruction.
 	 * -1 = infinite bounces (only dies by lifetime)

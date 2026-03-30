@@ -47,6 +47,7 @@
 #include "FlecsSwingableComponents.h"
 #include "FlecsStealthComponents.h"
 #include "FlecsVitalsComponents.h"
+#include "FlecsExplosionComponents.h"
 
 // ═══════════════════════════════════════════════════════════════
 // COMPONENT REGISTRATION
@@ -139,6 +140,13 @@ void UFlecsArtillerySubsystem::RegisterFlecsComponents()
 	// ─────────────────────────────────────────────────────────
 	World.component<FQuickLoadStatic>();
 	World.component<FTagQuickLoadDevice>();
+
+	// ─────────────────────────────────────────────────────────
+	// EXPLOSION COMPONENTS
+	// ─────────────────────────────────────────────────────────
+	World.component<FExplosionStatic>();
+	World.component<FExplosionContactData>();
+	World.component<FTagDetonate>();
 
 	// ─────────────────────────────────────────────────────────
 	// MOVEMENT COMPONENTS
@@ -501,10 +509,39 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 			const FProjectileStatic* ProjStatic = Entity.try_get<FProjectileStatic>();
 
 			const float DeltaTime = Entity.world().get_info()->delta_time;
+
+			// Fuse countdown (grenades, timed explosives)
+			const float FuseTime = ProjStatic ? ProjStatic->FuseTime : 0.f;
+			if (FuseTime > 0.f && ProjInstance.FuseRemaining > 0.f)
+			{
+				ProjInstance.FuseRemaining -= DeltaTime;
+				if (ProjInstance.FuseRemaining <= 0.f)
+				{
+					if (Entity.try_get<FExplosionStatic>())
+					{
+						Entity.add<FTagDetonate>();
+					}
+					else
+					{
+						Entity.add<FTagDead>();
+					}
+					return;
+				}
+			}
+
+			// Lifetime countdown (hard cap — kills even if fuse hasn't fired)
 			ProjInstance.LifetimeRemaining -= DeltaTime;
 			if (ProjInstance.LifetimeRemaining <= 0.f)
 			{
-				Entity.add<FTagDead>();
+				// Explosive projectiles with lifetime expiry still detonate
+				if (Entity.try_get<FExplosionStatic>())
+				{
+					Entity.add<FTagDetonate>();
+				}
+				else
+				{
+					Entity.add<FTagDead>();
+				}
 				return;
 			}
 
@@ -576,6 +613,7 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 	SetupDoorSystems();          // TriggerUnlock, DoorTick
 	SetupStealthSystems();       // StealthUpdateSystem
 	SetupVitalsSystems();        // EquipmentModifier, VitalDrain, VitalModifierRecalc, VitalHPDrain
+	SetupExplosionSystems();     // ExplosionSystem (processes FTagDetonate → ApplyExplosion → FTagDead)
 
 	// ═══════════════════════════════════════════════════════════════
 	// CLEANUP SYSTEMS

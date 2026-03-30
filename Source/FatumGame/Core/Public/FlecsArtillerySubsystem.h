@@ -471,6 +471,9 @@ private:
 	/** Vitals systems: equipment cache, drain, modifier recalc, HP drain. */
 	void SetupVitalsSystems();
 
+	/** Explosion system: processes FTagDetonate → ApplyExplosion → FTagDead */
+	void SetupExplosionSystems();
+
 	/** Ambient light level for stealth (sim thread only, written via EnqueueCommand). */
 	float AmbientLightLevel = 0.1f;
 

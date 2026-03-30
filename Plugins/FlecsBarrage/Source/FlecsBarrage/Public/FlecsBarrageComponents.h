@@ -157,6 +157,9 @@ struct FCollisionPair
 	/** World-space contact point */
 	FVector ContactPoint = FVector::ZeroVector;
 
+	/** World-space contact normal (from Jolt manifold, axis-swapped) */
+	FVector ContactNormal = FVector::ZeroVector;
+
 	/** Was body1 flagged as projectile in Barrage? */
 	bool bBody1IsProjectile = false;
 

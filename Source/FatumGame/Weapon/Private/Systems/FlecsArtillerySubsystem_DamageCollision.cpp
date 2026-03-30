@@ -5,6 +5,7 @@
 #include "FlecsBarrageComponents.h"
 #include "FlecsHealthComponents.h"
 #include "FlecsProjectileComponents.h"
+#include "FlecsExplosionComponents.h"
 #include "FlecsNiagaraManager.h"
 #include "FlecsMessageSubsystem.h"
 #include "FlecsUIMessages.h"
@@ -90,14 +91,24 @@ void UFlecsArtillerySubsystem::SetupDamageCollisionSystems()
 			if (ProjectileEntity.is_valid())
 			{
 				bool bIsBouncing = (MaxBounces == -1);
-				if (!bAreaDamage && !bIsBouncing)
+				if (!bIsBouncing)
 				{
 					FDeathContactPoint DCP;
 					DCP.Position = Pair.ContactPoint;
 					ProjectileEntity.set<FDeathContactPoint>(DCP);
-					ProjectileEntity.add<FTagDead>();
-					UE_LOG(LogTemp, Log, TEXT("COLLISION: Projectile %llu killed after damage hit at (%.0f,%.0f,%.0f)"),
-						ProjectileId, Pair.ContactPoint.X, Pair.ContactPoint.Y, Pair.ContactPoint.Z);
+
+					// Explosive projectiles: detonate instead of die
+					if (ProjectileEntity.try_get<FExplosionStatic>())
+					{
+						FExplosionContactData ECD;
+						ECD.ContactNormal = Pair.ContactNormal;
+						ProjectileEntity.set<FExplosionContactData>(ECD);
+						ProjectileEntity.add<FTagDetonate>();
+					}
+					else
+					{
+						ProjectileEntity.add<FTagDead>();
+					}
 				}
 			}
 

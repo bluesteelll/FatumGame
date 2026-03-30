@@ -18,6 +18,8 @@
 #include "FlecsEntityDefinition.h"
 #include "FlecsDamageProfile.h"
 #include "FlecsNiagaraProfile.h"
+#include "FlecsExplosionProfile.h"
+#include "FlecsExplosionComponents.h"
 #include "FlecsNiagaraManager.h"
 #include "FlecsMessageSubsystem.h"
 #include "FlecsUIMessages.h"
@@ -474,6 +476,7 @@ void UFlecsArtillerySubsystem::SetupWeaponFireSystem()
 				ProjInst.LifetimeRemaining = ProjProfile->Lifetime;
 				ProjInst.BounceCount = 0;
 				ProjInst.GraceFramesRemaining = ProjProfile->GetGraceFrames();
+				ProjInst.FuseRemaining = ProjProfile->FuseTime;
 				ProjInst.OwnerEntityId = EquippedBy.CharacterEntityId;
 				ProjEntity.set<FProjectileInstance>(ProjInst);
 				ProjEntity.add<FTagProjectile>();
@@ -488,6 +491,9 @@ void UFlecsArtillerySubsystem::SetupWeaponFireSystem()
 					DmgStatic.Damage *= Static->DamageMultiplier * AmmoDamageMult;
 					ProjEntity.set<FDamageStatic>(DmgStatic);
 				}
+
+				if (ProjDef->ExplosionProfile)
+					ProjEntity.set<FExplosionStatic>(FExplosionStatic::FromProfile(ProjDef->ExplosionProfile));
 
 				if (RenderProfile && RenderProfile->Mesh)
 				{

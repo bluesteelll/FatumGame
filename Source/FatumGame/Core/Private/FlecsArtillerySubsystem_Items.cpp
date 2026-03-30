@@ -38,6 +38,8 @@
 #include "FlecsTemperatureZoneProfile.h"
 #include "FlecsVitalsComponents.h"
 #include "FlecsQuickLoadProfile.h"
+#include "FlecsExplosionProfile.h"
+#include "FlecsExplosionComponents.h"
 
 // ═══════════════════════════════════════════════════════════════
 // ENTITY PREFAB REGISTRY IMPLEMENTATION
@@ -107,6 +109,9 @@ flecs::entity UFlecsArtillerySubsystem::GetOrCreateEntityPrefab(UFlecsEntityDefi
 		Prefab.set<FQuickLoadStatic>(FQuickLoadStatic::FromProfile(EntityDefinition->QuickLoadProfile, CaliberRegistry));
 		Prefab.add<FTagQuickLoadDevice>();
 	}
+
+	if (EntityDefinition->ExplosionProfile)
+		Prefab.set<FExplosionStatic>(FExplosionStatic::FromProfile(EntityDefinition->ExplosionProfile));
 
 	if (EntityDefinition->InteractionProfile)
 		Prefab.set<FInteractionStatic>(FInteractionStatic::FromProfile(EntityDefinition->InteractionProfile));
@@ -218,7 +223,7 @@ flecs::entity UFlecsArtillerySubsystem::GetOrCreateEntityPrefab(UFlecsEntityDefi
 	// Store in registry
 	EntityPrefabs.Add(EntityDefinition, Prefab);
 
-	UE_LOG(LogTemp, Log, TEXT("Created entity prefab: '%s' (Health=%d, Damage=%d, Projectile=%d, Container=%d, Item=%d, Weapon=%d, Interaction=%d, Destructible=%d, Door=%d, Movement=%d, Ability=%d, Resources=%d, Climb=%d, Swing=%d, StealthLight=%d, NoiseZone=%d, Vitals=%d, TempZone=%d, QuickLoad=%d)"),
+	UE_LOG(LogTemp, Log, TEXT("Created entity prefab: '%s' (Health=%d, Damage=%d, Projectile=%d, Container=%d, Item=%d, Weapon=%d, Explosion=%d, Interaction=%d, Destructible=%d, Door=%d, Movement=%d, Ability=%d, Resources=%d, Climb=%d, Swing=%d, StealthLight=%d, NoiseZone=%d, Vitals=%d, TempZone=%d, QuickLoad=%d)"),
 		*EntityDefinition->GetName(),
 		EntityDefinition->HealthProfile != nullptr,
 		EntityDefinition->DamageProfile != nullptr,
@@ -226,6 +231,7 @@ flecs::entity UFlecsArtillerySubsystem::GetOrCreateEntityPrefab(UFlecsEntityDefi
 		EntityDefinition->ContainerProfile != nullptr,
 		EntityDefinition->ItemDefinition != nullptr,
 		EntityDefinition->WeaponProfile != nullptr,
+		EntityDefinition->ExplosionProfile != nullptr,
 		EntityDefinition->InteractionProfile != nullptr,
 		EntityDefinition->DestructibleProfile != nullptr,
 		EntityDefinition->DoorProfile != nullptr,
