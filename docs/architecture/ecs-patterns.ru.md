@@ -89,6 +89,7 @@ Entity.set<FHealthInstance>(Health);
 | `FInteractionStatic` | Взаимодействие | MaxRange, bSingleUse, InteractionType |
 | `FDestructibleStatic` | Разрушаемый | Profile*, ConstraintBreakForce, bAnchorToWorld |
 | `FDoorStatic` | Дверь | HingeOffset, OpenAngle, CloseAngle, AngularDamping |
+| `FExplosionStatic` | Взрыв | Radius, BaseDamage, ImpulseStrength, DamageFalloff, ImpulseFalloff, VerticalBias |
 | `FMovementStatic` | Движение | WalkSpeed, SprintSpeed, JumpVelocity, GravityScale |
 
 ### Instance-компоненты (для каждой сущности)
@@ -147,6 +148,7 @@ Entity.set<FHealthInstance>(Health);
 | `FTagTelekinesisHeld` | Сущность удерживается телекинезом |
 | `FTagStealthLight` | Сущность — источник света для стелса |
 | `FTagNoiseZone` | Сущность — зона шума |
+| `FTagDetonate` | Снаряд помечен для детонации (ExplosionSystem) |
 
 ### Теги столкновений
 

@@ -30,9 +30,10 @@ graph TD
     S16["16. DoorTickSystem"]
     S17["17. StealthUpdateSystem"]
     S18["18. VitalsSystems<br/>(Equip → Drain → Recalc → HPDrain)"]
-    S19["19. DeathCheckSystem"]
-    S20["20. DeadEntityCleanupSystem"]
-    S21["21. CollisionPairCleanupSystem"]
+    S18b["19. ExplosionSystem"]
+    S20["20. DeathCheckSystem"]
+    S21["21. DeadEntityCleanupSystem"]
+    S22["22. CollisionPairCleanupSystem"]
 
     S1 --> S2 --> S3 --> S4
     S4 --> S5 --> S6 --> S7 --> S8
@@ -40,9 +41,9 @@ graph TD
     S10 --> S11 --> S12 --> S13 --> S14
     S14 --> S15 --> S16
     S16 --> S17 --> S18
-    S18 --> S19 --> S20 --> S21
+    S18 --> S18b --> S20 --> S21 --> S22
 
-    DamageObs -.->|"срабатывает во время S5"| S19
+    DamageObs -.->|"срабатывает во время S5"| S20
 ```
 
 ---
@@ -228,7 +229,16 @@ graph TD
 | **Почему последняя** | Должна выполниться после расхода и пересчёта, чтобы штраф HP отражал состояние витальных показателей текущего тика. |
 | **Setup** | `SetupVitalsSystems()` |
 
-### 19. DeathCheckSystem
+### 19. ExplosionSystem
+
+| Свойство | Значение |
+|----------|----------|
+| **Запросы** | `FTagDetonate`, `FBarrageBody`, `FExplosionStatic`, без `FTagDead` |
+| **Действие** | Считывает эпицентр из позиции Barrage-тела + EpicenterLift вдоль нормали контакта. Вызывает `ApplyExplosion()`: SphereSearch для целей в радиусе, CastRay LOS-проверка для каждой цели, радиальный урон с экспоненциальным затуханием, радиальный импульс с вертикальным смещением. Ставит в очередь VFX взрыва. Добавляет `FTagDead`. |
+| **Почему здесь** | Должна выполняться после всех триггеров детонации (столкновения, взрыватель, время жизни) и до `DeathCheckSystem`, обрабатывающей нанесённый урон. |
+| **Setup** | `SetupExplosionSystems()` |
+
+### 20. DeathCheckSystem
 
 | Свойство | Значение |
 |----------|----------|
@@ -236,7 +246,7 @@ graph TD
 | **Действие** | Добавляет `FTagDead` если `CurrentHP <= 0`. |
 | **Почему здесь** | Все источники урона (системы столкновений, observer) уже обработаны к этому моменту. |
 
-### 20. DeadEntityCleanupSystem
+### 21. DeadEntityCleanupSystem
 
 | Свойство | Значение |
 |----------|----------|
@@ -244,7 +254,7 @@ graph TD
 | **Действие** | Tombstone тела. Очистка constraints. Удаление ISM. Запуск VFX смерти. Возврат в пул. `entity.destruct()`. |
 | **Почему предпоследняя** | Должна обработать после всех систем, которые могут добавить `FTagDead`. |
 
-### 21. CollisionPairCleanupSystem
+### 22. CollisionPairCleanupSystem
 
 | Свойство | Значение |
 |----------|----------|
@@ -287,6 +297,7 @@ void SetupFlecsSystems()
     SetupDoorSystems();                 // TriggerUnlock, DoorTick
     SetupStealthSystems();              // StealthUpdateSystem
     SetupVitalsSystems();               // EquipmentModifier, VitalDrain, VitalModifierRecalc, VitalHPDrain
+    SetupExplosionSystems();            // ExplosionSystem
 
     // DeathCheckSystem (инлайн)
     // DeadEntityCleanupSystem (инлайн)

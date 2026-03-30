@@ -36,6 +36,7 @@ The master data asset. Created in Content Browser → Data Asset → `FlecsEntit
 | `NoiseZoneProfile` | `UFlecsNoiseZoneProfile*` | Surface noise zone |
 | `VitalsProfile` | `UFlecsVitalsProfile*` | Hunger, thirst, warmth |
 | `TemperatureZoneProfile` | `UFlecsTemperatureZoneProfile*` | Ambient temperature zone |
+| `ExplosionProfile` | `UFlecsExplosionProfile*` | Blast radius, damage falloff, impulse |
 
 ### Tag Flags
 
@@ -119,6 +120,7 @@ The master data asset. Created in Content Browser → Data Asset → `FlecsEntit
 | `bOrientToVelocity` | `bool` | Rotate mesh to face travel direction |
 | `bPenetrating` | `bool` | Pass through targets |
 | `MaxPenetrations` | `int32` | Max targets to penetrate |
+| `FuseTime` | `float` | Fuse timer (seconds, 0 = no fuse). Detonates after this time if has ExplosionProfile |
 
 ### UFlecsWeaponProfile
 
@@ -205,6 +207,7 @@ See [Movement System](../systems/movement-system.md) for full field listing.
 | `UFlecsRopeSwingProfile` | AttachOffset, SwingRadius, MaxSwingForce, AngularDamping |
 | `UFlecsStealthLightProfile` | LightType, Intensity, Radius, ConeAngles, Direction |
 | `UFlecsNoiseZoneProfile` | Extent (half-extents), SurfaceType |
+| `UFlecsExplosionProfile` | Radius, BaseDamage, ImpulseStrength, DamageFalloff, ImpulseFalloff, VerticalBias, EpicenterLift, bDamageOwner, ExplosionEffect, DamageType |
 
 ---
 

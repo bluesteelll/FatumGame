@@ -51,8 +51,15 @@
 
 | Component | Level | Fields |
 |-----------|-------|--------|
-| `FProjectileStatic` | Prefab | `MaxLifetime`, `MaxBounces`, `GracePeriodFrames`, `MinVelocity`, `bOrientToVelocity` |
-| `FProjectileInstance` | Instance | `LifetimeRemaining`, `BounceCount`, `GraceFramesRemaining` |
+| `FProjectileStatic` | Prefab | `MaxLifetime`, `MaxBounces`, `GracePeriodFrames`, `MinVelocity`, `bOrientToVelocity`, `FuseTime` |
+| `FProjectileInstance` | Instance | `LifetimeRemaining`, `BounceCount`, `GraceFramesRemaining`, `FuseRemaining` |
+
+**Header:** `Weapon/Public/Components/FlecsExplosionComponents.h`
+
+| Component | Level | Fields |
+|-----------|-------|--------|
+| `FExplosionStatic` | Prefab | `Radius`, `BaseDamage`, `ImpulseStrength`, `DamageFalloff`, `ImpulseFalloff`, `VerticalBias`, `EpicenterLift`, `bDamageOwner`, `ExplosionEffect`, `ExplosionEffectScale`, `DamageType` |
+| `FExplosionContactData` | Transient | `ContactNormal` (stored at collision time for epicenter lift) |
 
 ---
 
@@ -197,6 +204,7 @@ All tags are zero-size structs (`sizeof == 0`):
 | `FTagWeaponSlot` | Weapon slot container |
 | `FTagMagazine` | Magazine entity |
 | `FTagQuickLoadDevice` | Quick-load device entity (stripper clip / speedloader) |
+| `FTagDetonate` | Projectile marked for detonation this tick (ExplosionSystem) |
 | `FTagDoor` | Door entity |
 | `FTagDoorTrigger` | Door trigger |
 | `FTagTelekinesisHeld` | Held by telekinesis |

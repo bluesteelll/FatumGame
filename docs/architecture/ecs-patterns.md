@@ -89,6 +89,7 @@ Read-only shared data. Set once on the prefab, inherited by all instances.
 | `FInteractionStatic` | Interaction | MaxRange, bSingleUse, InteractionType |
 | `FDestructibleStatic` | Destructible | Profile*, ConstraintBreakForce, bAnchorToWorld |
 | `FDoorStatic` | Door | HingeOffset, OpenAngle, CloseAngle, AngularDamping |
+| `FExplosionStatic` | Explosion | Radius, BaseDamage, ImpulseStrength, DamageFalloff, ImpulseFalloff, VerticalBias |
 | `FMovementStatic` | Movement | WalkSpeed, SprintSpeed, JumpVelocity, GravityScale |
 
 ### Instance Components (Per-Entity)
@@ -147,6 +148,7 @@ Tags are empty structs used for filtering and classification. They cost zero mem
 | `FTagTelekinesisHeld` | Entity is held by telekinesis |
 | `FTagStealthLight` | Entity is a stealth light source |
 | `FTagNoiseZone` | Entity is a noise zone |
+| `FTagDetonate` | Projectile marked for detonation (ExplosionSystem) |
 
 ### Collision Tags
 

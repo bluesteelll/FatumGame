@@ -30,9 +30,11 @@ graph TD
     S16["16. DoorTickSystem"]
     S17["17. StealthUpdateSystem"]
     S18["18. VitalsSystems<br/>(Equip → Drain → Recalc → HPDrain)"]
-    S19["19. DeathCheckSystem"]
-    S20["20. DeadEntityCleanupSystem"]
-    S21["21. CollisionPairCleanupSystem"]
+    S18b["19. ExplosionSystem"]
+    S19["20. DeathCheckSystem"]
+    S20["20. DeathCheckSystem"]
+    S21["21. DeadEntityCleanupSystem"]
+    S22["22. CollisionPairCleanupSystem"]
 
     S1 --> S2 --> S3 --> S4
     S4 --> S5 --> S6 --> S7 --> S8
@@ -40,9 +42,9 @@ graph TD
     S10 --> S11 --> S12 --> S13 --> S14
     S14 --> S15 --> S16
     S16 --> S17 --> S18
-    S18 --> S19 --> S20 --> S21
+    S18 --> S18b --> S20 --> S21 --> S22
 
-    DamageObs -.->|"fires during S5"| S19
+    DamageObs -.->|"fires during S5"| S20
 ```
 
 ---
@@ -228,7 +230,16 @@ Four sub-systems that run in sequence:
 | **Why last** | Must run after drain and recalc so HP penalty reflects current-tick vital state. |
 | **Setup** | `SetupVitalsSystems()` |
 
-### 19. DeathCheckSystem
+### 19. ExplosionSystem
+
+| Property | Value |
+|----------|-------|
+| **Queries** | `FTagDetonate`, `FBarrageBody`, `FExplosionStatic`, without `FTagDead` |
+| **Does** | Reads epicenter from Barrage body + EpicenterLift along contact normal. Calls `ApplyExplosion()`: SphereSearch for targets in radius, CastRay LOS check per target, radial damage with exponent falloff, radial impulse with vertical bias. Enqueues explosion VFX. Adds `FTagDead`. |
+| **Why here** | Must run after all detonation triggers (collision systems, lifetime systems) have added `FTagDetonate`, and before `DeathCheckSystem` processes the resulting damage. |
+| **Setup** | `SetupExplosionSystems()` |
+
+### 20. DeathCheckSystem
 
 | Property | Value |
 |----------|-------|
@@ -236,7 +247,7 @@ Four sub-systems that run in sequence:
 | **Does** | Adds `FTagDead` if `CurrentHP ≤ 0`. |
 | **Why here** | All damage sources (collision systems, observers) have processed by this point. |
 
-### 20. DeadEntityCleanupSystem
+### 21. DeadEntityCleanupSystem
 
 | Property | Value |
 |----------|-------|
@@ -244,7 +255,7 @@ Four sub-systems that run in sequence:
 | **Does** | Tombstone body. Cleanup constraints. Remove ISM. Trigger death VFX. Release to pool. `entity.destruct()`. |
 | **Why second-to-last** | Must process after all systems that may add `FTagDead`. |
 
-### 21. CollisionPairCleanupSystem
+### 22. CollisionPairCleanupSystem
 
 | Property | Value |
 |----------|-------|
@@ -287,6 +298,7 @@ void SetupFlecsSystems()
     SetupDoorSystems();                 // TriggerUnlock, DoorTick
     SetupStealthSystems();              // StealthUpdateSystem
     SetupVitalsSystems();               // EquipmentModifier, VitalDrain, VitalModifierRecalc, VitalHPDrain
+    SetupExplosionSystems();            // ExplosionSystem
 
     // DeathCheckSystem (inline)
     // DeadEntityCleanupSystem (inline)
@@ -309,6 +321,7 @@ void SetupFlecsSystems()
 | Vitals after Stealth | Temperature zones affect vital drain rates |
 | EquipmentModifier before VitalDrain | Equipment stat bonuses must be cached before drain calculates |
 | VitalHPDrain before DeathCheck | HP damage from critical vitals must be applied before death check |
+| ExplosionSystem after Vitals, before DeathCheck | Detonation triggers (collision, fuse, lifetime) must all be resolved; explosion damage must be applied before death check |
 | All damage sources before DeathCheck | All hits in a tick must be applied before checking for death |
 | DeadEntityCleanup before CollisionPairCleanup | Dead entities must be cleaned up while collision data still exists |
 | CollisionPairCleanup LAST always | All systems must finish processing pairs first |

@@ -71,6 +71,7 @@ Source/FatumGame/
 │   │   ├── Components/
 │   │   │   ├── FlecsWeaponComponents.h    FAimDirection, FWeaponStatic/Instance
 │   │   │   ├── FlecsProjectileComponents.h  FProjectileStatic/Instance
+│   │   │   ├── FlecsExplosionComponents.h  FExplosionStatic, FExplosionContactData, FTagDetonate
 │   │   │   ├── FlecsRecoilTypes.h         FShotFiredEvent
 │   │   │   └── FlecsRecoilState.h         FWeaponRecoilState (game thread)
 │   │   └── Library/
@@ -81,7 +82,8 @@ Source/FatumGame/
 │       ├── Library/
 │       └── Systems/
 │           ├── FlecsArtillerySubsystem_WeaponSystems.cpp   Fire, Reload, Tick
-│           └── FlecsArtillerySubsystem_DamageCollision.cpp DamageCollision, BounceCollision
+│           ├── FlecsArtillerySubsystem_DamageCollision.cpp DamageCollision, BounceCollision
+│           └── FlecsArtillerySubsystem_ExplosionSystems.cpp ExplosionSystem
 │
 ├── Abilities/                             Ability system
 │   ├── Public/
@@ -227,6 +229,7 @@ Source/FatumGame/
 │       ├── FlecsAmmoTypeDefinition.h      Ammo type data asset
 │       ├── FlecsMagazineProfile.h         Internal magazine profile
 │       ├── FlecsQuickLoadProfile.h        Quick-load device profile (speedloaders, stripper clips)
+│       ├── FlecsExplosionProfile.h        Explosion/blast profile (radius, falloff, impulse)
 │       ├── FlecsVitalsProfile.h           Character vitals (hunger, thirst, etc.)
 │       ├── FlecsVitalsItemProfile.h       Item vitals effects
 │       └── FlecsTemperatureZoneProfile.h  Temperature zone data
@@ -235,6 +238,7 @@ Source/FatumGame/
     ├── Public/
     │   ├── FTimeDilationStack.h           Time dilation priority stack
     │   ├── ConeImpulse.h                 Radial cone impulse helper
+    │   ├── ExplosionUtility.h            Radial explosion (SphereSearch + LOS + damage + impulse)
     │   ├── LedgeDetector.h               Barrage-based ledge detection
     │   └── BarrageSpawnUtils.h           Body creation convenience wrappers
     └── Private/

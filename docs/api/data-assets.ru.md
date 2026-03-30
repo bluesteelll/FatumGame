@@ -36,6 +36,7 @@
 | `NoiseZoneProfile` | `UFlecsNoiseZoneProfile*` | Зона поверхностного шума |
 | `VitalsProfile` | `UFlecsVitalsProfile*` | Голод, жажда, тепло |
 | `TemperatureZoneProfile` | `UFlecsTemperatureZoneProfile*` | Зона окружающей температуры |
+| `ExplosionProfile` | `UFlecsExplosionProfile*` | Радиус взрыва, затухание урона, импульс |
 
 ### Флаги тегов
 
@@ -119,6 +120,7 @@
 | `bOrientToVelocity` | `bool` | Поворачивать меш по направлению движения |
 | `bPenetrating` | `bool` | Проходить сквозь цели |
 | `MaxPenetrations` | `int32` | Максимум целей для пробития |
+| `FuseTime` | `float` | Таймер взрывателя (секунды, 0 = без взрывателя). Детонирует через это время при наличии ExplosionProfile |
 
 ### UFlecsWeaponProfile
 
@@ -205,6 +207,7 @@ Data asset для устройств быстрой загрузки (обойм
 | `UFlecsRopeSwingProfile` | AttachOffset, SwingRadius, MaxSwingForce, AngularDamping |
 | `UFlecsStealthLightProfile` | LightType, Intensity, Radius, ConeAngles, Direction |
 | `UFlecsNoiseZoneProfile` | Extent (полуразмеры), SurfaceType |
+| `UFlecsExplosionProfile` | Radius, BaseDamage, ImpulseStrength, DamageFalloff, ImpulseFalloff, VerticalBias, EpicenterLift, bDamageOwner, ExplosionEffect, DamageType |
 
 ---
 

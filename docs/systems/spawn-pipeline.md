@@ -142,6 +142,7 @@ Static components set on the prefab:
 | DoorProfile | `FDoorStatic` |
 | MovementProfile | `FMovementStatic` |
 | ItemDefinition | `FItemStaticData` |
+| ExplosionProfile | `FExplosionStatic` |
 
 ---
 

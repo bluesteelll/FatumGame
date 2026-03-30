@@ -51,8 +51,15 @@
 
 | Компонент | Уровень | Поля |
 |-----------|---------|------|
-| `FProjectileStatic` | Prefab | `MaxLifetime`, `MaxBounces`, `GracePeriodFrames`, `MinVelocity`, `bOrientToVelocity` |
-| `FProjectileInstance` | Экземпляр | `LifetimeRemaining`, `BounceCount`, `GraceFramesRemaining` |
+| `FProjectileStatic` | Prefab | `MaxLifetime`, `MaxBounces`, `GracePeriodFrames`, `MinVelocity`, `bOrientToVelocity`, `FuseTime` |
+| `FProjectileInstance` | Экземпляр | `LifetimeRemaining`, `BounceCount`, `GraceFramesRemaining`, `FuseRemaining` |
+
+**Заголовок:** `Weapon/Public/Components/FlecsExplosionComponents.h`
+
+| Компонент | Уровень | Поля |
+|-----------|---------|------|
+| `FExplosionStatic` | Prefab | `Radius`, `BaseDamage`, `ImpulseStrength`, `DamageFalloff`, `ImpulseFalloff`, `VerticalBias`, `EpicenterLift`, `bDamageOwner`, `ExplosionEffect`, `ExplosionEffectScale`, `DamageType` |
+| `FExplosionContactData` | Временный | `ContactNormal` (сохраняется при столкновении для направления подъёма эпицентра) |
 
 ---
 
@@ -197,6 +204,7 @@
 | `FTagWeaponSlot` | Контейнер слота оружия |
 | `FTagMagazine` | Сущность-магазин |
 | `FTagQuickLoadDevice` | Устройство быстрой загрузки (обойма / спидлоадер) |
+| `FTagDetonate` | Снаряд помечен для детонации в текущем тике (ExplosionSystem) |
 | `FTagDoor` | Сущность-дверь |
 | `FTagDoorTrigger` | Триггер двери |
 | `FTagTelekinesisHeld` | Удерживается телекинезом |

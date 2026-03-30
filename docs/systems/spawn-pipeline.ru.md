@@ -142,6 +142,7 @@ graph LR
 | DoorProfile | `FDoorStatic` |
 | MovementProfile | `FMovementStatic` |
 | ItemDefinition | `FItemStaticData` |
+| ExplosionProfile | `FExplosionStatic` |
 
 ---
 

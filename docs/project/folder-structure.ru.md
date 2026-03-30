@@ -71,6 +71,7 @@ Source/FatumGame/
 │   │   ├── Components/
 │   │   │   ├── FlecsWeaponComponents.h    FAimDirection, FWeaponStatic/Instance
 │   │   │   ├── FlecsProjectileComponents.h  FProjectileStatic/Instance
+│   │   │   ├── FlecsExplosionComponents.h  FExplosionStatic, FExplosionContactData, FTagDetonate
 │   │   │   ├── FlecsRecoilTypes.h         FShotFiredEvent
 │   │   │   └── FlecsRecoilState.h         FWeaponRecoilState (game thread)
 │   │   └── Library/
@@ -81,7 +82,8 @@ Source/FatumGame/
 │       ├── Library/
 │       └── Systems/
 │           ├── FlecsArtillerySubsystem_WeaponSystems.cpp   Fire, Reload, Tick
-│           └── FlecsArtillerySubsystem_DamageCollision.cpp DamageCollision, BounceCollision
+│           ├── FlecsArtillerySubsystem_DamageCollision.cpp DamageCollision, BounceCollision
+│           └── FlecsArtillerySubsystem_ExplosionSystems.cpp ExplosionSystem
 │
 ├── Abilities/                             Система способностей
 │   ├── Public/
@@ -227,6 +229,7 @@ Source/FatumGame/
 │       ├── FlecsAmmoTypeDefinition.h      Data asset типа боеприпасов
 │       ├── FlecsMagazineProfile.h         Профиль внутреннего магазина
 │       ├── FlecsQuickLoadProfile.h        Профиль устройств быстрой зарядки (спидлоадеры, обоймы)
+│       ├── FlecsExplosionProfile.h        Профиль взрыва (радиус, затухание, импульс)
 │       ├── FlecsVitalsProfile.h           Жизненные показатели персонажа (голод, жажда и т.д.)
 │       ├── FlecsVitalsItemProfile.h       Эффекты предметов на показатели
 │       └── FlecsTemperatureZoneProfile.h  Данные температурной зоны
@@ -235,6 +238,7 @@ Source/FatumGame/
     ├── Public/
     │   ├── FTimeDilationStack.h           Стек приоритетов замедления времени
     │   ├── ConeImpulse.h                 Хелпер радиального конусного импульса
+    │   ├── ExplosionUtility.h            Радиальный взрыв (SphereSearch + LOS + урон + импульс)
     │   ├── LedgeDetector.h               Обнаружение уступов на основе Barrage
     │   └── BarrageSpawnUtils.h           Удобные обёртки создания тел
     └── Private/
