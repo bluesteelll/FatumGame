@@ -22,6 +22,37 @@ void ApplyExplosion(
 
 	const double RadiusSq = static_cast<double>(Params.Radius) * Params.Radius;
 
+	// LOS filter: raycasts should hit static geometry (walls/floors) but ignore debris and projectiles
+	FastExcludeObjectLayerFilter LOSObjFilter({
+		EPhysicsLayer::PROJECTILE,
+		EPhysicsLayer::ENEMYPROJECTILE,
+		EPhysicsLayer::DEBRIS
+	});
+	auto LOSBPFilter = Barrage->GetDefaultBroadPhaseLayerFilter(Layers::MOVING);
+	JPH::BodyFilter LOSNoBodyFilter;
+	TSharedPtr<FHitResult> LOSHit = MakeShared<FHitResult>();
+
+	// LOS check helper: returns true if epicenter can "see" the target body.
+	// TargetBodyId = FoundBodies[i] raw ID (or 0 for characters which aren't in broadphase).
+	auto HasLineOfSight = [&](const FVector& TargetPos, double Dist, uint32 TargetBodyId) -> bool
+	{
+		// CastRay direction = Direction * Distance (NOT unit vector)
+		FVector RayDir = (TargetPos - Params.EpicenterUE);
+		LOSHit->Reset(1.f, false);
+		Barrage->CastRay(
+			Params.EpicenterUE, RayDir,
+			LOSBPFilter, LOSObjFilter, LOSNoBodyFilter, LOSHit);
+		if (!LOSHit->bBlockingHit) return true; // nothing hit = clear LOS
+
+		// If the ray hit the target body itself, LOS is clear
+		if (TargetBodyId != 0 && static_cast<uint32>(LOSHit->MyItem) == TargetBodyId)
+			return true;
+
+		// For characters (TargetBodyId==0) or unknown bodies: use distance comparison
+		const double HitDist = FVector::Dist(Params.EpicenterUE, LOSHit->ImpactPoint);
+		return HitDist >= (Dist * 0.9); // 90% of distance tolerance (surface < center)
+	};
+
 	// ── Phase 1: Dynamic bodies via SphereSearch ──
 	{
 		// SphereSearch takes UE coords for Location, Jolt meters for Radius
@@ -70,6 +101,9 @@ void ApplyExplosion(
 
 			const double Dist = FMath::Sqrt(DistSq);
 			const FVector DirToTarget = ToTarget / Dist;
+
+			// LOS check: skip if wall blocks line of sight
+			if (!HasLineOfSight(BodyPosUE, Dist, FoundBodies[i])) continue;
 
 			// Distance falloff: pow(1 - d/R, exponent)
 			const float DamageFalloff = (Params.DamageFalloff > 0.f)
@@ -124,6 +158,9 @@ void ApplyExplosion(
 
 		const double Dist = FMath::Sqrt(DistSq);
 		const FVector DirToTarget = ToTarget / Dist;
+
+		// LOS check: skip if wall blocks line of sight (0 = character, not in broadphase)
+		if (!HasLineOfSight(CharPosUE, Dist, 0)) continue;
 
 		const bool bIsSelf = (Bridge.Entity.is_valid() &&
 			Bridge.Entity.id() == Params.OwnerEntityId);
