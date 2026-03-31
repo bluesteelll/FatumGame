@@ -9,6 +9,7 @@
 #include "PhysicsFilters/FastObjectLayerFilters.h"
 #include "FlecsArtillerySubsystem.h" // FCharacterPhysBridge
 #include "FlecsHealthComponents.h"   // FPendingDamage, FDamageHit
+#include "FlecsDestructibleComponents.h" // FDestructibleStatic, FPendingFragmentation
 #include "FlecsGameTags.h"           // FTagDead
 
 void ApplyExplosion(
@@ -118,26 +119,38 @@ void ApplyExplosion(
 			const FVector ImpulseUE = BiasedDir * Params.ImpulseStrength * ImpulseFalloff;
 			Barrage->AddBodyImpulse(BodyKey, ImpulseUE);
 
-			// Queue damage if entity has health
+			// Queue damage + fragmentation if entity exists
 			const uint64 FlecsId = Prim->GetFlecsEntity();
 			if (FlecsId != 0)
 			{
 				flecs::entity TargetEntity = World.entity(FlecsId);
 				if (TargetEntity.is_valid() && TargetEntity.is_alive() && !TargetEntity.has<FTagDead>())
 				{
-					// Owner self-damage check
-					if (FlecsId == Params.OwnerEntityId && !Params.bDamageOwner) continue;
-
+					// Damage (respects owner self-damage flag)
 					if (TargetEntity.has<FHealthInstance>())
 					{
-						const float FinalDamage = Params.BaseDamage * DamageFalloff;
-						if (FinalDamage > 0.f)
+						if (!(FlecsId == Params.OwnerEntityId && !Params.bDamageOwner))
 						{
-							FPendingDamage& Pending = TargetEntity.obtain<FPendingDamage>();
-							Pending.AddHit(FinalDamage, Params.OwnerEntityId, Params.DamageType,
-								Params.EpicenterUE, false, false);
-							TargetEntity.modified<FPendingDamage>();
+							const float FinalDamage = Params.BaseDamage * DamageFalloff;
+							if (FinalDamage > 0.f)
+							{
+								FPendingDamage& Pending = TargetEntity.obtain<FPendingDamage>();
+								Pending.AddHit(FinalDamage, Params.OwnerEntityId, Params.DamageType,
+									Params.EpicenterUE, false, false);
+								TargetEntity.modified<FPendingDamage>();
+							}
 						}
+					}
+
+					// Fragmentation for destructibles (always runs, even for owner)
+					const FDestructibleStatic* Destr = TargetEntity.try_get<FDestructibleStatic>();
+					if (Destr && Destr->IsValid() && !TargetEntity.has<FPendingFragmentation>())
+					{
+						FPendingFragmentation PendingFrag;
+						PendingFrag.ImpactPoint = Params.EpicenterUE;
+						PendingFrag.ImpactDirection = FVector(DirToTarget);
+						PendingFrag.ImpactImpulse = Params.ImpulseStrength * ImpulseFalloff;
+						TargetEntity.set<FPendingFragmentation>(PendingFrag);
 					}
 				}
 			}

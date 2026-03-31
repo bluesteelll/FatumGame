@@ -87,6 +87,29 @@ flecs::entity UFlecsArtillerySubsystem::GetOrCreateEntityPrefab(UFlecsEntityDefi
 	{
 		FItemStaticData ItemStatic = FItemStaticData::FromProfile(ItemDef, EntityDefinition);
 		Prefab.set<FItemStaticData>(ItemStatic);
+
+		// Fail-fast: detect duplicate TypeId across different EntityDefinitions
+		if (flecs::entity* ExistingPrefab = ItemPrefabs.Find(ItemStatic.TypeId))
+		{
+			if (ExistingPrefab->is_valid() && ExistingPrefab->is_alive())
+			{
+				const FEntityDefinitionRef* ExistingDefRef = ExistingPrefab->try_get<FEntityDefinitionRef>();
+				UFlecsEntityDefinition* ExistingDef = ExistingDefRef ? ExistingDefRef->Definition : nullptr;
+				if (ExistingDef && ExistingDef != EntityDefinition)
+				{
+					UE_LOG(LogTemp, Error,
+						TEXT("DUPLICATE ITEM TypeId=%d! '%s' (ItemName='%s') collides with '%s'. "
+						     "Fix: give each item a unique ItemTypeId in its ItemDefinition profile."),
+						ItemStatic.TypeId,
+						*EntityDefinition->GetName(),
+						*ItemDef->ItemName.ToString(),
+						*ExistingDef->GetName());
+					checkf(false,
+						TEXT("Duplicate Item TypeId=%d: '%s' vs '%s'. Each item must have a unique ItemTypeId."),
+						ItemStatic.TypeId, *EntityDefinition->GetName(), *ExistingDef->GetName());
+				}
+			}
+		}
 		ItemPrefabs.Add(ItemStatic.TypeId, Prefab);
 
 		if (ItemDef->VitalsItemProfile)

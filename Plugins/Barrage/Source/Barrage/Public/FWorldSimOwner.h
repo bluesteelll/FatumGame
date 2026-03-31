@@ -349,7 +349,9 @@ public:
 	// @param Restitution - Elasticity/bounce factor: 0.0 = no bounce, 1.0 = perfect elastic bounce (0.8 recommended)
 	// @param Friction - Surface friction coefficient: 0.0 = frictionless ice, 1.0 = sticky (0.2 recommended for bullets)
 	// @param LinearDamping - Velocity damping: 0.0 = no drag, higher = more drag (Jolt default 0.05)
-	FBarrageKey CreateBouncingSphere(FBSphereParams& ToCreate, uint16 Layer, float Restitution = 0.8f, float Friction = 0.2f, float LinearDamping = 0.0f);
+	// @param Mass - Mass in kg (0 = use default 0.1 kg)
+	// @param AngularDamping - Angular velocity damping: 0.0 = no angular drag (Jolt default 0.05)
+	FBarrageKey CreateBouncingSphere(FBSphereParams& ToCreate, uint16 Layer, float Restitution = 0.8f, float Friction = 0.2f, float LinearDamping = 0.0f, float Mass = 0.1f, float AngularDamping = 0.05f);
 
 	/**
 	 * Create a small kinematic sensor sphere on DEBRIS layer (no gameplay collision).

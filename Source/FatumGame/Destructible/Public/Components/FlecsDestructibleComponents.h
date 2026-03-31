@@ -70,3 +70,18 @@ struct FFragmentationData
 	/** Impact impulse magnitude */
 	float ImpactImpulse = 0.f;
 };
+
+// ═══════════════════════════════════════════════════════════════
+// PENDING FRAGMENTATION
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Pending fragmentation request — set on a destructible entity directly (not via collision pair).
+ * Used by explosions, abilities, scripts — anything that should trigger fragmentation without physical contact.
+ */
+struct FPendingFragmentation
+{
+	FVector ImpactPoint = FVector::ZeroVector;
+	FVector ImpactDirection = FVector::ZeroVector;
+	float ImpactImpulse = 0.f;
+};

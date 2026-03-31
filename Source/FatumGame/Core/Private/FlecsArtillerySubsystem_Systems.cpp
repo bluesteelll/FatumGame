@@ -84,6 +84,7 @@ void UFlecsArtillerySubsystem::RegisterFlecsComponents()
 	World.component<FContainedIn>();
 	World.component<FDebrisInstance>();
 	World.component<FFragmentationData>();
+	World.component<FPendingFragmentation>();
 	World.component<FInteractionInstance>();
 	World.component<FFocusCameraOverride>();
 	World.component<FInteractionAngleOverride>();
@@ -608,12 +609,12 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 	// Declaration order = execution order within OnUpdate phase.
 	// ═══════════════════════════════════════════════════════════════
 	SetupCollisionSystems();     // Damage → Bounce → Pickup → Destructible
-	SetupFragmentationSystems(); // ConstraintBreak, Fragmentation
+	SetupExplosionSystems();     // ExplosionSystem (processes FTagDetonate → ApplyExplosion → sets FPendingFragmentation)
+	SetupFragmentationSystems(); // ConstraintBreak, Fragmentation, PendingFragmentation (processes explosion-set fragments)
 	SetupWeaponSystems();        // WeaponTick, WeaponReload, WeaponFire
 	SetupDoorSystems();          // TriggerUnlock, DoorTick
 	SetupStealthSystems();       // StealthUpdateSystem
 	SetupVitalsSystems();        // EquipmentModifier, VitalDrain, VitalModifierRecalc, VitalHPDrain
-	SetupExplosionSystems();     // ExplosionSystem (processes FTagDetonate → ApplyExplosion → FTagDead)
 
 	// ═══════════════════════════════════════════════════════════════
 	// CLEANUP SYSTEMS

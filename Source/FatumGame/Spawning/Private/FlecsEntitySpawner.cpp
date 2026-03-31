@@ -223,6 +223,8 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 		const float Friction = EffectivePhysics ? EffectivePhysics->Friction : 0.2f;
 		const float Restitution = EffectivePhysics ? EffectivePhysics->Restitution : 0.3f;
 		const float LinearDamping = EffectivePhysics ? EffectivePhysics->LinearDamping : 0.0f;
+		const float SpawnMass = EffectivePhysics ? EffectivePhysics->Mass : 0.1f;
+		const float SpawnAngularDamping = EffectivePhysics ? EffectivePhysics->AngularDamping : 0.05f;
 		const float CollisionRadius = EffectivePhysics ? EffectivePhysics->CollisionRadius : 30.f;
 
 		// Generate unique entity key
@@ -252,7 +254,9 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 				static_cast<uint16>(EPhysicsLayer::PROJECTILE),
 				bIsBouncing ? Restitution : 0.f,
 				Friction,
-				LinearDamping
+				LinearDamping,
+				SpawnMass,
+				SpawnAngularDamping
 			);
 
 			UE_LOG(LogFlecsEntity, Log, TEXT("SpawnEntity: Projectile Key=%llu Bouncing=%d Gravity=%.2f"),

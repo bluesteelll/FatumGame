@@ -474,6 +474,11 @@ private:
 	/** Explosion system: processes FTagDetonate → ApplyExplosion → FTagDead */
 	void SetupExplosionSystems();
 
+	/** Core fragmentation logic: destroy intact object and spawn constrained fragments.
+	 *  Called by FragmentationSystem (collision) and PendingFragmentationSystem (explosion). */
+	void FragmentEntity(flecs::entity TargetEntity, FSkeletonKey TargetKey,
+		const FVector& ImpactPoint, const FVector& ImpactDirection, float ImpactImpulse);
+
 	/** Ambient light level for stealth (sim thread only, written via EnqueueCommand). */
 	float AmbientLightLevel = 0.1f;
 

@@ -244,11 +244,11 @@ FBLet UBarrageDispatch::CreatePrimitive(FBSphereParams& Definition, FSkeletonKey
 	return nullptr;
 }
 
-FBLet UBarrageDispatch::CreateBouncingSphere(FBSphereParams& Definition, FSkeletonKey OutKey, uint16_t Layer, float Restitution, float Friction, float LinearDamping)
+FBLet UBarrageDispatch::CreateBouncingSphere(FBSphereParams& Definition, FSkeletonKey OutKey, uint16_t Layer, float Restitution, float Friction, float LinearDamping, float Mass, float AngularDamping)
 {
 	if (JoltGameSim)
 	{
-		FBarrageKey temp = JoltGameSim->CreateBouncingSphere(Definition, Layer, Restitution, Friction, LinearDamping);
+		FBarrageKey temp = JoltGameSim->CreateBouncingSphere(Definition, Layer, Restitution, Friction, LinearDamping, Mass, AngularDamping);
 		return ManagePointers(OutKey, temp, FBShape::Sphere);
 	}
 	return nullptr;

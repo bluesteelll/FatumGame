@@ -438,7 +438,7 @@ FBarrageKey FWorldSimOwner::CreatePrimitive(FBCapParams& ToCreate, uint16 Layer,
 	return FBK;
 }
 
-FBarrageKey FWorldSimOwner::CreateBouncingSphere(FBSphereParams& ToCreate, uint16 Layer, float Restitution, float Friction, float LinearDamping)
+FBarrageKey FWorldSimOwner::CreateBouncingSphere(FBSphereParams& ToCreate, uint16 Layer, float Restitution, float Friction, float LinearDamping, float Mass, float AngularDamping)
 {
 	// Always use Dynamic motion for bouncing objects - they need physics simulation
 	EMotionType MovementType = EMotionType::Dynamic;
@@ -458,10 +458,12 @@ FBarrageKey FWorldSimOwner::CreateBouncingSphere(FBSphereParams& ToCreate, uint1
 	sphere_settings.mIsSensor = false; // Must be false for physical bounces
 	sphere_settings.mAllowSleeping = false; // Keep projectiles active
 	sphere_settings.mLinearDamping = FMath::Max(LinearDamping, 0.0f);
+	sphere_settings.mAngularDamping = FMath::Max(AngularDamping, 0.0f);
 
-	// Set reasonable mass for a small projectile
+	// Mass from PhysicsProfile (Jolt uses kg, same as UE)
+	const float EffectiveMass = FMath::Max(Mass, 0.01f);
 	JPH::MassProperties msp;
-	msp.ScaleToMass(0.1f); // 100 grams - light projectile
+	msp.ScaleToMass(EffectiveMass);
 	sphere_settings.mMassPropertiesOverride = msp;
 	sphere_settings.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
 	sphere_settings.mMaxLinearVelocity = 10000.0f; // 10 km/s = 1,000,000 UU/s (Jolt default 500 m/s is too low for game projectiles)

@@ -284,6 +284,8 @@ void UFlecsArtillerySubsystem::SetupWeaponFireSystem()
 			const float ProjFriction = PhysProfile ? PhysProfile->Friction : 0.2f;
 			const float ProjRestitution = PhysProfile ? PhysProfile->Restitution : 0.3f;
 			const float ProjLinearDamping = PhysProfile ? PhysProfile->LinearDamping : 0.0f;
+			const float ProjMass = PhysProfile ? PhysProfile->Mass : 0.1f;
+			const float ProjAngularDamping = PhysProfile ? PhysProfile->AngularDamping : 0.05f;
 			const bool bIsBouncing = ProjProfile->IsBouncing();
 			// ALL projectiles use dynamic body — sensors tunnel at high speed (no CCD).
 			// Non-bouncing non-gravity projectiles: dynamic + restitution=0 + gravity=0.
@@ -441,7 +443,8 @@ void UFlecsArtillerySubsystem::SetupWeaponFireSystem()
 					Body = CachedBarrageDispatch->CreateBouncingSphere(
 						SphereParams, ProjectileKey,
 						static_cast<uint16>(EPhysicsLayer::PROJECTILE),
-						bIsBouncing ? ProjRestitution : 0.f, ProjFriction, ProjLinearDamping);
+						bIsBouncing ? ProjRestitution : 0.f, ProjFriction, ProjLinearDamping,
+						ProjMass, ProjAngularDamping);
 				}
 				else
 				{

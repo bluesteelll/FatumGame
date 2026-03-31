@@ -107,7 +107,7 @@ public:
 
 	// Create a bouncing sphere projectile - for ricocheting bullets etc.
 	// Uses Jolt physics for realistic bounces (restitution controls elasticity)
-	FBLet CreateBouncingSphere(FBSphereParams& Definition, FSkeletonKey OutKey, uint16_t Layer, float Restitution = 0.8f, float Friction = 0.2f, float LinearDamping = 0.0f);
+	FBLet CreateBouncingSphere(FBSphereParams& Definition, FSkeletonKey OutKey, uint16_t Layer, float Restitution = 0.8f, float Friction = 0.2f, float LinearDamping = 0.0f, float Mass = 0.1f, float AngularDamping = 0.05f);
 	FBLet LoadComplexStaticMesh(FBTransform& MeshTransform, const UStaticMeshComponent* StaticMeshComponent, FSkeletonKey OutKey, bool IsSensor = false);
 	FBLet LoadEnemyHitboxFromStaticMesh(FBTransform& MeshTransform, const UStaticMeshComponent* StaticMeshComponent, FSkeletonKey OutKey, bool IsSensor = false, bool UseRawMeshForCollision = false, FVector CenterOfMassTranslation = {0,0,0});
 	FBLet GetShapeRef(FBarrageKey Existing) const;
