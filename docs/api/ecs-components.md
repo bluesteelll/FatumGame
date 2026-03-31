@@ -122,6 +122,7 @@
 | `FDestructibleStatic` | Prefab | `Profile*`, constraint forces, anchor settings |
 | `FDebrisInstance` | Instance | `LifetimeRemaining`, `PoolSlotIndex`, `FreeMassKg`, `PendingImpulse` |
 | `FFragmentationData` | Collision pair | `ImpactPoint`, `ImpactDirection`, `ImpactImpulse` |
+| `FPendingFragmentation` | Transient | `ImpactPoint`, `ImpactDirection`, `ImpactImpulse` (set by ApplyExplosion, processed by PendingFragmentationSystem) |
 
 ---
 

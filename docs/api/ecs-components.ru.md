@@ -122,6 +122,7 @@
 | `FDestructibleStatic` | Prefab | `Profile*`, силы констрейнтов, настройки якоря |
 | `FDebrisInstance` | Экземпляр | `LifetimeRemaining`, `PoolSlotIndex`, `FreeMassKg`, `PendingImpulse` |
 | `FFragmentationData` | Пара столкновений | `ImpactPoint`, `ImpactDirection`, `ImpactImpulse` |
+| `FPendingFragmentation` | Временный | `ImpactPoint`, `ImpactDirection`, `ImpactImpulse` (устанавливается ApplyExplosion, обрабатывается PendingFragmentationSystem) |
 
 ---
 

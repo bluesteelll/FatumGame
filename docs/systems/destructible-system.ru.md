@@ -192,6 +192,7 @@ Game thread `ProcessPendingFragmentSpawns()` вызывает `UFlecsRenderManag
 | `FDestructibleStatic` | Prefab | Ссылка на профиль, параметры constraints |
 | `FDebrisInstance` | Per-fragment entity | LifetimeRemaining, PoolSlotIndex, FreeMassKg, PendingImpulse |
 | `FFragmentationData` | Collision pair | ImpactPoint, ImpactDirection, ImpactImpulse |
+| `FPendingFragmentation` | Временный (per-entity) | ImpactPoint, ImpactDirection, ImpactImpulse (устанавливается ApplyExplosion) |
 | `FFlecsConstraintData` | Per-destructible entity | Массив хэндлов constraints + граф смежности |
 | `FTagDestructible` | Tag | Отмечает entity как разрушаемую |
 | `FTagDebrisFragment` | Tag | Отмечает entity как фрагмент обломков (для возврата в пул) |

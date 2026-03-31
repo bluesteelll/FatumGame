@@ -20,29 +20,29 @@ graph TD
     S6["6. BounceCollisionSystem"]
     S7["7. PickupCollisionSystem"]
     S8["8. DestructibleCollisionSystem"]
-    S9["9. ConstraintBreakSystem"]
-    S10["10. FragmentationSystem"]
-    S11["11. WeaponEquipSystem"]
-    S12["12. WeaponTickSystem"]
-    S13["13. WeaponReloadSystem"]
-    S14["14. WeaponFireSystem"]
-    S15["15. TriggerUnlockSystem"]
-    S16["16. DoorTickSystem"]
-    S17["17. StealthUpdateSystem"]
-    S18["18. VitalsSystems<br/>(Equip → Drain → Recalc → HPDrain)"]
-    S18b["19. ExplosionSystem"]
-    S19["20. DeathCheckSystem"]
-    S20["20. DeathCheckSystem"]
-    S21["21. DeadEntityCleanupSystem"]
-    S22["22. CollisionPairCleanupSystem"]
+    S8b["9. ExplosionSystem"]
+    S9["10. ConstraintBreakSystem"]
+    S10["11. FragmentationSystem"]
+    S10b["12. PendingFragmentationSystem"]
+    S11["13. WeaponEquipSystem"]
+    S12["14. WeaponTickSystem"]
+    S13["15. WeaponReloadSystem"]
+    S14["16. WeaponFireSystem"]
+    S15["17. TriggerUnlockSystem"]
+    S16["18. DoorTickSystem"]
+    S17["19. StealthUpdateSystem"]
+    S18["20. VitalsSystems<br/>(Equip → Drain → Recalc → HPDrain)"]
+    S20["21. DeathCheckSystem"]
+    S21["22. DeadEntityCleanupSystem"]
+    S22["23. CollisionPairCleanupSystem"]
 
     S1 --> S2 --> S3 --> S4
     S4 --> S5 --> S6 --> S7 --> S8
-    S8 --> S9 --> S10
-    S10 --> S11 --> S12 --> S13 --> S14
+    S8 --> S8b --> S9 --> S10 --> S10b
+    S10b --> S11 --> S12 --> S13 --> S14
     S14 --> S15 --> S16
     S16 --> S17 --> S18
-    S18 --> S18b --> S20 --> S21 --> S22
+    S18 --> S20 --> S21 --> S22
 
     DamageObs -.->|"fires during S5"| S20
 ```
@@ -115,7 +115,16 @@ graph TD
 | **Does** | Adds `FTagDead` to the destructible entity. |
 | **Setup** | `SetupDestructibleCollisionSystems()` |
 
-### 9. ConstraintBreakSystem
+### 9. ExplosionSystem
+
+| Property | Value |
+|----------|-------|
+| **Queries** | `FTagDetonate`, `FBarrageBody`, `FExplosionStatic`, without `FTagDead` |
+| **Does** | Reads epicenter from Barrage body + EpicenterLift along contact normal. Calls `ApplyExplosion()`: SphereSearch for targets in radius, CastRay LOS check per target, radial damage with exponent falloff, radial impulse with vertical bias. Sets `FPendingFragmentation` on destructible entities. Enqueues explosion VFX. Adds `FTagDead`. |
+| **Why here** | Must run after all detonation triggers (collision systems, lifetime systems) have added `FTagDetonate`, and before fragmentation systems process explosion-triggered destruction. |
+| **Setup** | `SetupExplosionSystems()` |
+
+### 10. ConstraintBreakSystem
 
 | Property | Value |
 |----------|-------|
@@ -124,16 +133,25 @@ graph TD
 | **Why before Fragmentation** | Must process existing constraint breaks before new fragments are created. |
 | **Setup** | `SetupDestructibleCollisionSystems()` |
 
-### 10. FragmentationSystem
+### 11. FragmentationSystem
 
 | Property | Value |
 |----------|-------|
 | **Queries** | `FCollisionPair`, `FTagCollisionFragmentation` |
-| **Does** | Spawns debris fragments from `FDebrisPool`. Creates Jolt constraints per adjacency. World anchors for bottom fragments. Enqueues `FPendingFragmentSpawn`. |
+| **Does** | Calls `FragmentEntity()` — reusable core logic that spawns debris fragments from `FDebrisPool`, creates Jolt constraints per adjacency, world anchors for bottom fragments, enqueues `FPendingFragmentSpawn`. |
 | **Immediately** | Invalidates `FDestructibleStatic.Profile`, moves body to DEBRIS layer (no deferred wait). |
-| **Setup** | `SetupDestructibleCollisionSystems()` |
+| **Setup** | `SetupFragmentationSystems()` |
 
-### 11. WeaponEquipSystem
+### 12. PendingFragmentationSystem
+
+| Property | Value |
+|----------|-------|
+| **Queries** | `FPendingFragmentation`, `FDestructibleStatic`, `FBarrageBody`, without `FTagDead` |
+| **Does** | Processes explosion-triggered fragmentation. Calls `FragmentEntity()` with impact data from `FPendingFragmentation`. Removes `FPendingFragmentation` after processing. |
+| **Why after FragmentationSystem** | Both systems call the same `FragmentEntity()` core logic, but this one handles deferred fragmentation from explosions rather than direct collision impacts. |
+| **Setup** | `SetupFragmentationSystems()` |
+
+### 13. WeaponEquipSystem
 
 | Property | Value |
 |----------|-------|
@@ -142,7 +160,7 @@ graph TD
 | **Why before WeaponTick** | Equip state must be resolved before weapon systems tick. |
 | **Setup** | `SetupWeaponSystems()` |
 
-### 12. WeaponTickSystem
+### 14. WeaponTickSystem
 
 | Property | Value |
 |----------|-------|
@@ -150,7 +168,7 @@ graph TD
 | **Does** | Fire cooldown decay. Burst cooldown. Semi-auto trigger reset. Bloom decay. |
 | **Setup** | `SetupWeaponSystems()` |
 
-### 13. WeaponReloadSystem
+### 15. WeaponReloadSystem
 
 | Property | Value |
 |----------|-------|
@@ -158,7 +176,7 @@ graph TD
 | **Does** | Reload timer countdown. Ammo transfer (reserve → magazine). UI notification. |
 | **Setup** | `SetupWeaponSystems()` |
 
-### 14. WeaponFireSystem
+### 16. WeaponFireSystem
 
 | Property | Value |
 |----------|-------|
@@ -167,7 +185,7 @@ graph TD
 | **Why after reload** | Reload must complete before fire system checks ammo. |
 | **Setup** | `SetupWeaponSystems()` |
 
-### 15. TriggerUnlockSystem
+### 17. TriggerUnlockSystem
 
 | Property | Value |
 |----------|-------|
@@ -176,7 +194,7 @@ graph TD
 | **Why before DoorTick** | Door must know it's unlocked before the state machine ticks. |
 | **Setup** | `SetupDoorSystems()` |
 
-### 16. DoorTickSystem
+### 18. DoorTickSystem
 
 | Property | Value |
 |----------|-------|
@@ -184,7 +202,7 @@ graph TD
 | **Does** | 5-state machine: Locked → Closed → Opening → Open → Closing. Controls constraint motor. Auto-close timer. |
 | **Setup** | `SetupDoorSystems()` |
 
-### 17. StealthUpdateSystem
+### 19. StealthUpdateSystem
 
 | Property | Value |
 |----------|-------|
@@ -192,11 +210,11 @@ graph TD
 | **Does** | Updates stealth state based on light zones and noise zones. Calculates visibility/audibility for AI. |
 | **Setup** | `SetupStealthSystems()` |
 
-### 18. VitalsSystems
+### 20. VitalsSystems
 
 Four sub-systems that run in sequence:
 
-#### 18a. EquipmentModifierSystem
+#### 20a. EquipmentModifierSystem
 
 | Property | Value |
 |----------|-------|
@@ -205,7 +223,7 @@ Four sub-systems that run in sequence:
 | **Why first** | Equipment modifiers must be calculated before drain/regen systems use them. |
 | **Setup** | `SetupVitalsSystems()` |
 
-#### 18b. VitalDrainSystem
+#### 20b. VitalDrainSystem
 
 | Property | Value |
 |----------|-------|
@@ -213,7 +231,7 @@ Four sub-systems that run in sequence:
 | **Does** | Applies per-tick drain to vitals (hunger, thirst, stamina). Modulated by equipment and temperature. |
 | **Setup** | `SetupVitalsSystems()` |
 
-#### 18c. VitalModifierRecalcSystem
+#### 20c. VitalModifierRecalcSystem
 
 | Property | Value |
 |----------|-------|
@@ -221,7 +239,7 @@ Four sub-systems that run in sequence:
 | **Does** | Recalculates derived stat modifiers based on current vital levels (e.g., low hunger reduces max stamina). |
 | **Setup** | `SetupVitalsSystems()` |
 
-#### 18d. VitalHPDrainSystem
+#### 20d. VitalHPDrainSystem
 
 | Property | Value |
 |----------|-------|
@@ -230,16 +248,7 @@ Four sub-systems that run in sequence:
 | **Why last** | Must run after drain and recalc so HP penalty reflects current-tick vital state. |
 | **Setup** | `SetupVitalsSystems()` |
 
-### 19. ExplosionSystem
-
-| Property | Value |
-|----------|-------|
-| **Queries** | `FTagDetonate`, `FBarrageBody`, `FExplosionStatic`, without `FTagDead` |
-| **Does** | Reads epicenter from Barrage body + EpicenterLift along contact normal. Calls `ApplyExplosion()`: SphereSearch for targets in radius, CastRay LOS check per target, radial damage with exponent falloff, radial impulse with vertical bias. Enqueues explosion VFX. Adds `FTagDead`. |
-| **Why here** | Must run after all detonation triggers (collision systems, lifetime systems) have added `FTagDetonate`, and before `DeathCheckSystem` processes the resulting damage. |
-| **Setup** | `SetupExplosionSystems()` |
-
-### 20. DeathCheckSystem
+### 21. DeathCheckSystem
 
 | Property | Value |
 |----------|-------|
@@ -247,7 +256,7 @@ Four sub-systems that run in sequence:
 | **Does** | Adds `FTagDead` if `CurrentHP ≤ 0`. |
 | **Why here** | All damage sources (collision systems, observers) have processed by this point. |
 
-### 21. DeadEntityCleanupSystem
+### 22. DeadEntityCleanupSystem
 
 | Property | Value |
 |----------|-------|
@@ -255,7 +264,7 @@ Four sub-systems that run in sequence:
 | **Does** | Tombstone body. Cleanup constraints. Remove ISM. Trigger death VFX. Release to pool. `entity.destruct()`. |
 | **Why second-to-last** | Must process after all systems that may add `FTagDead`. |
 
-### 22. CollisionPairCleanupSystem
+### 23. CollisionPairCleanupSystem
 
 | Property | Value |
 |----------|-------|
@@ -293,12 +302,12 @@ void SetupFlecsSystems()
     // DebrisLifetimeSystem (inline)
 
     SetupCollisionSystems();            // DamageCollision, BounceCollision, PickupCollision, Destructible
-    SetupFragmentationSystems();        // ConstraintBreak, Fragmentation
+    SetupExplosionSystems();            // ExplosionSystem
+    SetupFragmentationSystems();        // ConstraintBreak, Fragmentation, PendingFragmentation
     SetupWeaponSystems();               // WeaponEquip, WeaponTick, WeaponReload, WeaponFire
     SetupDoorSystems();                 // TriggerUnlock, DoorTick
     SetupStealthSystems();              // StealthUpdateSystem
     SetupVitalsSystems();               // EquipmentModifier, VitalDrain, VitalModifierRecalc, VitalHPDrain
-    SetupExplosionSystems();            // ExplosionSystem
 
     // DeathCheckSystem (inline)
     // DeadEntityCleanupSystem (inline)
@@ -321,7 +330,8 @@ void SetupFlecsSystems()
 | Vitals after Stealth | Temperature zones affect vital drain rates |
 | EquipmentModifier before VitalDrain | Equipment stat bonuses must be cached before drain calculates |
 | VitalHPDrain before DeathCheck | HP damage from critical vitals must be applied before death check |
-| ExplosionSystem after Vitals, before DeathCheck | Detonation triggers (collision, fuse, lifetime) must all be resolved; explosion damage must be applied before death check |
+| ExplosionSystem after collision, before fragmentation | Detonation triggers (collision, fuse, lifetime) must be resolved; FPendingFragmentation must be set before fragmentation systems process it |
+| PendingFragmentationSystem after FragmentationSystem | Both call FragmentEntity(); explosion-triggered fragmentation processed after collision-triggered |
 | All damage sources before DeathCheck | All hits in a tick must be applied before checking for death |
 | DeadEntityCleanup before CollisionPairCleanup | Dead entities must be cleaned up while collision data still exists |
 | CollisionPairCleanup LAST always | All systems must finish processing pairs first |

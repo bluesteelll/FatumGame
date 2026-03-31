@@ -20,28 +20,29 @@ graph TD
     S6["6. BounceCollisionSystem"]
     S7["7. PickupCollisionSystem"]
     S8["8. DestructibleCollisionSystem"]
-    S9["9. ConstraintBreakSystem"]
-    S10["10. FragmentationSystem"]
-    S11["11. WeaponEquipSystem"]
-    S12["12. WeaponTickSystem"]
-    S13["13. WeaponReloadSystem"]
-    S14["14. WeaponFireSystem"]
-    S15["15. TriggerUnlockSystem"]
-    S16["16. DoorTickSystem"]
-    S17["17. StealthUpdateSystem"]
-    S18["18. VitalsSystems<br/>(Equip → Drain → Recalc → HPDrain)"]
-    S18b["19. ExplosionSystem"]
-    S20["20. DeathCheckSystem"]
-    S21["21. DeadEntityCleanupSystem"]
-    S22["22. CollisionPairCleanupSystem"]
+    S8b["9. ExplosionSystem"]
+    S9["10. ConstraintBreakSystem"]
+    S10["11. FragmentationSystem"]
+    S10b["12. PendingFragmentationSystem"]
+    S11["13. WeaponEquipSystem"]
+    S12["14. WeaponTickSystem"]
+    S13["15. WeaponReloadSystem"]
+    S14["16. WeaponFireSystem"]
+    S15["17. TriggerUnlockSystem"]
+    S16["18. DoorTickSystem"]
+    S17["19. StealthUpdateSystem"]
+    S18["20. VitalsSystems<br/>(Equip → Drain → Recalc → HPDrain)"]
+    S20["21. DeathCheckSystem"]
+    S21["22. DeadEntityCleanupSystem"]
+    S22["23. CollisionPairCleanupSystem"]
 
     S1 --> S2 --> S3 --> S4
     S4 --> S5 --> S6 --> S7 --> S8
-    S8 --> S9 --> S10
-    S10 --> S11 --> S12 --> S13 --> S14
+    S8 --> S8b --> S9 --> S10 --> S10b
+    S10b --> S11 --> S12 --> S13 --> S14
     S14 --> S15 --> S16
     S16 --> S17 --> S18
-    S18 --> S18b --> S20 --> S21 --> S22
+    S18 --> S20 --> S21 --> S22
 
     DamageObs -.->|"срабатывает во время S5"| S20
 ```
@@ -114,25 +115,43 @@ graph TD
 | **Действие** | Добавляет `FTagDead` разрушаемой entity. |
 | **Setup** | `SetupDestructibleCollisionSystems()` |
 
-### 9. ConstraintBreakSystem
+### 9. ExplosionSystem
+
+| Свойство | Значение |
+|----------|----------|
+| **Запросы** | `FTagDetonate`, `FBarrageBody`, `FExplosionStatic`, без `FTagDead` |
+| **Действие** | Считывает эпицентр из позиции Barrage-тела + EpicenterLift вдоль нормали контакта. Вызывает `ApplyExplosion()`: SphereSearch для целей в радиусе, CastRay LOS-проверка для каждой цели, радиальный урон с экспоненциальным затуханием, радиальный импульс с вертикальным смещением. Устанавливает `FPendingFragmentation` на разрушаемые entity. Ставит в очередь VFX взрыва. Добавляет `FTagDead`. |
+| **Почему здесь** | Должна выполняться после всех триггеров детонации (столкновения, взрыватель, время жизни) и до систем фрагментации, обрабатывающих взрывное разрушение. |
+| **Setup** | `SetupExplosionSystems()` |
+
+### 10. ConstraintBreakSystem
 
 | Свойство | Значение |
 |----------|----------|
 | **Запросы** | `FFlecsConstraintData` |
 | **Действие** | Проход 1: Опрос Jolt на разорванные constraints. Проход 2: BFS для поиска отсоединённых групп фрагментов. Проход 3: Разрыв constraints дверей. |
 | **Почему до Fragmentation** | Существующие разрывы constraints должны быть обработаны до создания новых фрагментов. |
-| **Setup** | `SetupDestructibleCollisionSystems()` |
+| **Setup** | `SetupFragmentationSystems()` |
 
-### 10. FragmentationSystem
+### 11. FragmentationSystem
 
 | Свойство | Значение |
 |----------|----------|
 | **Запросы** | `FCollisionPair`, `FTagCollisionFragmentation` |
-| **Действие** | Спавнит фрагменты обломков из `FDebrisPool`. Создаёт Jolt constraints по графу смежности. Мировые якоря для нижних фрагментов. Enqueue `FPendingFragmentSpawn`. |
+| **Действие** | Вызывает `FragmentEntity()` -- переиспользуемую логику фрагментации: спавн фрагментов из `FDebrisPool`, создание Jolt constraints по графу смежности, мировые якоря для нижних фрагментов, enqueue `FPendingFragmentSpawn`. |
 | **Немедленно** | Инвалидирует `FDestructibleStatic.Profile`, переводит тело на слой DEBRIS (без отложенного ожидания). |
-| **Setup** | `SetupDestructibleCollisionSystems()` |
+| **Setup** | `SetupFragmentationSystems()` |
 
-### 11. WeaponEquipSystem
+### 12. PendingFragmentationSystem
+
+| Свойство | Значение |
+|----------|----------|
+| **Запросы** | `FPendingFragmentation`, `FDestructibleStatic`, `FBarrageBody`, без `FTagDead` |
+| **Действие** | Обрабатывает фрагментацию, вызванную взрывом. Вызывает `FragmentEntity()` с данными из `FPendingFragmentation`. Удаляет `FPendingFragmentation` после обработки. |
+| **Почему после FragmentationSystem** | Обе системы вызывают одну и ту же логику `FragmentEntity()`, но эта обрабатывает отложенную фрагментацию от взрывов, а не прямые столкновения. |
+| **Setup** | `SetupFragmentationSystems()` |
+
+### 13. WeaponEquipSystem
 
 | Свойство | Значение |
 |----------|----------|
@@ -141,7 +160,7 @@ graph TD
 | **Почему до WeaponTick** | Состояние экипировки должно быть определено до тика систем оружия. |
 | **Setup** | `SetupWeaponSystems()` |
 
-### 12. WeaponTickSystem
+### 14. WeaponTickSystem
 
 | Свойство | Значение |
 |----------|----------|
@@ -149,7 +168,7 @@ graph TD
 | **Действие** | Убывание кулдауна стрельбы. Кулдаун очереди. Сброс полуавтомата. Убывание разброса. |
 | **Setup** | `SetupWeaponSystems()` |
 
-### 13. WeaponReloadSystem
+### 15. WeaponReloadSystem
 
 | Свойство | Значение |
 |----------|----------|
@@ -157,7 +176,7 @@ graph TD
 | **Действие** | Обратный отсчёт перезарядки. Перенос патронов (запас → магазин). Уведомление UI. |
 | **Setup** | `SetupWeaponSystems()` |
 
-### 14. WeaponFireSystem
+### 16. WeaponFireSystem
 
 | Свойство | Значение |
 |----------|----------|
@@ -166,7 +185,7 @@ graph TD
 | **Почему после перезарядки** | Перезарядка должна завершиться до проверки боезапаса системой стрельбы. |
 | **Setup** | `SetupWeaponSystems()` |
 
-### 15. TriggerUnlockSystem
+### 17. TriggerUnlockSystem
 
 | Свойство | Значение |
 |----------|----------|
@@ -175,7 +194,7 @@ graph TD
 | **Почему до DoorTick** | Дверь должна знать о разблокировке до тика конечного автомата. |
 | **Setup** | `SetupDoorSystems()` |
 
-### 16. DoorTickSystem
+### 18. DoorTickSystem
 
 | Свойство | Значение |
 |----------|----------|
@@ -183,7 +202,7 @@ graph TD
 | **Действие** | 5-состоянный автомат: Locked → Closed → Opening → Open → Closing. Управление мотором constraint. Таймер автозакрытия. |
 | **Setup** | `SetupDoorSystems()` |
 
-### 17. StealthUpdateSystem
+### 19. StealthUpdateSystem
 
 | Свойство | Значение |
 |----------|----------|
@@ -191,11 +210,11 @@ graph TD
 | **Действие** | Обновляет состояние скрытности на основе зон освещения и шума. Рассчитывает видимость/слышимость для ИИ. |
 | **Setup** | `SetupStealthSystems()` |
 
-### 18. VitalsSystems
+### 20. VitalsSystems
 
 Четыре подсистемы, выполняемые последовательно:
 
-#### 18a. EquipmentModifierSystem
+#### 20a. EquipmentModifierSystem
 
 | Свойство | Значение |
 |----------|----------|
@@ -204,7 +223,7 @@ graph TD
 | **Почему первая** | Модификаторы экипировки должны быть рассчитаны до использования системами расхода/регенерации. |
 | **Setup** | `SetupVitalsSystems()` |
 
-#### 18b. VitalDrainSystem
+#### 20b. VitalDrainSystem
 
 | Свойство | Значение |
 |----------|----------|
@@ -212,7 +231,7 @@ graph TD
 | **Действие** | Применяет потиковый расход витальных показателей (голод, жажда, выносливость). Модулируется экипировкой и температурой. |
 | **Setup** | `SetupVitalsSystems()` |
 
-#### 18c. VitalModifierRecalcSystem
+#### 20c. VitalModifierRecalcSystem
 
 | Свойство | Значение |
 |----------|----------|
@@ -220,7 +239,7 @@ graph TD
 | **Действие** | Пересчитывает производные модификаторы характеристик на основе текущих уровней витальных показателей (напр., низкий голод снижает макс. выносливость). |
 | **Setup** | `SetupVitalsSystems()` |
 
-#### 18d. VitalHPDrainSystem
+#### 20d. VitalHPDrainSystem
 
 | Свойство | Значение |
 |----------|----------|
@@ -229,16 +248,7 @@ graph TD
 | **Почему последняя** | Должна выполниться после расхода и пересчёта, чтобы штраф HP отражал состояние витальных показателей текущего тика. |
 | **Setup** | `SetupVitalsSystems()` |
 
-### 19. ExplosionSystem
-
-| Свойство | Значение |
-|----------|----------|
-| **Запросы** | `FTagDetonate`, `FBarrageBody`, `FExplosionStatic`, без `FTagDead` |
-| **Действие** | Считывает эпицентр из позиции Barrage-тела + EpicenterLift вдоль нормали контакта. Вызывает `ApplyExplosion()`: SphereSearch для целей в радиусе, CastRay LOS-проверка для каждой цели, радиальный урон с экспоненциальным затуханием, радиальный импульс с вертикальным смещением. Ставит в очередь VFX взрыва. Добавляет `FTagDead`. |
-| **Почему здесь** | Должна выполняться после всех триггеров детонации (столкновения, взрыватель, время жизни) и до `DeathCheckSystem`, обрабатывающей нанесённый урон. |
-| **Setup** | `SetupExplosionSystems()` |
-
-### 20. DeathCheckSystem
+### 21. DeathCheckSystem
 
 | Свойство | Значение |
 |----------|----------|
@@ -246,7 +256,7 @@ graph TD
 | **Действие** | Добавляет `FTagDead` если `CurrentHP <= 0`. |
 | **Почему здесь** | Все источники урона (системы столкновений, observer) уже обработаны к этому моменту. |
 
-### 21. DeadEntityCleanupSystem
+### 22. DeadEntityCleanupSystem
 
 | Свойство | Значение |
 |----------|----------|
@@ -254,7 +264,7 @@ graph TD
 | **Действие** | Tombstone тела. Очистка constraints. Удаление ISM. Запуск VFX смерти. Возврат в пул. `entity.destruct()`. |
 | **Почему предпоследняя** | Должна обработать после всех систем, которые могут добавить `FTagDead`. |
 
-### 22. CollisionPairCleanupSystem
+### 23. CollisionPairCleanupSystem
 
 | Свойство | Значение |
 |----------|----------|
@@ -292,12 +302,12 @@ void SetupFlecsSystems()
     // DebrisLifetimeSystem (инлайн)
 
     SetupCollisionSystems();            // DamageCollision, BounceCollision, PickupCollision, Destructible
-    SetupFragmentationSystems();        // ConstraintBreak, Fragmentation
+    SetupExplosionSystems();            // ExplosionSystem
+    SetupFragmentationSystems();        // ConstraintBreak, Fragmentation, PendingFragmentation
     SetupWeaponSystems();               // WeaponEquip, WeaponTick, WeaponReload, WeaponFire
     SetupDoorSystems();                 // TriggerUnlock, DoorTick
     SetupStealthSystems();              // StealthUpdateSystem
     SetupVitalsSystems();               // EquipmentModifier, VitalDrain, VitalModifierRecalc, VitalHPDrain
-    SetupExplosionSystems();            // ExplosionSystem
 
     // DeathCheckSystem (инлайн)
     // DeadEntityCleanupSystem (инлайн)
@@ -313,7 +323,9 @@ void SetupFlecsSystems()
 |---------|--------|
 | Системы времени жизни до систем столкновений | Истёкшие сущности должны быть мертвы до обработки столкновений |
 | PickupGrace до PickupCollision | Таймер защиты должен быть проверен перед разрешением подбора |
+| ExplosionSystem после столкновений, до фрагментации | Триггеры детонации (столкновения, взрыватель, время жизни) должны быть обработаны; FPendingFragmentation должен быть установлен до обработки системами фрагментации |
 | ConstraintBreak до Fragmentation | Существующие разрывы должны быть обработаны до создания новых фрагментов |
+| PendingFragmentationSystem после FragmentationSystem | Обе вызывают FragmentEntity(); фрагментация от взрывов обрабатывается после фрагментации от столкновений |
 | WeaponEquip до WeaponTick | Экипировка/снятие должны быть определены до тика систем оружия |
 | WeaponReload до WeaponFire | Перезарядка должна завершиться до проверки боезапаса |
 | TriggerUnlock до DoorTick | Дверь должна знать о разблокировке до тика конечного автомата |

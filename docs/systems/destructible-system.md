@@ -192,6 +192,7 @@ Game thread `ProcessPendingFragmentSpawns()` calls `UFlecsRenderManager::AddInst
 | `FDestructibleStatic` | Prefab | Profile reference, constraint parameters |
 | `FDebrisInstance` | Per-fragment entity | LifetimeRemaining, PoolSlotIndex, FreeMassKg, PendingImpulse |
 | `FFragmentationData` | Collision pair | ImpactPoint, ImpactDirection, ImpactImpulse |
+| `FPendingFragmentation` | Transient (per-entity) | ImpactPoint, ImpactDirection, ImpactImpulse (set by ApplyExplosion) |
 | `FFlecsConstraintData` | Per-destructible entity | Array of constraint handles + adjacency graph |
 | `FTagDestructible` | Tag | Marks entity as destructible |
 | `FTagDebrisFragment` | Tag | Marks entity as a debris fragment (for pool return) |
