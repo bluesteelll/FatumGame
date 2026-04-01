@@ -69,6 +69,15 @@ void UFlecsArtillerySubsystem::OnBarrageContact(const BarrageContactEvent& Event
 	Pair.bBody1IsProjectile = bBody1IsProjectile;
 	Pair.bBody2IsProjectile = bBody2IsProjectile;
 	Pair.IncomingVelocity = Event.ProjectileVelocity;
+	// Store TARGET body's SubShapeID (not projectile's)
+	// If body1 is projectile → target is body2 → use SubShapeID2
+	// If body2 is projectile → target is body1 → use SubShapeID1
+	if (bBody1IsProjectile)
+		Pair.SubShapeID2 = Event.SubShapeID2;
+	else if (bBody2IsProjectile)
+		Pair.SubShapeID2 = Event.SubShapeID1;
+	else
+		Pair.SubShapeID2 = 0;  // No projectile — no sub-shape lookup needed
 
 	flecs::entity PairEntity = World.entity()
 		.set<FCollisionPair>(Pair);

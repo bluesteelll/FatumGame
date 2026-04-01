@@ -60,6 +60,12 @@ struct BarrageContactEvent
 	FVector NormalIfAny = FVector::ZeroVector;
 	FVector ProjectileVelocity = FVector::ZeroVector;
 
+	/** SubShapeID identifying which sub-shape of body1 was hit (for compound shapes). 0xFFFFFFFF for simple shapes. */
+	uint32 SubShapeID1 = 0xFFFFFFFF;
+
+	/** SubShapeID identifying which sub-shape of body2 was hit (for compound shapes). 0xFFFFFFFF for simple shapes. */
+	uint32 SubShapeID2 = 0xFFFFFFFF;
+
 	BarrageContactEvent(EBarrageContactEventType EventType, const BarrageContactEntity& BarrageContactEntity,
 						const ::BarrageContactEntity& BarrageContactEntity1, FVector CollisionPoint);
 	

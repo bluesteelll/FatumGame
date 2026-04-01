@@ -254,6 +254,26 @@ FBLet UBarrageDispatch::CreateBouncingSphere(FBSphereParams& Definition, FSkelet
 	return nullptr;
 }
 
+FBLet UBarrageDispatch::CreateCompoundBody(const FVector& Position, const FQuat& Rotation,
+	const TArray<FBCompoundSubShape>& SubShapes, FSkeletonKey OutKey, uint16 Layer, bool IsSensor)
+{
+	if (JoltGameSim)
+	{
+		FBarrageKey temp = JoltGameSim->CreateCompoundBody(Position, Rotation, SubShapes, Layer, IsSensor);
+		return ManagePointers(OutKey, temp, FBShape::Box);
+	}
+	return nullptr;
+}
+
+uint32 UBarrageDispatch::GetSubShapeUserData(FBarrageKey BodyKey, uint32 SubShapeIDValue) const
+{
+	if (JoltGameSim)
+	{
+		return JoltGameSim->GetSubShapeUserData(BodyKey, SubShapeIDValue);
+	}
+	return 0;
+}
+
 FBLet UBarrageDispatch::ManagePointers(FSkeletonKey OutKey, FBarrageKey temp, FBShape form) const
 {
 	//interestingly, you can't use auto here. don't try. it may allocate a raw pointer internal
@@ -1036,6 +1056,10 @@ void UBarrageDispatch::HandleContactAdded(const JPH::Body& inBody1, const JPH::B
 		ContactEventToEnqueue.ProjectileVelocity = FVector(CoordinateUtils::FromJoltCoordinatesD(inBody2.GetLinearVelocity()));
 	}
 
+	// Propagate sub-shape IDs for compound shape material lookup
+	ContactEventToEnqueue.SubShapeID1 = inManifold.mSubShapeID1.GetValue();
+	ContactEventToEnqueue.SubShapeID2 = inManifold.mSubShapeID2.GetValue();
+
 	ContactEventPump->Enqueue(ContactEventToEnqueue);
 }
 
@@ -1105,6 +1129,13 @@ JPH::IgnoreSingleBodyFilter UBarrageDispatch::GetFilterToIgnoreSingleBody(FBarra
 	JPH::BodyID CastingBodyID;
 	JoltGameSim->GetBodyIDOrDefault(ObjectKey, CastingBodyID);
 	return JPH::IgnoreSingleBodyFilter(CastingBodyID);
+}
+
+JPH::BodyID UBarrageDispatch::GetJoltBodyID(FBarrageKey BarrageKey) const
+{
+	JPH::BodyID Result;
+	if (JoltGameSim) JoltGameSim->GetBodyIDOrDefault(BarrageKey, Result);
+	return Result;
 }
 
 JPH::IgnoreSingleBodyFilter UBarrageDispatch::GetFilterToIgnoreSingleBody(const FBLet& ToIgnore) const

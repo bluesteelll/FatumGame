@@ -263,6 +263,52 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 			UE_LOG(LogFlecsEntity, Log, TEXT("SpawnEntity: Projectile Key=%llu Bouncing=%d Gravity=%.2f"),
 				static_cast<uint64>(EntityKey), bIsBouncing, GravityFactor);
 		}
+		else if (EffectivePhysics && EffectivePhysics->CompoundSubShapes.Num() > 0)
+		{
+			// ═══════════════════════════════════════════════════════
+			// NON-PROJECTILE COMPOUND BODY: per-region materials
+			// ═══════════════════════════════════════════════════════
+			const uint16 PhysLayer = static_cast<uint16>(ToBarrageLayer(EffectivePhysics->Layer));
+			const bool bSensor = EffectivePhysics->bIsSensor;
+
+			TArray<FBCompoundSubShape> SubShapes;
+			SubShapes.Reserve(EffectivePhysics->CompoundSubShapes.Num());
+			for (const FSubShapeDefinition& Def : EffectivePhysics->CompoundSubShapes)
+			{
+				FBCompoundSubShape Sub;
+				Sub.Position = Def.LocalOffset;
+				Sub.Rotation = Def.LocalRotation.Quaternion();
+				Sub.HalfExtents = Def.HalfExtents;
+				Sub.UserData = static_cast<uint32>(Def.Material) + 1;  // +1: 0 reserved for "no data" (non-compound)
+				SubShapes.Add(Sub);
+			}
+
+			Body = Barrage->CreateCompoundBody(
+				Request.Location, Request.Rotation.Quaternion(),
+				SubShapes, EntityKey, PhysLayer, bSensor);
+
+			if (!FBarragePrimitive::IsNotNull(Body))
+			{
+				UE_LOG(LogFlecsEntity, Error, TEXT("SpawnEntity: Failed to create compound body (Key=%llu)"),
+					static_cast<uint64>(EntityKey));
+				return FSkeletonKey();
+			}
+
+			FBarragePrimitive::SetGravityFactor(GravityFactor, Body);
+
+			// Add ISM render instance for compound bodies
+			if (Renderer && EffectiveRender && EffectiveRender->Mesh)
+			{
+				FTransform RenderTransform;
+				RenderTransform.SetLocation(Request.Location);
+				RenderTransform.SetRotation(Request.Rotation.Quaternion() * EffectiveRender->RotationOffset.Quaternion());
+				RenderTransform.SetScale3D(EffectiveRender->Scale);
+				Renderer->AddInstance(EffectiveRender->Mesh, EffectiveRender->MaterialOverride, RenderTransform, EntityKey);
+			}
+
+			UE_LOG(LogFlecsEntity, Log, TEXT("SpawnEntity: COMPOUND Key=%llu SubShapes=%d"),
+				static_cast<uint64>(EntityKey), SubShapes.Num());
+		}
 		else
 		{
 			// ═══════════════════════════════════════════════════════

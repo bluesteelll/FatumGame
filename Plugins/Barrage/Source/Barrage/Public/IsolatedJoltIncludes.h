@@ -41,6 +41,7 @@ PRAGMA_PUSH_PLATFORM_DEFAULT_PACKING
 #include "Jolt/Physics/Collision/Shape/MeshShape.h"
 #include "Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h"
 #include "Jolt/Physics/Collision/Shape/SphereShape.h"
+#include "Jolt/Physics/Collision/Shape/StaticCompoundShape.h"
 #include "Jolt/Physics/Constraints/FixedConstraint.h"
 #include "LocomoCore/Public/Distances/AtypicalDistances.h"
 #include "LocomoCore/Public/Distances/ZOrderDistances.h"

@@ -237,7 +237,9 @@ flecs::entity UFlecsArtillerySubsystem::GetOrCreateEntityPrefab(UFlecsEntityDefi
 
 	if (UFlecsPhysicsProfile* PhysProf = EntityDefinition->PhysicsProfile)
 	{
-		if (PhysProf->MaterialResistance > 0.f)
+		// Add penetration material if this object is penetrable (either new enum or legacy float)
+		if (PhysProf->MaterialCategory != EPenetrationMaterialCategory::Impenetrable
+			|| PhysProf->MaterialResistance > 0.f)
 		{
 			Prefab.set<FPenetrationMaterial>(FPenetrationMaterial::FromProfile(PhysProf));
 		}

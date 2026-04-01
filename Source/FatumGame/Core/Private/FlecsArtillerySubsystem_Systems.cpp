@@ -156,6 +156,7 @@ void UFlecsArtillerySubsystem::RegisterFlecsComponents()
 	World.component<FPenetrationStatic>();
 	World.component<FPenetrationInstance>();
 	World.component<FPenetrationMaterial>();
+	World.component<FSurfaceIntegrity>();
 	World.component<FTagCollisionPenetration>();
 
 	// ─────────────────────────────────────────────────────────

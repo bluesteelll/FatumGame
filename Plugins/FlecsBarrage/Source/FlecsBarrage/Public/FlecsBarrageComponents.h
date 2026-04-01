@@ -163,6 +163,9 @@ struct FCollisionPair
 	/** Pre-collision projectile velocity (UE coords, cm/s). For penetration system. */
 	FVector IncomingVelocity = FVector::ZeroVector;
 
+	/** Sub-shape ID of the target body hit (for compound shapes with per-sub-shape materials). 0xFFFFFFFF for simple shapes. */
+	uint32 SubShapeID2 = 0xFFFFFFFF;
+
 	/** Was body1 flagged as projectile in Barrage? */
 	bool bBody1IsProjectile = false;
 

@@ -52,6 +52,13 @@ void UFlecsArtillerySubsystem::SetupDamageCollisionSystems()
 						bDestroyOnHit = DmgStatic->bDestroyOnHit;
 						CritChance = DmgStatic->CritChance;
 						CritMultiplier = DmgStatic->CritMultiplier;
+
+						// Apply penetration damage reduction (bullet lost energy passing through obstacles)
+						const FPenetrationInstance* PenInst = ProjectileEntity.try_get<FPenetrationInstance>();
+						if (PenInst && PenInst->CurrentDamageMultiplier < 1.f)
+						{
+							Damage *= PenInst->CurrentDamageMultiplier;
+						}
 					}
 
 					if (ProjStatic)

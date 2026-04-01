@@ -119,5 +119,15 @@ public:
 	double JoltRadius;
 	double speed;
 };
+
+/** Sub-shape definition for compound body creation.
+ *  Each sub-shape is a box with its own local transform and UserData (for per-sub-shape material identification). */
+struct FBCompoundSubShape
+{
+	FVector Position = FVector::ZeroVector;   // Local offset from compound body origin (UE coords, cm)
+	FQuat Rotation = FQuat::Identity;         // Local rotation
+	FVector HalfExtents = FVector(50.f);      // Box half-extents (UE coords, cm)
+	uint32 UserData = 0;                      // Per-sub-shape material category
+};
 //this should evaluate in most IDEs, allowing you to see the size if you need to make changes. try not to need to.
 //constexpr const static int size = sizeof(FBShapeParams);

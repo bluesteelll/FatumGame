@@ -259,7 +259,9 @@ void UFlecsArtillerySubsystem::FragmentEntity(
 			}
 
 			// Penetration material — each fragment can have its own resistance
-			if (FragDef->PhysicsProfile && FragDef->PhysicsProfile->MaterialResistance > 0.f)
+			if (FragDef->PhysicsProfile
+				&& (FragDef->PhysicsProfile->MaterialCategory != EPenetrationMaterialCategory::Impenetrable
+					|| FragDef->PhysicsProfile->MaterialResistance > 0.f))
 				FragEntity.set<FPenetrationMaterial>(FPenetrationMaterial::FromProfile(FragDef->PhysicsProfile));
 		}
 

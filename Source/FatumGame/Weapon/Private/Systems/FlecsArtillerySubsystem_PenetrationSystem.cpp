@@ -14,6 +14,7 @@
 #include "FlecsExplosionComponents.h"
 #include "FlecsGameTags.h"
 #include "EPhysicsLayer.h"
+#include "IsolatedJoltIncludes.h"
 #include "PhysicsFilters/FastObjectLayerFilters.h"
 
 void UFlecsArtillerySubsystem::SetupPenetrationSystem()
@@ -62,8 +63,38 @@ void UFlecsArtillerySubsystem::SetupPenetrationSystem()
 			flecs::entity TargetEntity = World.entity(TargetId);
 			if (!TargetEntity.is_valid() || !TargetEntity.is_alive()) return;
 
+			// ── Determine material (SubShapeID for compound, fallback to FPenetrationMaterial) ──
 			const FPenetrationMaterial* PenMaterial = TargetEntity.try_get<FPenetrationMaterial>();
-			if (!PenMaterial) return;  // No material = impenetrable
+			float MaterialResistanceFromSubShape = -1.f;
+			EPenetrationMaterialCategory SubShapeMaterialCat = EPenetrationMaterialCategory::Impenetrable;
+
+			if (Pair.SubShapeID2 != 0 && CachedBarrageDispatch)
+			{
+				const FBarrageBody* TargetBody = TargetEntity.try_get<FBarrageBody>();
+				if (TargetBody && TargetBody->IsValid())
+				{
+					FBLet TargetPrimSS = CachedBarrageDispatch->GetShapeRef(TargetBody->BarrageKey);
+					if (FBarragePrimitive::IsNotNull(TargetPrimSS))
+					{
+						uint32 SubShapeData = CachedBarrageDispatch->GetSubShapeUserData(
+							TargetPrimSS->KeyIntoBarrage, Pair.SubShapeID2);
+						// SubShapeData uses +1 offset: 0 = no data (non-compound), 1 = Impenetrable, 2 = Flesh, etc.
+						if (SubShapeData > 0)
+						{
+							SubShapeMaterialCat = static_cast<EPenetrationMaterialCategory>((SubShapeData - 1) & 0xFF);
+							MaterialResistanceFromSubShape = GetResistanceForCategory(SubShapeMaterialCat);
+							UE_LOG(LogTemp, Log, TEXT("PENETRATION: SubShape material=%d resistance=%.1f (SubShapeID=%u)"),
+								static_cast<uint8>(SubShapeMaterialCat), MaterialResistanceFromSubShape, Pair.SubShapeID2);
+						}
+					}
+				}
+			}
+
+			// Need at least one material source
+			if (!PenMaterial && MaterialResistanceFromSubShape < 0.f) return;
+
+			// SubShape says Impenetrable → this part of compound cannot be penetrated
+			if (MaterialResistanceFromSubShape >= 900.f) return;
 
 			// Owner check — don't penetrate self
 			const FProjectileInstance* ProjInst = ProjEntity.try_get<FProjectileInstance>();
@@ -96,58 +127,189 @@ void UFlecsArtillerySubsystem::SetupPenetrationSystem()
 			const float CosAngle = FMath::Abs(FVector::DotProduct(IncomingDir, SurfaceNormal));
 
 			// Ricochet check: use more restrictive threshold
+			const float TargetRicochetThreshold = PenMaterial ? PenMaterial->RicochetCosAngleThreshold : 0.26f;
 			const float RicochetThreshold = FMath::Max(
 				PenStatic->RicochetCosAngleThreshold,
-				PenMaterial->RicochetCosAngleThreshold);
+				TargetRicochetThreshold);
 			if (CosAngle < RicochetThreshold) return;  // Too oblique — let bounce/damage handle
 
 			// ── Reverse raycast for thickness measurement ──
 			const FVector EntryPoint = Pair.ContactPoint;
 
-			// MaxProbe: limited by remaining budget and material resistance
+			// Material resistance: prefer SubShape (compound), fallback to FPenetrationMaterial
+			const float MaterialResistance = (MaterialResistanceFromSubShape >= 0.f)
+				? MaterialResistanceFromSubShape
+				: (PenMaterial ? PenMaterial->GetResistance() : 999.f);
 			const float MaxProbeDistance = FMath::Min(
-				PenInstance->RemainingBudget * 2.f / FMath::Max(PenMaterial->MaterialResistance, 0.01f),
-				500.f);  // Cap at 5m
+				PenInstance->RemainingBudget * 2.f / FMath::Max(MaterialResistance, 0.01f),
+				500.f);
 
-			const FVector FarPoint = EntryPoint + IncomingDir * (MaxProbeDistance + 10.f);
+			// ── Analytical thickness: ray-AABB slab intersection ──
+			// ~10 ns, zero allocations, no physics queries.
+			// Computes exact distance the ray travels through the body's AABB.
+			float PhysicalThickness = 5.f;  // fallback
+			FVector ExitPoint = EntryPoint + IncomingDir * PhysicalThickness;
 
-			// Cast backwards from far side — filter only static and moving geometry
-			FastIncludeObjectLayerFilter ThicknessObjFilter({
-				EPhysicsLayer::NON_MOVING,
-				EPhysicsLayer::MOVING
-			});
-			auto ThicknessBPFilter = CachedBarrageDispatch->GetDefaultBroadPhaseLayerFilter(Layers::CAST_QUERY);
-			JPH::BodyFilter ThicknessBodyFilter;
-
-			TSharedPtr<FHitResult> ReverseHit = MakeShared<FHitResult>();
-			const FVector ReverseRayDir = -IncomingDir * (MaxProbeDistance + 10.f);
-			CachedBarrageDispatch->CastRay(
-				FarPoint, ReverseRayDir,
-				ThicknessBPFilter, ThicknessObjFilter, ThicknessBodyFilter,
-				ReverseHit);
-
-			float PhysicalThickness;
-			FVector ExitPoint;
-			if (ReverseHit->bBlockingHit)
 			{
-				ExitPoint = ReverseHit->ImpactPoint;
-				PhysicalThickness = FVector::Dist(EntryPoint, ExitPoint);
-			}
-			else
-			{
-				// Reverse ray missed — assume thin surface (e.g. single-sided mesh)
-				PhysicalThickness = 5.f;
-				ExitPoint = EntryPoint + IncomingDir * PhysicalThickness;
-			}
+				const FBarrageBody* TargetBody = TargetEntity.try_get<FBarrageBody>();
+				if (TargetBody && TargetBody->IsValid())
+				{
+					FBLet TargetPrimThick = CachedBarrageDispatch->GetShapeRef(TargetBody->BarrageKey);
+					JPH::Vec3 JoltMin, JoltMax;
+					if (FBarragePrimitive::IsNotNull(TargetPrimThick)
+						&& CachedBarrageDispatch->GetBodyWorldBoundsJolt(TargetPrimThick->KeyIntoBarrage, JoltMin, JoltMax))
+					{
+						// Jolt AABB → UE world coords
+						const FVector AABBMin(JoltMin.GetX() * 100.f, JoltMin.GetZ() * 100.f, JoltMin.GetY() * 100.f);
+						const FVector AABBMax(JoltMax.GetX() * 100.f, JoltMax.GetZ() * 100.f, JoltMax.GetY() * 100.f);
 
-			// Clamp minimum thickness
-			PhysicalThickness = FMath::Max(PhysicalThickness, 0.1f);
+						// Slab method: ray vs AABB → entry/exit parametric distances
+						float tMin = -1e10f, tMax = 1e10f;
+						for (int32 Axis = 0; Axis < 3; ++Axis)
+						{
+							const float Dir = IncomingDir[Axis];
+							const float Origin = EntryPoint[Axis];
+							if (FMath::Abs(Dir) > 1e-6f)
+							{
+								const float InvDir = 1.f / Dir;
+								float t0 = (AABBMin[Axis] - Origin) * InvDir;
+								float t1 = (AABBMax[Axis] - Origin) * InvDir;
+								if (t0 > t1) Swap(t0, t1);
+								tMin = FMath::Max(tMin, t0);
+								tMax = FMath::Min(tMax, t1);
+							}
+						}
+
+						if (tMax > tMin && tMax > 0.f)
+						{
+							// tMin = entry distance (may be negative if inside), tMax = exit distance
+							const float Entry = FMath::Max(tMin, 0.f);
+							PhysicalThickness = tMax - Entry;
+							ExitPoint = EntryPoint + IncomingDir * tMax;
+						}
+					}
+				}
+				PhysicalThickness = FMath::Max(PhysicalThickness, 0.1f);
+			}
 
 			// ── Effective thickness (material + angle) ──
-			const float EffectiveThickness = PhysicalThickness * PenMaterial->MaterialResistance
+			// Surface integrity grid: degrade effective resistance at this cell
+			float EffectiveResistance = MaterialResistance;
+			FSurfaceIntegrity* Grid = TargetEntity.try_get_mut<FSurfaceIntegrity>();
+			int32 GridCellIdx = -1;
+			FVector BodyPos = FVector::ZeroVector;
+			FQuat BodyRot = FQuat::Identity;
+
+			{
+				const FBarrageBody* TargetBody = TargetEntity.try_get<FBarrageBody>();
+				if (TargetBody && TargetBody->IsValid())
+				{
+					FBLet TargetPrim = CachedBarrageDispatch->GetShapeRef(TargetBody->BarrageKey);
+					if (FBarragePrimitive::IsNotNull(TargetPrim))
+					{
+						BodyPos = FVector(FBarragePrimitive::GetPosition(TargetPrim));
+						BodyRot = FQuat(FBarragePrimitive::OptimisticGetAbsoluteRotation(TargetPrim));
+
+						if (Grid)
+						{
+							GridCellIdx = Grid->WorldToCell(Pair.ContactPoint, BodyPos, BodyRot);
+							const float LocalIntegrity = Grid->GetIntegrity(GridCellIdx);
+							EffectiveResistance = MaterialResistance * IntegrityToResistance(LocalIntegrity);
+						}
+					}
+				}
+			}
+
+			const float EffectiveThickness = PhysicalThickness * EffectiveResistance
 				/ FMath::Max(CosAngle, 0.1f);
 
-			if (EffectiveThickness >= PenInstance->RemainingBudget)
+			UE_LOG(LogTemp, Log, TEXT("PENETRATION_CALC: Thick=%.1f EffRes=%.2f CosAngle=%.3f EffThick=%.1f Budget=%.1f %s"),
+				PhysicalThickness, EffectiveResistance, CosAngle, EffectiveThickness, PenInstance->RemainingBudget,
+				EffectiveThickness < PenInstance->RemainingBudget ? TEXT("WILL_PENETRATE") : TEXT("BLOCKED"));
+
+			// ── Surface degradation (runs on EVERY hit, penetrate or not) ──
+			const FDamageStatic* DmgStatic = ProjEntity.try_get<FDamageStatic>();
+			const float BulletDamage = DmgStatic ? DmgStatic->Damage : 25.f;
+			const bool bWillPenetrate = (EffectiveThickness < PenInstance->RemainingBudget);
+
+			const bool bCanDegrade = MaterialResistance < 900.f
+				&& (MaterialResistanceFromSubShape >= 0.f  // Compound sub-shape: always degradable
+					|| (PenMaterial && PenMaterial->bDegradable));
+
+			if (bCanDegrade)
+			{
+				if (!Grid)
+				{
+					// Lazy init on first hit
+					const FBarrageBody* TargetBody = TargetEntity.try_get<FBarrageBody>();
+					if (TargetBody && TargetBody->IsValid())
+					{
+						FBLet TargetPrimForAABB = CachedBarrageDispatch->GetShapeRef(TargetBody->BarrageKey);
+						JPH::Vec3 JoltMin, JoltMax;
+						if (FBarragePrimitive::IsNotNull(TargetPrimForAABB)
+							&& CachedBarrageDispatch->GetBodyWorldBoundsJolt(TargetPrimForAABB->KeyIntoBarrage, JoltMin, JoltMax))
+						{
+							// Jolt AABB (meters, Y-up) → UE world (cm, Z-up): (X*100, Z*100, Y*100)
+							FVector AABBMinUE(JoltMin.GetX() * 100.f, JoltMin.GetZ() * 100.f, JoltMin.GetY() * 100.f);
+							FVector AABBMaxUE(JoltMax.GetX() * 100.f, JoltMax.GetZ() * 100.f, JoltMax.GetY() * 100.f);
+							FVector LocalMin = BodyRot.UnrotateVector(AABBMinUE - BodyPos);
+							FVector LocalMax = BodyRot.UnrotateVector(AABBMaxUE - BodyPos);
+							FVector TrueMin(FMath::Min(LocalMin.X, LocalMax.X), FMath::Min(LocalMin.Y, LocalMax.Y), FMath::Min(LocalMin.Z, LocalMax.Z));
+							FVector TrueMax(FMath::Max(LocalMin.X, LocalMax.X), FMath::Max(LocalMin.Y, LocalMax.Y), FMath::Max(LocalMin.Z, LocalMax.Z));
+
+							FSurfaceIntegrity NewGrid;
+							const uint8 GCols = PenMaterial ? PenMaterial->GridCols : 0;
+							const uint8 GRows = PenMaterial ? PenMaterial->GridRows : 0;
+							NewGrid.InitFromAABB(TrueMin, TrueMax, GCols, GRows);
+							TargetEntity.set<FSurfaceIntegrity>(NewGrid);
+							Grid = TargetEntity.try_get_mut<FSurfaceIntegrity>();
+							if (Grid) GridCellIdx = Grid->WorldToCell(Pair.ContactPoint, BodyPos, BodyRot);
+						}
+					}
+				}
+
+				if (Grid && GridCellIdx >= 0)
+				{
+					// Degrade rate: prefer per-material (from cached sub-shape category or profile)
+					float DegradeRate;
+					if (MaterialResistanceFromSubShape >= 0.f)
+					{
+						DegradeRate = GetDegradeRateForCategory(SubShapeMaterialCat);
+					}
+					else if (PenMaterial)
+					{
+						// Profile override or default from material category
+						DegradeRate = (PenMaterial->BaseDegradeRate != 0.08f)
+							? PenMaterial->BaseDegradeRate  // Designer overrode in profile
+							: GetDegradeRateForCategory(PenMaterial->MaterialCategory);
+					}
+					else
+					{
+						DegradeRate = 0.08f;
+					}
+
+					const float SpreadFactor = PenMaterial ? PenMaterial->DegradeSpreadFactor : 0.3f;
+					float NormDegrade = DegradeRate * (BulletDamage / 25.f);
+					if (bWillPenetrate) NormDegrade *= 0.5f;
+					Grid->DegradeWithSpread(GridCellIdx, NormDegrade, SpreadFactor);
+
+					// Fragmentation trigger: cell below 5% on destructible
+					if (Grid->GetIntegrity(GridCellIdx) < 0.05f)
+					{
+						const FDestructibleStatic* DestrCheck = TargetEntity.try_get<FDestructibleStatic>();
+						if (DestrCheck && DestrCheck->IsValid() && !TargetEntity.has<FPendingFragmentation>())
+						{
+							FPendingFragmentation Frag;
+							Frag.ImpactPoint = Pair.ContactPoint;
+							Frag.ImpactDirection = IncomingDir;
+							Frag.ImpactImpulse = IncomingSpeed * 0.3f;
+							TargetEntity.set<FPendingFragmentation>(Frag);
+						}
+					}
+				}
+			}
+
+			if (!bWillPenetrate)
 				return;  // Cannot penetrate — DamageCollisionSystem will handle
 
 			// ════════════════════════════════════════════════════════
@@ -161,7 +323,6 @@ void UFlecsArtillerySubsystem::SetupPenetrationSystem()
 				1.f - BudgetFraction * PenStatic->VelocityFalloffFactor);
 
 			// ── Apply reduced damage to target ──
-			const FDamageStatic* DmgStatic = ProjEntity.try_get<FDamageStatic>();
 			if (DmgStatic && TargetEntity.has<FHealthInstance>() && !TargetEntity.has<FTagDead>())
 			{
 				const float ReducedDamage = DmgStatic->Damage

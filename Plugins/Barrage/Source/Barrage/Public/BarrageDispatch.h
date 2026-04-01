@@ -108,6 +108,28 @@ public:
 	// Create a bouncing sphere projectile - for ricocheting bullets etc.
 	// Uses Jolt physics for realistic bounces (restitution controls elasticity)
 	FBLet CreateBouncingSphere(FBSphereParams& Definition, FSkeletonKey OutKey, uint16_t Layer, float Restitution = 0.8f, float Friction = 0.2f, float LinearDamping = 0.0f, float Mass = 0.1f, float AngularDamping = 0.05f);
+	/** Create a compound body from multiple box sub-shapes, each with its own UserData (material).
+	 *  Use for multi-material objects (door with metal plate, wall with window, etc.)
+	 *  @param Position World position (UE coords, cm)
+	 *  @param Rotation World rotation
+	 *  @param SubShapes Array of box sub-shapes with local offsets and per-sub-shape UserData
+	 *  @param OutKey SkeletonKey for reverse lookup
+	 *  @param Layer Physics layer (determines motion type)
+	 *  @param IsSensor True for sensor-only bodies (no physics response)
+	 */
+	FBLet CreateCompoundBody(const FVector& Position, const FQuat& Rotation,
+		const TArray<FBCompoundSubShape>& SubShapes, FSkeletonKey OutKey, uint16 Layer,
+		bool IsSensor = false);
+
+	/** Get the UserData of the sub-shape identified by SubShapeID within a body.
+	 *  For compound bodies, returns the specific sub-shape's UserData (uint32 stored via AddShape).
+	 *  For simple (non-compound) bodies, returns 0.
+	 *  @param BodyKey Barrage key of the body to query
+	 *  @param SubShapeIDValue Raw value from BarrageContactEvent::SubShapeID1/2
+	 *  @return The sub-shape's uint32 UserData, or 0 if not found
+	 */
+	uint32 GetSubShapeUserData(FBarrageKey BodyKey, uint32 SubShapeIDValue) const;
+
 	FBLet LoadComplexStaticMesh(FBTransform& MeshTransform, const UStaticMeshComponent* StaticMeshComponent, FSkeletonKey OutKey, bool IsSensor = false);
 	FBLet LoadEnemyHitboxFromStaticMesh(FBTransform& MeshTransform, const UStaticMeshComponent* StaticMeshComponent, FSkeletonKey OutKey, bool IsSensor = false, bool UseRawMeshForCollision = false, FVector CenterOfMassTranslation = {0,0,0});
 	FBLet GetShapeRef(FBarrageKey Existing) const;
@@ -356,6 +378,9 @@ public:
 	
 	JPH::IgnoreSingleBodyFilter GetFilterToIgnoreSingleBody(FBarrageKey ObjectKey) const;
 	JPH::IgnoreSingleBodyFilter GetFilterToIgnoreSingleBody(const FBLet& ToIgnore) const;
+
+	/** Get the Jolt BodyID for a Barrage key. Returns invalid BodyID if not found. */
+	JPH::BodyID GetJoltBodyID(FBarrageKey BarrageKey) const;
 
 	int32 GetBodyCount() const
 	{

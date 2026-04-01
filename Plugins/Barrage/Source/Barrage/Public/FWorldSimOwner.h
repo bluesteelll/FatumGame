@@ -361,6 +361,16 @@ public:
 	 */
 	FBarrageKey CreateKinematicPivot(const FVector& Position);
 
+	/** Create a compound body from multiple box sub-shapes with per-sub-shape UserData.
+	 *  Converts UE coords to Jolt internally. Follows same registration pattern as other CreatePrimitive methods. */
+	FBarrageKey CreateCompoundBody(const FVector& Position, const FQuat& Rotation,
+		const TArray<FBCompoundSubShape>& SubShapes, uint16 Layer, bool IsSensor = false);
+
+	/** Get UserData of the sub-shape identified by SubShapeIDValue within a body.
+	 *  For compound shapes: extracts sub-shape index, returns that sub-shape's UserData.
+	 *  For simple shapes: returns 0. */
+	uint32 GetSubShapeUserData(FBarrageKey BodyKey, uint32 SubShapeIDValue) const;
+
 	//Under normal circumstances, you will _not_ want to set the layer and movement to anything else.
 	//the use of static mesh colliders is quite slow, and primitive shapes or compound primitives work for most purposes
 	//The exception is non-moving static mesh colliders, which are well optimized in Jolt. However, you may wish to have specialized

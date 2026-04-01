@@ -498,6 +498,93 @@ FBarrageKey FWorldSimOwner::CreateKinematicPivot(const FVector& Position)
 	return FBK;
 }
 
+FBarrageKey FWorldSimOwner::CreateCompoundBody(const FVector& Position, const FQuat& Rotation,
+	const TArray<FBCompoundSubShape>& SubShapes, uint16 Layer, bool IsSensor)
+{
+	check(SubShapes.Num() > 0);
+
+	EMotionType MovementType = LayerToMotionTypeMapping(Layer);
+
+	// Build compound shape from sub-shapes
+	JPH::StaticCompoundShapeSettings CompoundSettings;
+	for (const FBCompoundSubShape& Sub : SubShapes)
+	{
+		// Convert half-extents: UE cm → Jolt m, swap Y↔Z
+		JPH::Vec3 JoltHalfExtents(
+			static_cast<float>(Sub.HalfExtents.X / 100.0),
+			static_cast<float>(Sub.HalfExtents.Z / 100.0),
+			static_cast<float>(Sub.HalfExtents.Y / 100.0));
+
+		// Minimum convex radius for the box shape
+		float HEReduceMin = JoltHalfExtents.ReduceMin();
+		float ConvexRadius = FMath::Min(HEReduceMin * 0.5f, 0.02f);
+
+		JPH::BoxShapeSettings* BoxSettings = new JPH::BoxShapeSettings(JoltHalfExtents, ConvexRadius);
+
+		// Convert local offset: UE cm → Jolt m, swap Y↔Z
+		JPH::Vec3 JoltLocalPos = CoordinateUtils::ToJoltCoordinates(FVector3d(Sub.Position));
+		JPH::Quat JoltLocalRot = CoordinateUtils::ToJoltRotation(FQuat4d(Sub.Rotation));
+
+		CompoundSettings.AddShape(JoltLocalPos, JoltLocalRot, BoxSettings, Sub.UserData);
+	}
+
+	// Create body at world position/rotation
+	JPH::Vec3 JoltWorldPos = CoordinateUtils::ToJoltCoordinates(FVector3d(Position));
+	JPH::Quat JoltWorldRot = CoordinateUtils::ToJoltRotation(FQuat4d(Rotation));
+
+	JPH::ShapeSettings::ShapeResult CompoundResult = CompoundSettings.Create(*Allocator);
+	checkf(CompoundResult.IsValid(), TEXT("CreateCompoundBody: Failed to create compound shape - %hs"),
+		CompoundResult.HasError() ? CompoundResult.GetError().c_str() : "unknown");
+
+	JPH::BodyCreationSettings BodySettings(CompoundResult.Get(), JoltWorldPos, JoltWorldRot, MovementType, Layer);
+	BodySettings.mIsSensor = IsSensor;
+
+	JPH::Body* NewBody = body_interface->CreateBody(BodySettings);
+	checkf(NewBody, TEXT("CreateCompoundBody: Jolt body limit reached"));
+
+	JPH::BodyID BodyIDTemp = NewBody->GetID();
+	AddInternalQueuing(BodyIDTemp, 0);
+	FBarrageKey FBK = GenerateBarrageKeyFromBodyId(BodyIDTemp);
+	BarrageToJoltMapping->insert(FBK, BodyIDTemp);
+	return FBK;
+}
+
+uint32 FWorldSimOwner::GetSubShapeUserData(FBarrageKey BodyKey, uint32 SubShapeIDValue) const
+{
+	if (!body_interface || !physics_system) return 0;
+
+	JPH::BodyID BodyID;
+	if (!BarrageToJoltMapping->find(BodyKey, BodyID) || BodyID.IsInvalid()) return 0;
+
+	JPH::BodyLockRead Lock(physics_system->GetBodyLockInterface(), BodyID);
+	if (!Lock.Succeeded()) return 0;
+
+	const JPH::Body& JoltBody = Lock.GetBody();
+	const JPH::Shape* BodyShape = JoltBody.GetShape();
+	check(BodyShape);
+
+	JPH::SubShapeID SubID;
+	SubID.SetValue(SubShapeIDValue);
+
+	// Unwrap decorated shapes (RotatedTranslatedShape, ScaledShape, etc.)
+	const JPH::Shape* InnerShape = BodyShape;
+	while (InnerShape->GetType() == JPH::EShapeType::Decorated)
+	{
+		InnerShape = static_cast<const JPH::DecoratedShape*>(InnerShape)->GetInnerShape();
+	}
+
+	if (InnerShape->GetType() != JPH::EShapeType::Compound)
+		return 0;
+
+	const JPH::CompoundShape* Compound = static_cast<const JPH::CompoundShape*>(InnerShape);
+
+	JPH::SubShapeID Remainder;
+	uint32 SubIndex = Compound->GetSubShapeIndexFromID(SubID, Remainder);
+	if (SubIndex >= Compound->GetNumSubShapes()) return 0;
+
+	return Compound->GetSubShape(SubIndex).mUserData;
+}
+
 //If you set layer to nonmoving, you should set movement type to nonmoving as well or you're going to have
 //a really terrible time. It's not technically wrong to do this, so we don't throw, but there's no good
 //reason I can think of. At this API level, intended for extremely advanced users,
