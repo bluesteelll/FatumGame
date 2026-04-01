@@ -60,6 +60,11 @@ struct FPenetrationInstance
 
 	/** Accumulated damage multiplier (compounds with each penetration) */
 	float CurrentDamageMultiplier = 1.f;
+
+	/** Entity ID of the last penetrated target. Prevents BounceCollisionSystem from
+	 *  killing the bullet on spurious re-contacts with the SAME target from the same StepWorld.
+	 *  Reset to 0 when the bullet contacts a DIFFERENT entity. */
+	uint64 LastPenetratedTargetId = 0;
 };
 
 // ═══════════════════════════════════════════════════════════════

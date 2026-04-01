@@ -6,6 +6,7 @@
 #include "FlecsHealthComponents.h"
 #include "FlecsProjectileComponents.h"
 #include "FlecsExplosionComponents.h"
+#include "FlecsPenetrationComponents.h"
 #include "FlecsNiagaraManager.h"
 #include "FlecsMessageSubsystem.h"
 #include "FlecsUIMessages.h"
@@ -90,6 +91,18 @@ void UFlecsArtillerySubsystem::SetupDamageCollisionSystems()
 
 			if (ProjectileEntity.is_valid())
 			{
+				// Don't kill if this is a spurious re-contact from the same StepWorld as penetration.
+				FPenetrationInstance* PenInst = ProjectileEntity.try_get_mut<FPenetrationInstance>();
+				if (PenInst && PenInst->LastPenetratedTargetId != 0
+					&& (PenInst->LastPenetratedTargetId == TargetId || TargetId == 0))
+				{
+					PenInst->LastPenetratedTargetId = 0;
+					PairEntity.add<FTagCollisionProcessed>();
+					return;
+				}
+				// New target — clear the suppression
+				if (PenInst) PenInst->LastPenetratedTargetId = 0;
+
 				bool bIsBouncing = (MaxBounces == -1);
 				if (!bIsBouncing)
 				{
@@ -149,6 +162,19 @@ void UFlecsArtillerySubsystem::SetupDamageCollisionSystems()
 
 				if (MaxBounces >= 0 && ProjInstance->BounceCount > MaxBounces)
 				{
+					// Don't kill if this is a spurious re-contact from the same StepWorld as penetration.
+					// Match: same target entity, OR no-entity contact (OtherId=0) when we just penetrated.
+					FPenetrationInstance* PenInst = Entity.try_get_mut<FPenetrationInstance>();
+					if (PenInst && PenInst->LastPenetratedTargetId != 0
+						&& (PenInst->LastPenetratedTargetId == OtherId || OtherId == 0))
+					{
+						PenInst->LastPenetratedTargetId = 0;
+						ProjInstance->BounceCount = 0;
+						return true;
+					}
+					// New target — clear the suppression
+					if (PenInst) PenInst->LastPenetratedTargetId = 0;
+
 					FDeathContactPoint DCP;
 					DCP.Position = ContactPoint;
 					Entity.set<FDeathContactPoint>(DCP);

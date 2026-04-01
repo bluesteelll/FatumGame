@@ -207,6 +207,7 @@ void UFlecsArtillerySubsystem::SetupPenetrationSystem()
 			PenInstance->RemainingBudget -= EffectiveThickness;
 			PenInstance->PenetrationCount++;
 			PenInstance->CurrentDamageMultiplier *= DamageMultiplier;
+			PenInstance->LastPenetratedTargetId = TargetId;  // Suppress re-contact kill with same target
 
 			// Mark pair as processed — downstream systems will skip it
 			PairEntity.add<FTagCollisionProcessed>();
