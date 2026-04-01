@@ -460,6 +460,27 @@ public:
 	}
 
 	/**
+	 * Synchronously set a body's linear velocity via body_interface (NOT queued).
+	 * VelocityUE is in cm/s, Z-up UE coordinates.
+	 * Use from sim thread for penetration velocity adjustments.
+	 */
+	void SetBodyLinearVelocityDirect(FBarrageKey BarrageKey, const FVector& VelocityUE, bool bActivate = true)
+	{
+		if (!body_interface) return;
+
+		JPH::BodyID BodyID;
+		if (!BarrageToJoltMapping->find(BarrageKey, BodyID) || BodyID.IsInvalid()) return;
+
+		// UE cm/s Z-up → Jolt m/s Y-up: same conversion as position (swap Y↔Z, ÷100)
+		JPH::Vec3 JoltVel = CoordinateUtils::ToJoltCoordinates(FVector3d(VelocityUE));
+		body_interface->SetLinearVelocity(BodyID, JoltVel);
+		if (bActivate)
+		{
+			body_interface->ActivateBody(BodyID);
+		}
+	}
+
+	/**
 	 * Move a kinematic body toward a target position over DeltaTime.
 	 * Sets velocity = (target - current) / dt so the constraint solver sees the motion.
 	 * Use instead of SetBodyPositionDirect for kinematic bodies that drive constraints.

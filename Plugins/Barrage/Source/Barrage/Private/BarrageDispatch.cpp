@@ -389,6 +389,14 @@ void UBarrageDispatch::SetBodyPositionDirect(FBarrageKey BarrageKey, const FVect
 	}
 }
 
+void UBarrageDispatch::SetBodyLinearVelocityDirect(FBarrageKey BarrageKey, const FVector& VelocityUE, bool bActivate)
+{
+	if (JoltGameSim)
+	{
+		JoltGameSim->SetBodyLinearVelocityDirect(BarrageKey, VelocityUE, bActivate);
+	}
+}
+
 void UBarrageDispatch::MoveKinematicBody(FBarrageKey BarrageKey, const FVector& TargetPosition, float DeltaTime)
 {
 	if (JoltGameSim)
@@ -1016,6 +1024,18 @@ void UBarrageDispatch::HandleContactAdded(const JPH::Body& inBody1, const JPH::B
 	BarrageContactEvent ContactEventToEnqueue = ConstructContactEvent(EBarrageContactEventType::ADDED, this, inBody1,
 																	  inBody2, ioSettings, ContactPoint);
 	ContactEventToEnqueue.NormalIfAny = ContactNormal;
+
+	// Capture pre-collision projectile velocity for penetration system
+	// Jolt velocity (m/s, Y-up) → UE velocity (cm/s, Z-up) via standard FromJoltCoordinatesD
+	if (ContactEventToEnqueue.ContactEntity1.bIsProjectile)
+	{
+		ContactEventToEnqueue.ProjectileVelocity = FVector(CoordinateUtils::FromJoltCoordinatesD(inBody1.GetLinearVelocity()));
+	}
+	else if (ContactEventToEnqueue.ContactEntity2.bIsProjectile)
+	{
+		ContactEventToEnqueue.ProjectileVelocity = FVector(CoordinateUtils::FromJoltCoordinatesD(inBody2.GetLinearVelocity()));
+	}
+
 	ContactEventPump->Enqueue(ContactEventToEnqueue);
 }
 

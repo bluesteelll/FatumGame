@@ -75,8 +75,9 @@ Utils/          — FTimeDilationStack, ConeImpulse, ExplosionUtility, LedgeDete
 | `FlecsDestructibleComponents.h` | FDestructibleStatic, FDebrisInstance, FFragmentationData, FPendingFragmentation |
 | `FlecsWeaponComponents.h` | FAimDirection, FPelletRingData, FWeaponStatic, FWeaponInstance, FEquippedBy, EActiveLoadMethod, EWeaponReloadPhase |
 | `FlecsExplosionComponents.h` | FExplosionStatic, FExplosionContactData, FTagDetonate |
+| `FlecsPenetrationComponents.h` | FPenetrationStatic, FPenetrationInstance, FPenetrationMaterial |
 | `FlecsDoorComponents.h` | FDoorStatic, FDoorInstance |
-| **Plugin:** `FlecsBarrageComponents.h` | FBarrageBody, FISMRender, FCollisionPair, FTagCollision* |
+| **Plugin:** `FlecsBarrageComponents.h` | FBarrageBody, FISMRender, FCollisionPair, FTagCollision*, FTagCollisionPenetration |
 
 **Profiles:** PhysicsProfile, RenderProfile, HealthProfile, DamageProfile, ProjectileProfile, ContainerProfile, ItemDefinition, WeaponProfile, InteractionProfile, QuickLoadProfile, ExplosionProfile
 
@@ -96,11 +97,14 @@ PREFAB (one per type) ───────────────────�
   FInteractionStatic { MaxRange, bSingleUse }
   FQuickLoadStatic   { DeviceType, RoundsHeld, CaliberId, AmmoTypeDefinition*, InsertTime }
   FExplosionStatic   { Radius, BaseDamage, ImpulseStrength, DamageFalloff, ImpulseFalloff, VerticalBias, EpicenterLift, bDamageOwner }
+  FPenetrationStatic { PenetrationBudget, MaxPenetrations, DamageFalloffFactor, VelocityFalloffFactor, ImpulseTransferFactor }
+  FPenetrationMaterial { MaterialResistance, RicochetCosAngleThreshold }  // on TARGET prefab
   FEntityDefinitionRef { EntityDefinition* }
          ↑ IsA (inheritance)
 ENTITY (each instance) ─────────────────────────────────────
   FHealthInstance      { CurrentHP, RegenAccumulator }
   FProjectileInstance  { LifetimeRemaining, BounceCount, GraceFramesRemaining, FuseRemaining }
+  FPenetrationInstance { RemainingBudget, PenetrationCount, CurrentDamageMultiplier }
   FItemInstance        { Count }
   FContainerInstance   { CurrentWeight, CurrentCount, OwnerEntityId }
   FContainedIn         { ContainerEntityId, GridPosition, SlotIndex }
@@ -120,6 +124,7 @@ OnBarrageContact → FCollisionPair + Tags → Systems process by tag → Collis
 ```
 | Tag | Processed By |
 |-----|--------------|
+| FTagCollisionPenetration | PenetrationSystem |
 | FTagCollisionDamage | DamageCollisionSystem |
 | FTagCollisionBounce | BounceCollisionSystem |
 | FTagCollisionPickup | PickupCollisionSystem |
@@ -130,7 +135,7 @@ OnBarrageContact → FCollisionPair + Tags → Systems process by tag → Collis
 ```text
 DamageObserver (event-driven)
 WorldItemDespawnSystem → PickupGraceSystem → ProjectileLifetimeSystem → DebrisLifetimeSystem
-DamageCollisionSystem → BounceCollisionSystem → PickupCollisionSystem → DestructibleCollisionSystem
+PenetrationSystem → DamageCollisionSystem → BounceCollisionSystem → PickupCollisionSystem → DestructibleCollisionSystem
 ExplosionSystem
 ConstraintBreakSystem → FragmentationSystem → PendingFragmentationSystem
 WeaponEquipSystem → WeaponTickSystem → WeaponReloadSystem → WeaponFireSystem
@@ -369,6 +374,73 @@ FTagDetonate added → ExplosionSystem queries (FTagDetonate + FBarrageBody + FE
 - `Utils/Public/ExplosionUtility.h` — FExplosionParams, ApplyExplosion()
 - `Utils/Private/ExplosionUtility.cpp` — SphereSearch + LOS + damage + impulse logic
 - `Weapon/Private/Systems/FlecsArtillerySubsystem_ExplosionSystems.cpp` — ExplosionSystem
+
+---
+
+## Bullet Penetration System
+
+Projectiles pass through obstacles based on material resistance, thickness, and angle of incidence. CS:GO-style penetration budget model adapted for physics-simulated projectiles.
+
+### Algorithm
+
+```text
+Contact → OnBarrageContact captures pre-collision velocity → FTagCollisionPenetration
+  → PenetrationSystem (runs BEFORE DamageCollision):
+    1. Check projectile has FPenetrationStatic + budget > 0
+    2. Check target has FPenetrationMaterial (else impenetrable)
+    3. Incidence angle: cosAngle = |dot(incomingDir, surfaceNormal)|
+    4. If cosAngle < ricochetThreshold → skip (too oblique)
+    5. Reverse raycast: entry→exit → physical thickness
+    6. EffectiveThickness = physicalThickness × MaterialResistance / cosAngle
+    7. If EffThickness >= RemainingBudget → can't penetrate, DamageCollision handles
+    8. PENETRATE: teleport to exit, reduce damage/velocity, decrement budget
+       + FPendingFragmentation on destructibles (impulse = speed × ImpulseTransferFactor)
+       + FTagCollisionProcessed → downstream systems skip pair
+```
+
+### Configuration
+
+**Projectile (UFlecsProjectileProfile):**
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `bPenetrating` | false | Enable penetration |
+| `MaxPenetrations` | -1 | Max objects to penetrate (-1=unlimited) |
+| `PenetrationBudget` | 20.0 | Budget in cm of material |
+| `PenetrationDamageFalloff` | 1.0 | Damage loss per budget consumed |
+| `PenetrationVelocityFalloff` | 0.5 | Speed loss per budget consumed |
+| `PenetrationRicochetAngleDeg` | 70.0 | Min angle for penetration |
+| `PenetrationImpulseTransfer` | 0.3 | Energy transfer to destructibles (0=clean pass, 1=full dump) |
+
+**Target Material (UFlecsPhysicsProfile):**
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `MaterialResistance` | 0.0 | 0=impenetrable. glass=0.2, wood=0.5, metal=3.0, concrete=4.0 |
+| `PenetrationRicochetAngleDeg` | 75.0 | Max oblique angle for penetration |
+
+### Ricochet Integration
+
+- `MaxBounces > 0` + oblique angle → ricochet (existing bounce system)
+- `MaxBounces == 0` + oblique angle → bullet stops (no ricochet, no penetrate)
+- Normal angle + budget → penetrate
+
+### Fragment Penetration
+
+Fragments spawned by `FragmentEntity()` inherit `FPenetrationMaterial` from their `FragDef->PhysicsProfile`. Each fragment can have its own material resistance (wood, metal, glass fragments from same object).
+
+### Key Files
+
+- `Weapon/Public/Components/FlecsPenetrationComponents.h` — FPenetrationStatic, FPenetrationInstance, FPenetrationMaterial
+- `Weapon/Private/Components/FlecsPenetrationComponents.cpp` — FromProfile() factories
+- `Weapon/Private/Systems/FlecsArtillerySubsystem_PenetrationSystem.cpp` — PenetrationSystem
+- `Core/Private/FlecsArtillerySubsystem_Collision.cpp` — Classification + TryKillNonBouncing mod
+
+### Barrage Extensions (for penetration)
+
+- `BarrageContactEvent.ProjectileVelocity` — pre-collision velocity captured in HandleContactAdded
+- `FCollisionPair.IncomingVelocity` — forwarded from contact event
+- `SetBodyLinearVelocityDirect()` — immediate velocity set (not queued), for teleport+velocity in same tick
 
 ---
 

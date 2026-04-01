@@ -446,8 +446,9 @@ private:
 	/** Register all Flecs components (called first by SetupFlecsSystems). */
 	void RegisterFlecsComponents();
 
-	/** Collision pair pipeline: Damage, Bounce, Pickup, Destructible. */
+	/** Collision pair pipeline: Penetration, Damage, Bounce, Pickup, Destructible. */
 	void SetupCollisionSystems();
+	void SetupPenetrationSystem();
 	void SetupDamageCollisionSystems();
 	void SetupPickupCollisionSystems();
 	void SetupDestructibleCollisionSystems();

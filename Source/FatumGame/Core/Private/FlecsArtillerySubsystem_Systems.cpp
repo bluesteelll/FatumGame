@@ -48,6 +48,7 @@
 #include "FlecsStealthComponents.h"
 #include "FlecsVitalsComponents.h"
 #include "FlecsExplosionComponents.h"
+#include "FlecsPenetrationComponents.h"
 
 // ═══════════════════════════════════════════════════════════════
 // COMPONENT REGISTRATION
@@ -148,6 +149,14 @@ void UFlecsArtillerySubsystem::RegisterFlecsComponents()
 	World.component<FExplosionStatic>();
 	World.component<FExplosionContactData>();
 	World.component<FTagDetonate>();
+
+	// ─────────────────────────────────────────────────────────
+	// PENETRATION COMPONENTS
+	// ─────────────────────────────────────────────────────────
+	World.component<FPenetrationStatic>();
+	World.component<FPenetrationInstance>();
+	World.component<FPenetrationMaterial>();
+	World.component<FTagCollisionPenetration>();
 
 	// ─────────────────────────────────────────────────────────
 	// MOVEMENT COMPONENTS

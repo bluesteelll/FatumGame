@@ -5,6 +5,7 @@
 
 void UFlecsArtillerySubsystem::SetupCollisionSystems()
 {
+	SetupPenetrationSystem();            // Penetration (MUST run before Damage)
 	SetupDamageCollisionSystems();       // Weapon domain
 	SetupPickupCollisionSystems();       // Item domain
 	SetupDestructibleCollisionSystems(); // Destructible domain

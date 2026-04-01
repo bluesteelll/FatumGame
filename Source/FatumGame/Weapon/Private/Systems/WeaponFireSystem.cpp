@@ -32,6 +32,7 @@
 #include "FlecsItemComponents.h"
 #include "FlecsAmmoTypeDefinition.h"
 #include "FlecsVitalsComponents.h"
+#include "FlecsPenetrationComponents.h"
 
 void UFlecsArtillerySubsystem::SetupWeaponFireSystem()
 {
@@ -497,6 +498,19 @@ void UFlecsArtillerySubsystem::SetupWeaponFireSystem()
 
 				if (ProjDef->ExplosionProfile)
 					ProjEntity.set<FExplosionStatic>(FExplosionStatic::FromProfile(ProjDef->ExplosionProfile));
+
+				// Penetration instance (set both static + instance directly, no prefab)
+				if (ProjProfile->bPenetrating)
+				{
+					FPenetrationStatic PenStatic = FPenetrationStatic::FromProfile(ProjProfile);
+					ProjEntity.set<FPenetrationStatic>(PenStatic);
+
+					FPenetrationInstance PenInst;
+					PenInst.RemainingBudget = PenStatic.PenetrationBudget;
+					PenInst.PenetrationCount = 0;
+					PenInst.CurrentDamageMultiplier = 1.f;
+					ProjEntity.set<FPenetrationInstance>(PenInst);
+				}
 
 				if (RenderProfile && RenderProfile->Mesh)
 				{

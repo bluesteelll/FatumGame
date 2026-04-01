@@ -58,6 +58,7 @@ struct BarrageContactEvent
 	BarrageContactEntity ContactEntity2;
 	FVector PointIfAny = {0,0,0};
 	FVector NormalIfAny = FVector::ZeroVector;
+	FVector ProjectileVelocity = FVector::ZeroVector;
 
 	BarrageContactEvent(EBarrageContactEventType EventType, const BarrageContactEntity& BarrageContactEntity,
 						const ::BarrageContactEntity& BarrageContactEntity1, FVector CollisionPoint);

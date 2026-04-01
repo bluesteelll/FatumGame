@@ -101,6 +101,22 @@ public:
 	bool bUseCCD = false;
 
 	// ═══════════════════════════════════════════════════════════════
+	// PENETRATION RESISTANCE
+	// ═══════════════════════════════════════════════════════════════
+
+	/** Material resistance to bullet penetration.
+	 *  0 = impenetrable (default, no FPenetrationMaterial component added).
+	 *  Examples: glass=0.2, wood_thin=0.5, wood_thick=1.0, sheet_metal=1.5,
+	 *  metal=3.0, concrete=4.0, armor=5.0, flesh=0.15 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration", meta = (ClampMin = "0", ClampMax = "100"))
+	float MaterialResistance = 0.f;
+
+	/** Max angle from surface normal (degrees) at which bullets can penetrate this material.
+	 *  More oblique impacts ricochet or stop. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration", meta = (ClampMin = "0", ClampMax = "89"))
+	float PenetrationRicochetAngleDeg = 75.f;
+
+	// ═══════════════════════════════════════════════════════════════
 	// HELPERS
 	// ═══════════════════════════════════════════════════════════════
 

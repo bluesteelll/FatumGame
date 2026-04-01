@@ -9,6 +9,7 @@
 #include "FlecsProjectileComponents.h"
 #include "FlecsDestructibleComponents.h"
 #include "FlecsExplosionComponents.h"
+#include "FlecsPenetrationComponents.h"
 #include "FlecsNiagaraManager.h"
 
 void UFlecsArtillerySubsystem::SubscribeToBarrageEvents()
@@ -67,6 +68,7 @@ void UFlecsArtillerySubsystem::OnBarrageContact(const BarrageContactEvent& Event
 	Pair.ContactNormal = Event.NormalIfAny;
 	Pair.bBody1IsProjectile = bBody1IsProjectile;
 	Pair.bBody2IsProjectile = bBody2IsProjectile;
+	Pair.IncomingVelocity = Event.ProjectileVelocity;
 
 	flecs::entity PairEntity = World.entity()
 		.set<FCollisionPair>(Pair);
@@ -196,6 +198,23 @@ void UFlecsArtillerySubsystem::OnBarrageContact(const BarrageContactEvent& Event
 	}
 
 	// ─────────────────────────────────────────────────────────
+	// PENETRATION CLASSIFICATION
+	// Penetrating projectile hits any entity with remaining budget
+	// ─────────────────────────────────────────────────────────
+	if (bEntity1IsProjectile && bEntity1Valid)
+	{
+		const FPenetrationInstance* PenInst = Entity1.try_get<FPenetrationInstance>();
+		if (PenInst && PenInst->RemainingBudget > 0.01f)
+			PairEntity.add<FTagCollisionPenetration>();
+	}
+	else if (bEntity2IsProjectile && bEntity2Valid)
+	{
+		const FPenetrationInstance* PenInst = Entity2.try_get<FPenetrationInstance>();
+		if (PenInst && PenInst->RemainingBudget > 0.01f)
+			PairEntity.add<FTagCollisionPenetration>();
+	}
+
+	// ─────────────────────────────────────────────────────────
 	// CHARACTER COLLISION CLASSIFICATION
 	// Two characters collide (for future: knockback, etc)
 	// ─────────────────────────────────────────────────────────
@@ -227,6 +246,13 @@ void UFlecsArtillerySubsystem::OnBarrageContact(const BarrageContactEvent& Event
 
 		// Bouncing projectiles (MaxBounces != 0) — let BounceCollisionSystem handle
 		if (MaxBounces != 0) return;
+
+		// Penetrating projectiles with remaining budget — defer to PenetrationSystem
+		const FPenetrationInstance* PenInst = ProjEntity.try_get<FPenetrationInstance>();
+		if (PenInst && PenInst->RemainingBudget > 0.01f)
+		{
+			return;
+		}
 
 		// Don't kill if hitting own owner (projectile should pass through)
 		const FProjectileInstance* ProjInst = ProjEntity.try_get<FProjectileInstance>();
@@ -263,11 +289,12 @@ void UFlecsArtillerySubsystem::OnBarrageContact(const BarrageContactEvent& Event
 		TryKillNonBouncingProjectile(FlecsId2, FlecsId1);
 
 	// Log collision pair creation (verbose)
-	UE_LOG(LogTemp, Verbose, TEXT("COLLISION PAIR: E1=%llu E2=%llu Damage=%d Bounce=%d Pickup=%d Destr=%d Frag=%d"),
+	UE_LOG(LogTemp, Verbose, TEXT("COLLISION PAIR: E1=%llu E2=%llu Damage=%d Bounce=%d Pickup=%d Destr=%d Frag=%d Pen=%d"),
 		FlecsId1, FlecsId2,
 		PairEntity.has<FTagCollisionDamage>(),
 		PairEntity.has<FTagCollisionBounce>(),
 		PairEntity.has<FTagCollisionPickup>(),
 		PairEntity.has<FTagCollisionDestructible>(),
-		PairEntity.has<FTagCollisionFragmentation>());
+		PairEntity.has<FTagCollisionFragmentation>(),
+		PairEntity.has<FTagCollisionPenetration>());
 }

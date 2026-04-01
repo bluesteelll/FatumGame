@@ -40,6 +40,8 @@
 #include "FlecsQuickLoadProfile.h"
 #include "FlecsExplosionProfile.h"
 #include "FlecsExplosionComponents.h"
+#include "FlecsPenetrationComponents.h"
+#include "FlecsPhysicsProfile.h"
 
 // ═══════════════════════════════════════════════════════════════
 // ENTITY PREFAB REGISTRY IMPLEMENTATION
@@ -79,6 +81,9 @@ flecs::entity UFlecsArtillerySubsystem::GetOrCreateEntityPrefab(UFlecsEntityDefi
 
 	if (EntityDefinition->ProjectileProfile)
 		Prefab.set<FProjectileStatic>(FProjectileStatic::FromProfile(EntityDefinition->ProjectileProfile));
+
+	if (EntityDefinition->ProjectileProfile && EntityDefinition->ProjectileProfile->bPenetrating)
+		Prefab.set<FPenetrationStatic>(FPenetrationStatic::FromProfile(EntityDefinition->ProjectileProfile));
 
 	if (EntityDefinition->ContainerProfile)
 		Prefab.set<FContainerStatic>(FContainerStatic::FromProfile(EntityDefinition->ContainerProfile));
@@ -230,6 +235,14 @@ flecs::entity UFlecsArtillerySubsystem::GetOrCreateEntityPrefab(UFlecsEntityDefi
 		Prefab.add<FTagTemperatureZone>();
 	}
 
+	if (UFlecsPhysicsProfile* PhysProf = EntityDefinition->PhysicsProfile)
+	{
+		if (PhysProf->MaterialResistance > 0.f)
+		{
+			Prefab.set<FPenetrationMaterial>(FPenetrationMaterial::FromProfile(PhysProf));
+		}
+	}
+
 	// FHealthInstance on prefab: inherited by instances via is_a().
 	// First get_mut<FHealthInstance>() creates per-entity mutable copy (copy-on-write).
 	// All mutation paths (DamageObserver, HealEntity) MUST use get_mut/try_get_mut.
@@ -246,7 +259,7 @@ flecs::entity UFlecsArtillerySubsystem::GetOrCreateEntityPrefab(UFlecsEntityDefi
 	// Store in registry
 	EntityPrefabs.Add(EntityDefinition, Prefab);
 
-	UE_LOG(LogTemp, Log, TEXT("Created entity prefab: '%s' (Health=%d, Damage=%d, Projectile=%d, Container=%d, Item=%d, Weapon=%d, Explosion=%d, Interaction=%d, Destructible=%d, Door=%d, Movement=%d, Ability=%d, Resources=%d, Climb=%d, Swing=%d, StealthLight=%d, NoiseZone=%d, Vitals=%d, TempZone=%d, QuickLoad=%d)"),
+	UE_LOG(LogTemp, Log, TEXT("Created entity prefab: '%s' (Health=%d, Damage=%d, Projectile=%d, Container=%d, Item=%d, Weapon=%d, Explosion=%d, Penetration=%d, Interaction=%d, Destructible=%d, Door=%d, Movement=%d, Ability=%d, Resources=%d, Climb=%d, Swing=%d, StealthLight=%d, NoiseZone=%d, Vitals=%d, TempZone=%d, QuickLoad=%d)"),
 		*EntityDefinition->GetName(),
 		EntityDefinition->HealthProfile != nullptr,
 		EntityDefinition->DamageProfile != nullptr,
@@ -255,6 +268,7 @@ flecs::entity UFlecsArtillerySubsystem::GetOrCreateEntityPrefab(UFlecsEntityDefi
 		EntityDefinition->ItemDefinition != nullptr,
 		EntityDefinition->WeaponProfile != nullptr,
 		EntityDefinition->ExplosionProfile != nullptr,
+		EntityDefinition->ProjectileProfile && EntityDefinition->ProjectileProfile->bPenetrating,
 		EntityDefinition->InteractionProfile != nullptr,
 		EntityDefinition->DestructibleProfile != nullptr,
 		EntityDefinition->DoorProfile != nullptr,

@@ -124,6 +124,10 @@ public:
 	/** Synchronously set body position (NOT queued). Use from sim thread. */
 	void SetBodyPositionDirect(FBarrageKey BarrageKey, const FVector& Position, bool bActivate = true);
 
+	/** Synchronously set body linear velocity (NOT queued). Use from sim thread.
+	 *  VelocityUE is in cm/s, Z-up UE coordinates. */
+	void SetBodyLinearVelocityDirect(FBarrageKey BarrageKey, const FVector& VelocityUE, bool bActivate = true);
+
 	/** Move kinematic body toward target, setting velocity = (target-current)/dt.
 	 *  Constraint solver sees motion (unlike SetBodyPositionDirect which leaves V=0). */
 	void MoveKinematicBody(FBarrageKey BarrageKey, const FVector& TargetPosition, float DeltaTime);

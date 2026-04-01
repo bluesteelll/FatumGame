@@ -160,6 +160,9 @@ struct FCollisionPair
 	/** World-space contact normal (from Jolt manifold, axis-swapped) */
 	FVector ContactNormal = FVector::ZeroVector;
 
+	/** Pre-collision projectile velocity (UE coords, cm/s). For penetration system. */
+	FVector IncomingVelocity = FVector::ZeroVector;
+
 	/** Was body1 flagged as projectile in Barrage? */
 	bool bBody1IsProjectile = false;
 
@@ -215,6 +218,9 @@ struct FTagCollisionDestructible {};
 
 /** Collision between two characters */
 struct FTagCollisionCharacter {};
+
+/** Collision involves penetrating projectile */
+struct FTagCollisionPenetration {};
 
 /** Marker: collision pair has been processed */
 struct FTagCollisionProcessed {};

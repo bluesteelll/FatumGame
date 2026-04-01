@@ -91,6 +91,33 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Behavior", meta = (ClampMin = "-1", EditCondition = "bPenetrating"))
 	int32 MaxPenetrations = -1;
 
+	/** Penetration budget in cm of material-equivalent depth.
+	 *  Higher = passes through more/thicker obstacles. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration", meta = (ClampMin = "0", EditCondition = "bPenetrating"))
+	float PenetrationBudget = 20.f;
+
+	/** Damage loss factor per budget fraction consumed (0-2).
+	 *  At 1.0: consuming half the budget loses ~50% damage. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration", meta = (ClampMin = "0", ClampMax = "2", EditCondition = "bPenetrating"))
+	float PenetrationDamageFalloff = 1.f;
+
+	/** Velocity loss factor per budget fraction consumed (0-1).
+	 *  At 0.5: consuming half the budget loses ~25% speed. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration", meta = (ClampMin = "0", ClampMax = "1", EditCondition = "bPenetrating"))
+	float PenetrationVelocityFalloff = 0.5f;
+
+	/** Minimum angle from surface normal (degrees) for penetration.
+	 *  Impacts more oblique than this ricochet instead (if MaxBounces > 0) or stop. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration", meta = (ClampMin = "0", ClampMax = "89", EditCondition = "bPenetrating"))
+	float PenetrationRicochetAngleDeg = 70.f;
+
+	/** How much kinetic energy transfers to penetrated objects (impulse for fragmentation).
+	 *  0 = no energy transfer (bullet passes clean through).
+	 *  1 = full energy transfer (heavy slow rounds).
+	 *  Light fast bullets: ~0.1. Heavy slow bullets: ~0.8. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration", meta = (ClampMin = "0", ClampMax = "2", EditCondition = "bPenetrating"))
+	float PenetrationImpulseTransfer = 0.3f;
+
 	// ═══════════════════════════════════════════════════════════════
 	// HELPERS
 	// ═══════════════════════════════════════════════════════════════

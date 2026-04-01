@@ -22,6 +22,7 @@
 #include "FlecsDestructibleComponents.h"
 #include "FlecsStealthComponents.h"
 #include "FlecsVitalsComponents.h"
+#include "FlecsPenetrationComponents.h"
 #include "BarrageDispatch.h"
 #include "BarrageConstraintSystem.h"
 #include "FBarragePrimitive.h"
@@ -589,6 +590,17 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 			ProjInst.OwnerEntityId = Data.OwnerEntityId;
 			Entity.set<FProjectileInstance>(ProjInst);
 			Entity.add<FTagProjectile>();
+		}
+
+		// Penetration instance (FPenetrationStatic inherited from prefab via IsA)
+		const FPenetrationStatic* PenS = Entity.try_get<FPenetrationStatic>();
+		if (PenS)
+		{
+			FPenetrationInstance PenInst;
+			PenInst.RemainingBudget = PenS->PenetrationBudget;
+			PenInst.PenetrationCount = 0;
+			PenInst.CurrentDamageMultiplier = 1.f;
+			Entity.set<FPenetrationInstance>(PenInst);
 		}
 
 		// Item instance (check prefab's FItemStaticData)

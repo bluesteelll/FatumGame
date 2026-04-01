@@ -23,6 +23,8 @@
 #include "Skeletonize.h"
 #include "FBConstraintParams.h"
 #include "FlecsDoorComponents.h"
+#include "FlecsPenetrationComponents.h"
+#include "FlecsPhysicsProfile.h"
 
 // ═══════════════════════════════════════════════════════════════
 // FRAGMENT ENTITY (shared fragmentation logic)
@@ -139,6 +141,8 @@ void UFlecsArtillerySubsystem::FragmentEntity(
 			? FVector::UpVector
 			: ImpactDirection;
 		DeferredImpulse = ImpulseDir * (ImpactImpulse * Profile->ImpulseMultiplier);
+		UE_LOG(LogTemp, Log, TEXT("FRAG_IMPULSE: ImpactImpulse=%.1f × ProfileMult=%.2f = DeferredImpulse=(%.1f,%.1f,%.1f)"),
+			ImpactImpulse, Profile->ImpulseMultiplier, DeferredImpulse.X, DeferredImpulse.Y, DeferredImpulse.Z);
 
 		float BestDistSq = TNumericLimits<float>::Max();
 		for (int32 i = 0; i < FragCount; ++i)
@@ -221,6 +225,8 @@ void UFlecsArtillerySubsystem::FragmentEntity(
 		if (FragIdx == ImpulseFragIdx)
 		{
 			DebrisInst.PendingImpulse = DeferredImpulse;
+			UE_LOG(LogTemp, Log, TEXT("FRAG_IMPULSE: Assigned to fragment %d (entity %llu) PendingImpulse=(%.1f,%.1f,%.1f)"),
+				FragIdx, FragEntity.id(), DeferredImpulse.X, DeferredImpulse.Y, DeferredImpulse.Z);
 		}
 		FragEntity.set<FDebrisInstance>(DebrisInst);
 
@@ -251,6 +257,10 @@ void UFlecsArtillerySubsystem::FragmentEntity(
 				HealthInst.CurrentHP = FragDef->HealthProfile->GetStartingHealth();
 				FragEntity.set<FHealthInstance>(HealthInst);
 			}
+
+			// Penetration material — each fragment can have its own resistance
+			if (FragDef->PhysicsProfile && FragDef->PhysicsProfile->MaterialResistance > 0.f)
+				FragEntity.set<FPenetrationMaterial>(FPenetrationMaterial::FromProfile(FragDef->PhysicsProfile));
 		}
 
 		// Queue ISM spawn for game thread
