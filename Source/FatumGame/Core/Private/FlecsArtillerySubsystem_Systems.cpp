@@ -640,7 +640,29 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 		{
 			if (!Health.IsAlive())
 			{
-				Entity.add<FTagDead>();
+				// Destructible objects with HP=0: trigger fragmentation instead of plain death.
+				// PendingFragmentationSystem will call FragmentEntity() which adds FTagDead internally.
+				const FDestructibleStatic* DestrStatic = Entity.try_get<FDestructibleStatic>();
+				if (DestrStatic && DestrStatic->IsValid() && !Entity.has<FPendingFragmentation>())
+				{
+					FPendingFragmentation Frag;
+					// Use body position as impact point
+					const FBarrageBody* Body = Entity.try_get<FBarrageBody>();
+					if (Body && Body->IsValid() && CachedBarrageDispatch)
+					{
+						FBLet Prim = CachedBarrageDispatch->GetShapeRef(Body->BarrageKey);
+						if (FBarragePrimitive::IsNotNull(Prim))
+							Frag.ImpactPoint = FVector(FBarragePrimitive::GetPosition(Prim));
+					}
+					Frag.ImpactDirection = FVector::UpVector;
+					Frag.ImpactImpulse = 500.f;  // Default break impulse
+					Entity.set<FPendingFragmentation>(Frag);
+					// Don't add FTagDead — FragmentEntity will handle it
+				}
+				else
+				{
+					Entity.add<FTagDead>();
+				}
 
 				if (auto* MsgSub = UFlecsMessageSubsystem::SelfPtr)
 				{

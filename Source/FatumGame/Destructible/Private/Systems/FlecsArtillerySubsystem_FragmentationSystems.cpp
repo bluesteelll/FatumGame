@@ -642,6 +642,17 @@ void UFlecsArtillerySubsystem::SetupFragmentationSystems()
 				return;
 			}
 
+			// Objects with health: don't fragment until HP reaches 0.
+			// Bullets deal damage → HP drops → DeathCheckSystem adds FTagDead →
+			// DeadEntityCleanupSystem handles death. Fragmentation triggers separately
+			// via FPendingFragmentation when HP=0 or via explosion/degradation.
+			const FHealthInstance* HealthInst = TargetEntity.try_get<FHealthInstance>();
+			if (HealthInst && HealthInst->CurrentHP > 0.f)
+			{
+				PairEntity.add<FTagCollisionProcessed>();
+				return;
+			}
+
 			FragmentEntity(TargetEntity, TargetKey, FragData.ImpactPoint, FragData.ImpactDirection, FragData.ImpactImpulse);
 			PairEntity.add<FTagCollisionProcessed>();
 		});

@@ -36,6 +36,7 @@ FDamageStatic FDamageStatic::FromProfile(const UFlecsDamageProfile* Profile)
 
 	FDamageStatic S;
 	S.Damage = Profile->Damage;
+	S.StructuralDamage = Profile->StructuralDamage;
 	S.DamageType = Profile->DamageType;
 	S.bAreaDamage = Profile->bAreaDamage;
 	S.AreaRadius = Profile->AreaRadius;

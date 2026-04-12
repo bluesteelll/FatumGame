@@ -75,7 +75,7 @@ Utils/          — FTimeDilationStack, ConeImpulse, ExplosionUtility, LedgeDete
 | `FlecsDestructibleComponents.h` | FDestructibleStatic, FDebrisInstance, FFragmentationData, FPendingFragmentation |
 | `FlecsWeaponComponents.h` | FAimDirection, FPelletRingData, FWeaponStatic, FWeaponInstance, FEquippedBy, EActiveLoadMethod, EWeaponReloadPhase |
 | `FlecsExplosionComponents.h` | FExplosionStatic, FExplosionContactData, FTagDetonate |
-| `FlecsPenetrationComponents.h` | FPenetrationStatic, FPenetrationInstance, FPenetrationMaterial |
+| `FlecsPenetrationComponents.h` | EPenetrationMaterialCategory, GMaterialTable, FSurfaceIntegrity, FPenetrationStatic, FPenetrationInstance, FPenetrationMaterial |
 | `FlecsDoorComponents.h` | FDoorStatic, FDoorInstance |
 | **Plugin:** `FlecsBarrageComponents.h` | FBarrageBody, FISMRender, FCollisionPair, FTagCollision*, FTagCollisionPenetration |
 
@@ -98,13 +98,14 @@ PREFAB (one per type) ───────────────────�
   FQuickLoadStatic   { DeviceType, RoundsHeld, CaliberId, AmmoTypeDefinition*, InsertTime }
   FExplosionStatic   { Radius, BaseDamage, ImpulseStrength, DamageFalloff, ImpulseFalloff, VerticalBias, EpicenterLift, bDamageOwner }
   FPenetrationStatic { PenetrationBudget, MaxPenetrations, DamageFalloffFactor, VelocityFalloffFactor, ImpulseTransferFactor }
-  FPenetrationMaterial { MaterialResistance, RicochetCosAngleThreshold }  // on TARGET prefab
+  FPenetrationMaterial { MaterialCategory, RicochetCosAngleThreshold, bDegradable, BaseDegradeRate, DegradeSpreadFactor }  // on TARGET prefab
   FEntityDefinitionRef { EntityDefinition* }
          ↑ IsA (inheritance)
 ENTITY (each instance) ─────────────────────────────────────
   FHealthInstance      { CurrentHP, RegenAccumulator }
   FProjectileInstance  { LifetimeRemaining, BounceCount, GraceFramesRemaining, FuseRemaining }
-  FPenetrationInstance { RemainingBudget, PenetrationCount, CurrentDamageMultiplier }
+  FPenetrationInstance { RemainingBudget, PenetrationCount, CurrentDamageMultiplier, LastPenetratedTargetId }
+  FSurfaceIntegrity    { Integrity[64], GridOriginU/V, InvCellSizeU/V, ActiveCols/Rows, Projection }  // lazy, per-entity, 148 bytes
   FItemInstance        { Count }
   FContainerInstance   { CurrentWeight, CurrentCount, OwnerEntityId }
   FContainedIn         { ContainerEntityId, GridPosition, SlotIndex }
@@ -387,13 +388,15 @@ Projectiles pass through obstacles based on material resistance, thickness, and 
 Contact → OnBarrageContact captures pre-collision velocity → FTagCollisionPenetration
   → PenetrationSystem (runs BEFORE DamageCollision):
     1. Check projectile has FPenetrationStatic + budget > 0
-    2. Check target has FPenetrationMaterial (else impenetrable)
+    2. Material lookup: SubShapeID (compound) or FPenetrationMaterial (single shape)
     3. Incidence angle: cosAngle = |dot(incomingDir, surfaceNormal)|
     4. If cosAngle < ricochetThreshold → skip (too oblique)
-    5. Reverse raycast: entry→exit → physical thickness
-    6. EffectiveThickness = physicalThickness × MaterialResistance / cosAngle
-    7. If EffThickness >= RemainingBudget → can't penetrate, DamageCollision handles
-    8. PENETRATE: teleport to exit, reduce damage/velocity, decrement budget
+    5. Analytical thickness: ray-AABB slab intersection (~10ns, zero allocations)
+    6. Surface integrity: EffectiveResistance = Resistance × IntegrityToResistance(cellIntegrity)
+    7. EffectiveThickness = physicalThickness × EffectiveResistance / cosAngle
+    8. If EffThickness >= RemainingBudget → degrade surface, let DamageCollision handle
+    9. PENETRATE: teleport to exit, reduce damage/velocity, decrement budget
+       + Degrade surface integrity (half rate for penetrating bullets)
        + FPendingFragmentation on destructibles (impulse = speed × ImpulseTransferFactor)
        + FTagCollisionProcessed → downstream systems skip pair
 ```
@@ -416,8 +419,61 @@ Contact → OnBarrageContact captures pre-collision velocity → FTagCollisionPe
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `MaterialResistance` | 0.0 | 0=impenetrable. glass=0.2, wood=0.5, metal=3.0, concrete=4.0 |
+| `MaterialCategory` | `Impenetrable` | Material enum → resistance from GMaterialTable |
 | `PenetrationRicochetAngleDeg` | 75.0 | Max oblique angle for penetration |
+| `bDegradable` | true | Enable cumulative surface degradation |
+| `BaseDegradeRate` | 0.08 | Override degrade rate (0.08=default, uses GMaterialTable if unchanged) |
+| `DegradeSpreadFactor` | 0.3 | How much degradation bleeds to neighboring cells |
+| `SurfaceGridCols` | 0 | Grid columns (0=auto from AABB, 1-8 manual) |
+| `SurfaceGridRows` | 0 | Grid rows (0=auto from AABB, 1-8 manual) |
+| `CompoundSubShapes[]` | empty | Multi-material compound body (see below) |
+
+### Material Category System
+
+`EPenetrationMaterialCategory` enum + `GMaterialTable[16]` lookup (resistance + degrade rate):
+
+| Category | Resistance | DegradeRate | Hits to Breakthrough |
+|----------|-----------|-------------|---------------------|
+| Glass | 0.2 | 0.30 | ~3 |
+| Wood_Thin | 0.5 | 0.12 | ~9 |
+| Wood_Thick | 1.0 | 0.08 | ~13 |
+| Sheet_Metal | 1.5 | 0.06 | ~17 |
+| Metal | 3.0 | 0.03 | ~34 |
+| Concrete | 4.0 | 0.02 | ~50 |
+| Armor_Plate | 5.0 | 0.015 | ~67 |
+
+### Compound Shapes (Multi-Material Objects)
+
+Objects with `CompoundSubShapes[]` in PhysicsProfile create a `StaticCompoundShape` with per-sub-shape material. Jolt `SubShapeID` identifies which sub-shape was hit → material from `GetSubShapeUserData()`.
+
+```text
+Door = CompoundShape:
+  SubShape[0]: Box(frame)  → Wood_Thin (resistance 0.5)
+  SubShape[1]: Box(plate)  → Metal (resistance 3.0)
+```
+
+UserData stored with +1 offset (0 = no data for non-compound bodies).
+
+### Surface Integrity Grid (Cumulative Degradation)
+
+`FSurfaceIntegrity` — 148 bytes, lazily initialized on first bullet hit. 8×8 max grid of `uint16` integrity values with auto-projection (XZ/XY/YZ based on thinnest AABB axis).
+
+- **Degrade per hit**: `DegradeRate × (BulletDamage / 25) / Resistance`. Penetrating bullets degrade at half rate.
+- **Spread**: center cell + 4 neighbors at SpreadFactor (default 0.3)
+- **IntegrityToResistance curve**: piecewise linear with knee at 0.3 — material holds, then rapidly collapses
+- **Fragmentation trigger**: cell integrity < 5% on destructible → FPendingFragmentation
+- **Both paths**: PenetrationSystem (penetrating bullets) AND DamageCollisionSystem (any bullets) degrade surface
+
+### HP-Based Destruction
+
+Destructible objects with `FHealthInstance` don't fragment on first hit:
+- `FragmentationSystem` skips objects with HP > 0
+- Bullets deal damage → HP drops → HP=0 → `DeathCheckSystem` → `FPendingFragmentation` → `FragmentEntity()`
+- **HP** = global durability (10 hits anywhere), **Integrity Grid** = local weakness (concentrated fire in one zone)
+
+### Damage Reduction After Penetration
+
+`DamageCollisionSystem` reads `FPenetrationInstance::CurrentDamageMultiplier` — bullets that passed through obstacles deal reduced damage to subsequent targets.
 
 ### Ricochet Integration
 
@@ -425,22 +481,34 @@ Contact → OnBarrageContact captures pre-collision velocity → FTagCollisionPe
 - `MaxBounces == 0` + oblique angle → bullet stops (no ricochet, no penetrate)
 - Normal angle + budget → penetrate
 
+### Spurious Contact Suppression
+
+After penetration, `LastPenetratedTargetId` prevents BounceCollisionSystem/DamageCollisionSystem from killing the bullet on re-contacts with the same target (or no-entity contacts) from the same StepWorld.
+
 ### Fragment Penetration
 
 Fragments spawned by `FragmentEntity()` inherit `FPenetrationMaterial` from their `FragDef->PhysicsProfile`. Each fragment can have its own material resistance (wood, metal, glass fragments from same object).
 
 ### Key Files
 
-- `Weapon/Public/Components/FlecsPenetrationComponents.h` — FPenetrationStatic, FPenetrationInstance, FPenetrationMaterial
-- `Weapon/Private/Components/FlecsPenetrationComponents.cpp` — FromProfile() factories
+- `Weapon/Public/Components/FlecsPenetrationComponents.h` — EPenetrationMaterialCategory, GMaterialTable, FSurfaceIntegrity, FPenetrationStatic, FPenetrationInstance, FPenetrationMaterial
+- `Weapon/Private/Components/FlecsPenetrationComponents.cpp` — FromProfile(), FSurfaceIntegrity methods
 - `Weapon/Private/Systems/FlecsArtillerySubsystem_PenetrationSystem.cpp` — PenetrationSystem
-- `Core/Private/FlecsArtillerySubsystem_Collision.cpp` — Classification + TryKillNonBouncing mod
+- `Weapon/Private/Systems/FlecsArtillerySubsystem_DamageCollision.cpp` — Damage reduction + surface degradation for non-penetrating bullets
+- `Core/Private/FlecsArtillerySubsystem_Collision.cpp` — Classification + TryKillNonBouncing mod + SubShapeID routing
+- `Core/Private/FlecsArtillerySubsystem_Systems.cpp` — DeathCheckSystem HP→fragmentation trigger
+- `Definitions/Public/FlecsPhysicsProfile.h` — EPenetrationMaterialCategory, FSubShapeDefinition, compound + degradation settings
 
 ### Barrage Extensions (for penetration)
 
 - `BarrageContactEvent.ProjectileVelocity` — pre-collision velocity captured in HandleContactAdded
+- `BarrageContactEvent.SubShapeID1/2` — sub-shape IDs from Jolt ContactManifold
 - `FCollisionPair.IncomingVelocity` — forwarded from contact event
+- `FCollisionPair.SubShapeID2` — TARGET body's sub-shape ID (routed based on which body is projectile)
 - `SetBodyLinearVelocityDirect()` — immediate velocity set (not queued), for teleport+velocity in same tick
+- `CreateCompoundBody()` — compound shape from FBCompoundSubShape array with per-sub-shape UserData
+- `GetSubShapeUserData()` — read compound sub-shape material via SubShapeID (unwraps decorators)
+- `GetJoltBodyID()` — expose Jolt BodyID for body-specific operations
 
 ---
 

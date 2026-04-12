@@ -23,9 +23,18 @@ public:
 	// DAMAGE
 	// ═══════════════════════════════════════════════════════════════
 
-	/** Base damage dealt on contact */
+	/** Base damage dealt on contact (vs characters/enemies with HealthProfile) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Damage", meta = (ClampMin = "0"))
 	float Damage = 10.f;
+
+	/** Damage dealt vs destructible objects (walls, crates, barricades).
+	 *  0 = use regular Damage value (backward compat).
+	 *  Independent from Damage — use for ammo balance:
+	 *  - Small caliber: low StructuralDamage (doesn't break walls easily)
+	 *  - Slugs/HE rounds: high StructuralDamage (demolishes doors)
+	 *  - AP rounds: low StructuralDamage (passes through, doesn't destroy) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Damage", meta = (ClampMin = "0"))
+	float StructuralDamage = 0.f;
 
 	/** Damage type tag (for resistances, effects) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Damage")

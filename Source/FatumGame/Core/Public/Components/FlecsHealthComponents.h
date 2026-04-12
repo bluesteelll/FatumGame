@@ -52,8 +52,14 @@ struct FHealthStatic
  */
 struct FDamageStatic
 {
-	/** Base damage dealt on contact */
+	/** Base damage dealt on contact (vs characters/enemies) */
 	float Damage = 10.f;
+
+	/** Damage dealt vs destructible objects. 0 = use Damage (backward compat).
+	 *  Use to tune how fast bullets destroy objects independently of enemy damage:
+	 *  - Small caliber: low StructuralDamage (doesn't break walls)
+	 *  - Slugs/HE: high StructuralDamage (demolishes doors) */
+	float StructuralDamage = 0.f;
 
 	/** Damage type tag for resistance/weakness */
 	FGameplayTag DamageType;

@@ -325,7 +325,13 @@ void UFlecsArtillerySubsystem::SetupPenetrationSystem()
 			// ── Apply reduced damage to target ──
 			if (DmgStatic && TargetEntity.has<FHealthInstance>() && !TargetEntity.has<FTagDead>())
 			{
-				const float ReducedDamage = DmgStatic->Damage
+				// Use StructuralDamage vs destructibles (if specified)
+				float BaseDamage = DmgStatic->Damage;
+				if (DmgStatic->StructuralDamage > 0.f && TargetEntity.has<FDestructibleStatic>())
+				{
+					BaseDamage = DmgStatic->StructuralDamage;
+				}
+				const float ReducedDamage = BaseDamage
 					* PenInstance->CurrentDamageMultiplier * DamageMultiplier;
 				if (ReducedDamage > 0.f)
 				{
