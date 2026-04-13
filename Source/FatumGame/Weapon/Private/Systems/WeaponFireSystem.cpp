@@ -33,6 +33,7 @@
 #include "FlecsAmmoTypeDefinition.h"
 #include "FlecsVitalsComponents.h"
 #include "FlecsPenetrationComponents.h"
+#include "Library/FlecsHitscanLibrary.h"
 
 void UFlecsArtillerySubsystem::SetupWeaponFireSystem()
 {
@@ -431,8 +432,59 @@ void UFlecsArtillerySubsystem::SetupWeaponFireSystem()
 				}
 			}
 
+			// ─────────────────────────────────────────────────────
+			// HITSCAN BRANCH — build per-shot statics once, fire rays.
+			// ─────────────────────────────────────────────────────
+			const bool bHitscan = Static->IsHitscan();
+			FDamageStatic HitscanDmg;
+			FProjectileStatic HitscanProj;
+			FPenetrationStatic HitscanPen;
+			bool bHaveHitscanDmg = false;
+			bool bHaveHitscanProj = false;
+			bool bHaveHitscanPen = false;
+			UFlecsNiagaraManager* HitscanNiagara = nullptr;
+			if (bHitscan)
+			{
+				if (ProjDef->DamageProfile)
+				{
+					HitscanDmg = FDamageStatic::FromProfile(ProjDef->DamageProfile);
+					HitscanDmg.Damage *= Static->DamageMultiplier * AmmoDamageMult;
+					bHaveHitscanDmg = true;
+				}
+				if (ProjProfile)
+				{
+					HitscanProj = FProjectileStatic::FromProfile(ProjProfile);
+					bHaveHitscanProj = true;
+				}
+				if (ProjProfile && ProjProfile->bPenetrating)
+				{
+					HitscanPen = FPenetrationStatic::FromProfile(ProjProfile);
+					bHaveHitscanPen = true;
+				}
+				HitscanNiagara = UFlecsNiagaraManager::Get(GetWorld());
+				if (!bHaveHitscanDmg)
+				{
+					UE_LOG(LogTemp, Warning, TEXT("HITSCAN: ProjectileDefinition '%s' has no DamageProfile — skipping shot"),
+						*ProjDef->EntityName.ToString());
+				}
+			}
+
 			for (int32 i = 0; i < PelletDirections.Num(); ++i)
 			{
+				if (bHitscan)
+				{
+					if (!bHaveHitscanDmg) continue;
+					UFlecsHitscanLibrary::FireHitscan(
+						World, CachedBarrageDispatch,
+						CharacterEntity, WeaponEntity,
+						MuzzleLocation, PelletDirections[i],
+						*Static, HitscanDmg,
+						bHaveHitscanProj ? &HitscanProj : nullptr,
+						bHaveHitscanPen  ? &HitscanPen  : nullptr,
+						HitscanNiagara);
+					continue;
+				}
+
 				FSkeletonKey ProjectileKey = FBarrageSpawnUtils::GenerateUniqueKey(SKELLY::SFIX_GUN_SHOT);
 
 				// Create Barrage physics body
@@ -482,6 +534,7 @@ void UFlecsArtillerySubsystem::SetupWeaponFireSystem()
 				ProjInst.GraceFramesRemaining = ProjProfile->GetGraceFrames();
 				ProjInst.FuseRemaining = ProjProfile->FuseTime;
 				ProjInst.OwnerEntityId = EquippedBy.CharacterEntityId;
+				ProjInst.SpawnPosition = MuzzleLocation;
 				ProjEntity.set<FProjectileInstance>(ProjInst);
 				ProjEntity.add<FTagProjectile>();
 

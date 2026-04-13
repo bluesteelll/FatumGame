@@ -22,6 +22,14 @@ FWeaponStatic FWeaponStatic::FromProfile(const UFlecsWeaponProfile* Profile, con
 	S.bIsAutomatic = Profile->IsAutomatic();
 	S.bIsBurst = Profile->IsBurst();
 
+	// Fire Delivery (Projectile vs Hitscan)
+	S.FireDelivery = static_cast<uint8>(Profile->FireDelivery);
+	S.HitscanRange = Profile->HitscanRange;
+	S.HitscanImpulseScale = Profile->HitscanImpulseScale;
+	S.TracerEffect = Profile->TracerEffect;
+	S.TracerThickness = Profile->TracerThickness;
+	S.TracerDuration = Profile->TracerDuration;
+
 	// Ammo & Reload — resolve caliber names to uint8 IDs via registry
 	S.AcceptedCaliberCount = FMath::Min(Profile->AcceptedCalibers.Num(), FWeaponStatic::MaxAcceptedCalibers);
 	for (int32 i = 0; i < S.AcceptedCaliberCount; ++i)

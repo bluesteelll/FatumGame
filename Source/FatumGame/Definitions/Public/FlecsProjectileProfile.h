@@ -119,6 +119,22 @@ public:
 	float PenetrationImpulseTransfer = 0.3f;
 
 	// ═══════════════════════════════════════════════════════════════
+	// DAMAGE FALLOFF (distance-based)
+	// ═══════════════════════════════════════════════════════════════
+
+	/** Distance (cm) from spawn at which damage begins attenuating. 0..Start = full damage. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Damage Falloff", meta = (ClampMin = "0"))
+	float DamageFalloffStart = 5000.f;
+
+	/** Distance (cm) from spawn at which damage reaches MinDamageMultiplier. Must be > Start to enable. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Damage Falloff", meta = (ClampMin = "0"))
+	float DamageFalloffEnd = 20000.f;
+
+	/** Damage multiplier floor at/after DamageFalloffEnd. 1.0 disables falloff effect. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Damage Falloff", meta = (ClampMin = "0", ClampMax = "1"))
+	float MinDamageMultiplier = 0.3f;
+
+	// ═══════════════════════════════════════════════════════════════
 	// HELPERS
 	// ═══════════════════════════════════════════════════════════════
 

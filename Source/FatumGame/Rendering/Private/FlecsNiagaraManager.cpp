@@ -30,6 +30,14 @@ void UFlecsNiagaraManager::Deinitialize()
 		}
 	}
 
+	// Release tracer pool host + components
+	TracerPool.Reset();
+	if (TracerHostActor && !TracerHostActor->IsActorBeingDestroyed())
+	{
+		TracerHostActor->Destroy();
+	}
+	TracerHostActor = nullptr;
+
 	EffectGroups.Empty();
 	EntityToEffect.Empty();
 
@@ -208,6 +216,112 @@ void UFlecsNiagaraManager::EnqueueDeathEffect(const FPendingDeathEffect& Effect)
 {
 	checkf(Effect.Effect, TEXT("NiagaraManager::EnqueueDeathEffect: null Effect"));
 	PendingDeathEffects.Enqueue(Effect);
+}
+
+void UFlecsNiagaraManager::EnqueueTracer(const FPendingNiagaraTracer& Tracer)
+{
+	// Silent-drop null effects (hitscan weapons may leave TracerEffect unset).
+	if (!Tracer.Effect) return;
+	PendingTracers.Enqueue(Tracer);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// TRACER POOL
+// ═══════════════════════════════════════════════════════════════
+
+UNiagaraComponent* UFlecsNiagaraManager::AcquireTracerSlot(double /*NowSeconds*/)
+{
+	for (FTracerPoolSlot& Slot : TracerPool)
+	{
+		if (Slot.ReleaseTimeSeconds == 0.0 && Slot.Component)
+		{
+			return Slot.Component;
+		}
+	}
+	return nullptr;
+}
+
+void UFlecsNiagaraManager::ProcessPendingTracers()
+{
+	check(IsInGameThread());
+
+	UWorld* World = GetWorld();
+	if (!World) return;
+
+	const double Now = FApp::GetCurrentTime();
+
+	// Lazy-init host actor + pool on first drain when there's actually something to spawn.
+	if (TracerPool.Num() == 0 && !PendingTracers.IsEmpty())
+	{
+		FActorSpawnParameters SpawnParams;
+		SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+		TracerHostActor = World->SpawnActor<AActor>(AActor::StaticClass(), FVector::ZeroVector, FRotator::ZeroRotator, SpawnParams);
+		checkf(TracerHostActor, TEXT("NiagaraManager: failed to spawn tracer host actor"));
+
+		USceneComponent* Root = NewObject<USceneComponent>(TracerHostActor, TEXT("TracerRoot"));
+		TracerHostActor->SetRootComponent(Root);
+		Root->RegisterComponent();
+
+		TracerPool.Reserve(TracerPoolSize);
+		for (int32 i = 0; i < TracerPoolSize; ++i)
+		{
+			UNiagaraComponent* Comp = NewObject<UNiagaraComponent>(TracerHostActor);
+			Comp->SetAutoActivate(false);
+			Comp->SetAutoDestroy(false);
+			Comp->bAutoManageAttachment = false;
+			Comp->AttachToComponent(Root, FAttachmentTransformRules::KeepRelativeTransform);
+			Comp->RegisterComponent();
+
+			FTracerPoolSlot Slot;
+			Slot.Component = Comp;
+			Slot.ReleaseTimeSeconds = 0.0;
+			TracerPool.Add(Slot);
+		}
+	}
+
+	// Release expired slots.
+	for (FTracerPoolSlot& Slot : TracerPool)
+	{
+		if (Slot.ReleaseTimeSeconds != 0.0 && Now >= Slot.ReleaseTimeSeconds && Slot.Component)
+		{
+			Slot.Component->Deactivate();
+			Slot.ReleaseTimeSeconds = 0.0;
+		}
+	}
+
+	// Drain queue.
+	FPendingNiagaraTracer T;
+	while (PendingTracers.Dequeue(T))
+	{
+		if (!T.Effect) continue;
+
+		UNiagaraComponent* Comp = AcquireTracerSlot(Now);
+		if (!Comp)
+		{
+			// Pool exhausted — fallback to one-shot spawn (matches death VFX path).
+			UE_LOG(LogFlecsNiagara, Verbose, TEXT("Tracer pool exhausted — fallback SpawnSystemAtLocation"));
+			UNiagaraFunctionLibrary::SpawnSystemAtLocation(
+				World, T.Effect, T.Start, FRotator::ZeroRotator, FVector(1.f),
+				true, true, ENCPoolMethod::None);
+			continue;
+		}
+
+		Comp->SetAsset(T.Effect);
+		Comp->SetWorldLocation(T.Start);
+		Comp->SetVectorParameter(TEXT("BeamStart"), T.Start);
+		Comp->SetVectorParameter(TEXT("BeamEnd"), T.End);
+		Comp->SetFloatParameter(TEXT("BeamThickness"), T.Thickness);
+		Comp->Activate(true);
+
+		for (FTracerPoolSlot& Slot : TracerPool)
+		{
+			if (Slot.Component == Comp)
+			{
+				Slot.ReleaseTimeSeconds = Now + FMath::Max(T.Duration, 0.01f);
+				break;
+			}
+		}
+	}
 }
 
 // ═══════════════════════════════════════════════════════════════

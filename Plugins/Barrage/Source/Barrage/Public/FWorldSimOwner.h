@@ -333,6 +333,15 @@ public:
 
 	// Cast a ray at something and get the first thing it hits
 	void CastRay(FVector3d CastFrom, FVector3d Direction, const JPH::BroadPhaseLayerFilter& BroadPhaseFilter, const JPH::ObjectLayerFilter& ObjectFilter, const JPH::BodyFilter& BodiesFilter, TSharedPtr<FHitResult> OutHit) const;
+
+	// Cast a ray and collect every sub-shape hit along its length (sorted by ascending distance).
+	// Direction should already be scaled to the desired cast length (end = CastFrom + Direction).
+	// Used by bullet penetration / hitscan systems.
+	void CastRayAllHits(FVector3d CastFrom, FVector3d Direction,
+		const JPH::BroadPhaseLayerFilter& BroadPhaseFilter,
+		const JPH::ObjectLayerFilter& ObjectFilter,
+		const JPH::BodyFilter& BodiesFilter,
+		TArray<struct FBarrageRayHit>& OutHits) const;
 	JPH::EMotionType LayerToMotionTypeMapping(uint16 Layer);
 	JPH::Ref<JPH::Shape> AttemptBoxCache(double JoltX, double JoltY, double JoltZ, float HEReduceMin);
 	//we could use type indirection or inheritance, but the fact of the matter is that this is much easier

@@ -14,6 +14,7 @@
 #include "FlecsNiagaraManager.h"
 #include "FlecsMessageSubsystem.h"
 #include "FlecsUIMessages.h"
+#include "Library/FlecsBulletHitLibrary.h"
 
 void UFlecsArtillerySubsystem::SetupDamageCollisionSystems()
 {
@@ -27,153 +28,65 @@ void UFlecsArtillerySubsystem::SetupDamageCollisionSystems()
 		.without<FTagCollisionProcessed>()
 		.each([this, &World](flecs::entity PairEntity, const FCollisionPair& Pair)
 		{
-			uint64 ProjectileId = Pair.GetProjectileEntityId();
-			uint64 TargetId = Pair.GetTargetEntityId();
-
-			float Damage = 25.f;
-			FGameplayTag DamageType;
-			bool bAreaDamage = false;
-			bool bDestroyOnHit = false;
-			float CritChance = 0.f;
-			float CritMultiplier = 2.f;
-			int32 MaxBounces = 0;
+			const uint64 ProjectileId = Pair.GetProjectileEntityId();
+			const uint64 TargetId = Pair.GetTargetEntityId();
 
 			flecs::entity ProjectileEntity;
+			int32 MaxBounces = 0;
 
 			if (ProjectileId != 0)
 			{
 				ProjectileEntity = World.entity(ProjectileId);
 				if (ProjectileEntity.is_valid())
 				{
-					const FDamageStatic* DmgStatic = ProjectileEntity.try_get<FDamageStatic>();
-					const FProjectileStatic* ProjStatic = ProjectileEntity.try_get<FProjectileStatic>();
-
-					if (DmgStatic)
-					{
-						Damage = DmgStatic->Damage;
-						DamageType = DmgStatic->DamageType;
-						bAreaDamage = DmgStatic->bAreaDamage;
-						bDestroyOnHit = DmgStatic->bDestroyOnHit;
-						CritChance = DmgStatic->CritChance;
-						CritMultiplier = DmgStatic->CritMultiplier;
-					}
-
-					if (ProjStatic)
-					{
-						MaxBounces = ProjStatic->MaxBounces;
-					}
+					if (const FProjectileStatic* PS = ProjectileEntity.try_get<FProjectileStatic>())
+						MaxBounces = PS->MaxBounces;
 				}
 			}
 
-			if (TargetId != 0)
+			// ── Resolve target and delegate damage / degradation / fragmentation to shared library ──
+			if (TargetId != 0 && ProjectileEntity.is_valid())
 			{
 				flecs::entity Target = World.entity(TargetId);
 				if (Target.is_valid() && !Target.has<FTagDead>())
 				{
-					if (ProjectileEntity.is_valid())
+					const FDamageStatic* DmgStatic = ProjectileEntity.try_get<FDamageStatic>();
+					const FProjectileStatic* ProjStatic = ProjectileEntity.try_get<FProjectileStatic>();
+					const FProjectileInstance* ProjInst = ProjectileEntity.try_get<FProjectileInstance>();
+					const FPenetrationInstance* PenInst = ProjectileEntity.try_get<FPenetrationInstance>();
+
+					FBulletHitContext Ctx;
+					Ctx.ShooterEntityId   = ProjInst ? static_cast<uint64>(ProjInst->OwnerEntityId) : 0;
+					Ctx.TargetEntityId    = TargetId;
+					Ctx.ImpactPoint       = Pair.ContactPoint;
+					Ctx.ImpactNormal      = Pair.ContactNormal;
+					Ctx.IncomingDir       = Pair.IncomingVelocity.GetSafeNormal();
+					Ctx.IncomingSpeed     = static_cast<float>(Pair.IncomingVelocity.Size());
+					Ctx.SpawnPosition     = ProjInst ? ProjInst->SpawnPosition : FVector::ZeroVector;
+					Ctx.BaseDamage        = DmgStatic ? DmgStatic->Damage : 25.f;
+					Ctx.StructuralDamage  = DmgStatic ? DmgStatic->StructuralDamage : 0.f;
+					Ctx.CritChance        = DmgStatic ? DmgStatic->CritChance : 0.f;
+					Ctx.CritMultiplier    = DmgStatic ? DmgStatic->CritMultiplier : 2.f;
+					if (DmgStatic) Ctx.DamageType = DmgStatic->DamageType;
+
+					if (ProjStatic)
 					{
-						const FProjectileInstance* ProjInst = ProjectileEntity.try_get<FProjectileInstance>();
-						if (ProjInst && ProjInst->IsOwnedBy(TargetId))
-						{
-							PairEntity.add<FTagCollisionProcessed>();
-							return;
-						}
+						Ctx.DamageFalloffStart  = ProjStatic->DamageFalloffStart;
+						Ctx.InvFalloffRange     = ProjStatic->InvFalloffRange;
+						Ctx.MinDamageMultiplier = ProjStatic->MinDamageMultiplier;
 					}
 
-					if (Target.has<FHealthInstance>())
-					{
-						// Use StructuralDamage vs destructible targets (if specified)
-						const FDamageStatic* DmgStaticForTarget = ProjectileEntity.is_valid()
-							? ProjectileEntity.try_get<FDamageStatic>() : nullptr;
-						float FinalDamage = Damage;
-						if (DmgStaticForTarget && DmgStaticForTarget->StructuralDamage > 0.f
-							&& Target.has<FDestructibleStatic>())
-						{
-							FinalDamage = DmgStaticForTarget->StructuralDamage;
-						}
+					// Seed in-out damage multiplier from penetration instance so the library
+					// applies post-penetration falloff. All other pen in-out pointers stay null
+					// — we don't want the library to decide to penetrate here.
+					float LocalDmgMul = PenInst ? PenInst->CurrentDamageMultiplier : 1.f;
+					Ctx.InOutCurrentDamageMultiplier = PenInst ? &LocalDmgMul : nullptr;
+					// Leave PenStatic == nullptr → library will not enter the penetration branch.
+					Ctx.bApplyImpulse = false;
+					Ctx.bCanDegrade   = true;
 
-						// Apply penetration damage reduction (bullet lost energy through obstacles)
-						const FPenetrationInstance* PenInst = ProjectileEntity.is_valid()
-							? ProjectileEntity.try_get<FPenetrationInstance>() : nullptr;
-						if (PenInst && PenInst->CurrentDamageMultiplier < 1.f)
-						{
-							FinalDamage *= PenInst->CurrentDamageMultiplier;
-						}
-
-						bool bIsCritical = (CritChance > 0.f && FMath::FRand() < CritChance);
-						FPendingDamage& Pending = Target.obtain<FPendingDamage>();
-						Pending.AddHit(FinalDamage, ProjectileId, DamageType, Pair.ContactPoint, bIsCritical, false);
-						Target.modified<FPendingDamage>();
-
-						UE_LOG(LogTemp, Log, TEXT("COLLISION: Queued %.1f damage to Entity %llu (Crit=%d)"),
-							FinalDamage, TargetId, bIsCritical);
-					}
-
-					// Surface degradation for non-penetrating bullets hitting degradable targets
-					const FPenetrationMaterial* TargetPenMat = Target.try_get<FPenetrationMaterial>();
-					if (TargetPenMat && TargetPenMat->bDegradable && TargetPenMat->GetResistance() < 900.f)
-					{
-						const float MatResistance = TargetPenMat->GetResistance();
-						const float DegradeRate = GetDegradeRateForCategory(TargetPenMat->MaterialCategory);
-						const float NormDegrade = DegradeRate * (Damage / 25.f);
-
-						// Lazy init + degrade (same pattern as PenetrationSystem)
-						FSurfaceIntegrity* Grid = Target.try_get_mut<FSurfaceIntegrity>();
-						if (!Grid && CachedBarrageDispatch)
-						{
-							const FBarrageBody* TBody = Target.try_get<FBarrageBody>();
-							if (TBody && TBody->IsValid())
-							{
-								FBLet TPrim = CachedBarrageDispatch->GetShapeRef(TBody->BarrageKey);
-								JPH::Vec3 JMin, JMax;
-								if (FBarragePrimitive::IsNotNull(TPrim)
-									&& CachedBarrageDispatch->GetBodyWorldBoundsJolt(TPrim->KeyIntoBarrage, JMin, JMax))
-								{
-									FVector BPos(FBarragePrimitive::GetPosition(TPrim));
-									FQuat BRot(FBarragePrimitive::OptimisticGetAbsoluteRotation(TPrim));
-									FVector AMin(JMin.GetX()*100.f, JMin.GetZ()*100.f, JMin.GetY()*100.f);
-									FVector AMax(JMax.GetX()*100.f, JMax.GetZ()*100.f, JMax.GetY()*100.f);
-									FVector LMin = BRot.UnrotateVector(AMin - BPos);
-									FVector LMax = BRot.UnrotateVector(AMax - BPos);
-									FVector TMin(FMath::Min(LMin.X,LMax.X), FMath::Min(LMin.Y,LMax.Y), FMath::Min(LMin.Z,LMax.Z));
-									FVector TMax(FMath::Max(LMin.X,LMax.X), FMath::Max(LMin.Y,LMax.Y), FMath::Max(LMin.Z,LMax.Z));
-									FSurfaceIntegrity NewGrid;
-									NewGrid.InitFromAABB(TMin, TMax, TargetPenMat->GridCols, TargetPenMat->GridRows);
-									Target.set<FSurfaceIntegrity>(NewGrid);
-									Grid = Target.try_get_mut<FSurfaceIntegrity>();
-								}
-							}
-						}
-						if (Grid)
-						{
-							const FBarrageBody* TBody = Target.try_get<FBarrageBody>();
-							if (TBody && TBody->IsValid())
-							{
-								FBLet TPrim = CachedBarrageDispatch->GetShapeRef(TBody->BarrageKey);
-								if (FBarragePrimitive::IsNotNull(TPrim))
-								{
-									FVector BPos(FBarragePrimitive::GetPosition(TPrim));
-									FQuat BRot(FBarragePrimitive::OptimisticGetAbsoluteRotation(TPrim));
-									int32 CellIdx = Grid->WorldToCell(Pair.ContactPoint, BPos, BRot);
-									Grid->DegradeWithSpread(CellIdx, NormDegrade, TargetPenMat->DegradeSpreadFactor);
-
-									// Fragmentation trigger
-									if (Grid->GetIntegrity(CellIdx) < 0.05f)
-									{
-										const FDestructibleStatic* DS = Target.try_get<FDestructibleStatic>();
-										if (DS && DS->IsValid() && !Target.has<FPendingFragmentation>())
-										{
-											FPendingFragmentation Frag;
-											Frag.ImpactPoint = Pair.ContactPoint;
-											Frag.ImpactDirection = Pair.ContactNormal.IsNearlyZero() ? FVector::UpVector : -Pair.ContactNormal;
-											Frag.ImpactImpulse = Damage * 10.f;
-											Target.set<FPendingFragmentation>(Frag);
-										}
-									}
-								}
-							}
-						}
-					}
+					UFlecsBulletHitLibrary::ApplyBulletHit(
+						World, CachedBarrageDispatch, ProjectileEntity, Target, Ctx);
 				}
 			}
 
@@ -191,7 +104,7 @@ void UFlecsArtillerySubsystem::SetupDamageCollisionSystems()
 				// New target — clear the suppression
 				if (PenInst) PenInst->LastPenetratedTargetId = 0;
 
-				bool bIsBouncing = (MaxBounces == -1);
+				const bool bIsBouncing = (MaxBounces == -1);
 				if (!bIsBouncing)
 				{
 					FDeathContactPoint DCP;

@@ -7,6 +7,9 @@
 #include "CastShapeCollectors/SphereCastCollector.h"
 #include "CastShapeCollectors/SphereSearchCollector.h"
 #include "CollisionDetectionFilters/FirstHitRayCastCollector.h"
+#include "CollisionDetectionFilters/AllHitsRayCastCollector.h"
+#include "FBarrageRayHit.h"
+#include "Algo/Sort.h"
 #include "Chaos/TriangleMeshImplicitObject.h"
 #include "Jolt/Physics/Collision/BroadPhase/BroadPhaseBruteForce.h"
 
@@ -184,6 +187,68 @@ void FWorldSimOwner::CastRay(FVector3d CastFrom, FVector3d Direction, const Broa
 		HitResultPtr->ImpactPoint.Set(UnrealContactPos.X, UnrealContactPos.Y, UnrealContactPos.Z);
 		HitResultPtr->Distance = (UnrealContactPos - FVector3f(CastFrom)).Length();
 	}
+}
+
+void FWorldSimOwner::CastRayAllHits(FVector3d CastFrom, FVector3d Direction,
+	const BroadPhaseLayerFilter& BroadPhaseFilter,
+	const ObjectLayerFilter& ObjectFilter,
+	const BodyFilter& BodiesFilter,
+	TArray<FBarrageRayHit>& OutHits) const
+{
+	OutHits.Reset();
+	if (CastFrom.ContainsNaN() || Direction.ContainsNaN())
+	{
+		return;
+	}
+
+	const JPH::Vec3 JoltOrigin    = CoordinateUtils::ToJoltCoordinates(CastFrom);
+	const JPH::Vec3 JoltDirection = CoordinateUtils::ToJoltCoordinates(Direction); // already range-scaled
+
+	RRayCast Ray(JoltOrigin, JoltDirection);
+	RayCastSettings Settings;
+	Settings.mTreatConvexAsSolid     = true;
+	Settings.mBackFaceModeTriangles  = EBackFaceMode::CollideWithBackFaces;
+	Settings.mBackFaceModeConvex     = EBackFaceMode::CollideWithBackFaces;
+
+	AllHitsRayCastCollector Collector;
+	physics_system->GetNarrowPhaseQueryNoLock().CastRay(Ray, Settings, Collector, BroadPhaseFilter, ObjectFilter, BodiesFilter);
+
+	if (Collector.Hits.Num() == 0)
+	{
+		return;
+	}
+
+	OutHits.Reserve(Collector.Hits.Num());
+	const JPH::BodyLockInterface& LockIface = physics_system->GetBodyLockInterfaceNoLock();
+
+	for (const AllHitsRayCastCollector::FRawHit& Raw : Collector.Hits)
+	{
+		JPH::BodyLockRead Lock(LockIface, Raw.BodyID);
+		if (!Lock.SucceededAndIsInBroadPhase())
+		{
+			continue;
+		}
+		const JPH::Body& Body = Lock.GetBody();
+		const JPH::Vec3 ContactJolt = Ray.GetPointOnRay(Raw.Fraction);
+		const JPH::Vec3 NormalJolt  = Body.GetWorldSpaceSurfaceNormal(Raw.SubShapeID, ContactJolt);
+
+		FBarrageRayHit& Out = OutHits.AddDefaulted_GetRef();
+		Out.BodyIDValue     = Raw.BodyID.GetIndexAndSequenceNumber();
+		Out.SubShapeIDValue = Raw.SubShapeID.GetValue();
+
+		const FVector3f ContactUE = CoordinateUtils::FromJoltCoordinates(ContactJolt);
+		const FVector3f NormalUE  = CoordinateUtils::FromJoltUnitVector(NormalJolt);
+		Out.ContactPoint  = FVector(ContactUE.X, ContactUE.Y, ContactUE.Z);
+		Out.ContactNormal = FVector(NormalUE.X,  NormalUE.Y,  NormalUE.Z);
+		// |Direction| (jolt) already equals the range in meters; fraction ∈ [0,1].
+		// Compute distance in UE cm from actual points to avoid unit juggling.
+		Out.Distance = static_cast<float>((Out.ContactPoint - CastFrom).Size());
+	}
+
+	Algo::Sort(OutHits, [](const FBarrageRayHit& A, const FBarrageRayHit& B)
+	{
+		return A.Distance < B.Distance;
+	});
 }
 
 EMotionType FWorldSimOwner::LayerToMotionTypeMapping(uint16 Layer)

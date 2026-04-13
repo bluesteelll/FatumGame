@@ -54,6 +54,17 @@ struct FPendingDeathEffect
 	float Scale = 1.0f;
 };
 
+/** One-shot pooled tracer beam (hitscan weapons). Enqueued from sim thread,
+ *  consumed on game thread by ProcessPendingTracers(). */
+struct FPendingNiagaraTracer
+{
+	FVector Start = FVector::ZeroVector;
+	FVector End = FVector::ZeroVector;
+	UNiagaraSystem* Effect = nullptr;
+	float Thickness = 1.f;
+	float Duration = 0.06f;
+};
+
 /**
  * Manages Niagara VFX for Flecs entities using Array Data Interface pattern.
  *
@@ -100,6 +111,9 @@ public:
 	/** Drain pending death effect queue, spawn fire-and-forget VFX. */
 	void ProcessPendingDeathEffects();
 
+	/** Release expired tracer pool slots + spawn any newly-enqueued tracers. Game thread only. */
+	void ProcessPendingTracers();
+
 	// ═══════════════════════════════════════════════════════════════
 	// MPSC API (sim thread → game thread)
 	// ═══════════════════════════════════════════════════════════════
@@ -112,6 +126,9 @@ public:
 
 	/** Queue a death effect for spawning on game thread. Thread-safe. */
 	void EnqueueDeathEffect(const FPendingDeathEffect& Effect);
+
+	/** Queue a pooled tracer for game-thread spawn. Thread-safe (MPSC). */
+	void EnqueueTracer(const FPendingNiagaraTracer& Tracer);
 
 	// ═══════════════════════════════════════════════════════════════
 	// STATIC ACCESSOR
@@ -156,6 +173,29 @@ private:
 	TQueue<FPendingNiagaraRegistration, EQueueMode::Mpsc> PendingRegistrations;
 	TQueue<FSkeletonKey, EQueueMode::Mpsc> PendingRemovals;
 	TQueue<FPendingDeathEffect, EQueueMode::Mpsc> PendingDeathEffects;
+	TQueue<FPendingNiagaraTracer, EQueueMode::Mpsc> PendingTracers;
+
+	// ═══════════════════════════════════════════════════════════════
+	// TRACER POOL (hitscan weapons)
+	// ═══════════════════════════════════════════════════════════════
+
+	struct FTracerPoolSlot
+	{
+		// Raw pointer — components live until Deinitialize; re-parented to TracerHostActor.
+		UNiagaraComponent* Component = nullptr;
+		double ReleaseTimeSeconds = 0.0; // 0 == free
+	};
+
+	static constexpr int32 TracerPoolSize = 32;
+
+	/** Lazy-initialized on first EnqueueTracer drain. */
+	TArray<FTracerPoolSlot> TracerPool;
+
+	/** Parent actor for pooled tracer components. Created on demand (game thread). */
+	AActor* TracerHostActor = nullptr;
+
+	/** Claim a free pool slot (free = ReleaseTimeSeconds == 0.0). Returns nullptr if exhausted. */
+	UNiagaraComponent* AcquireTracerSlot(double NowSeconds);
 
 	// ═══════════════════════════════════════════════════════════════
 	// INTERNAL

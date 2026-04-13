@@ -12,6 +12,7 @@ class UStaticMesh;
 class USkeletalMesh;
 class UAnimMontage;
 class UCurveVector;
+class UNiagaraSystem;
 enum class ECharacterMoveMode : uint8;
 enum class ECharacterPosture : uint8;
 
@@ -34,6 +35,18 @@ enum class EWeaponFireMode : uint8
 	SemiAuto	UMETA(DisplayName = "Semi-Automatic"),
 	FullAuto	UMETA(DisplayName = "Full-Automatic"),
 	Burst		UMETA(DisplayName = "Burst Fire")
+};
+
+/**
+ * Weapon fire delivery method.
+ * Projectile: spawns a physics-simulated entity (existing path).
+ * Hitscan:    instant ray-cast resolved on the simulation thread via FlecsHitscanLibrary.
+ */
+UENUM(BlueprintType)
+enum class EWeaponFireDelivery : uint8
+{
+	Projectile	UMETA(DisplayName = "Projectile (Spawns Entity)"),
+	Hitscan		UMETA(DisplayName = "Hitscan (Instant Ray)")
 };
 
 /**
@@ -137,6 +150,30 @@ public:
 	/** Fire mode */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Firing")
 	EWeaponFireMode FireMode = EWeaponFireMode::SemiAuto;
+
+	/** Fire delivery: Projectile spawns a physics entity, Hitscan resolves an instant ray. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Firing")
+	EWeaponFireDelivery FireDelivery = EWeaponFireDelivery::Projectile;
+
+	/** Maximum hitscan range in cm. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hitscan", meta = (ClampMin = "100", EditCondition = "FireDelivery == EWeaponFireDelivery::Hitscan", EditConditionHides))
+	float HitscanRange = 100000.f;
+
+	/** Scales the impulse applied to dynamic targets hit by the ray. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hitscan", meta = (ClampMin = "0", EditCondition = "FireDelivery == EWeaponFireDelivery::Hitscan", EditConditionHides))
+	float HitscanImpulseScale = 300.f;
+
+	/** Niagara System with User.BeamStart (FVector), User.BeamEnd (FVector), User.BeamThickness (float) parameters. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hitscan|Tracer", meta = (EditCondition = "FireDelivery == EWeaponFireDelivery::Hitscan", EditConditionHides))
+	TObjectPtr<UNiagaraSystem> TracerEffect = nullptr;
+
+	/** Tracer thickness uploaded via User.BeamThickness parameter. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hitscan|Tracer", meta = (ClampMin = "0.1", EditCondition = "FireDelivery == EWeaponFireDelivery::Hitscan", EditConditionHides))
+	float TracerThickness = 1.f;
+
+	/** Tracer visible duration in seconds before the pooled component is released. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hitscan|Tracer", meta = (ClampMin = "0.01", ClampMax = "0.5", EditCondition = "FireDelivery == EWeaponFireDelivery::Hitscan", EditConditionHides))
+	float TracerDuration = 0.06f;
 
 	/** Rounds per minute (600 = 10 shots/sec) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Firing", meta = (ClampMin = "1", ClampMax = "2000"))

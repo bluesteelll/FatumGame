@@ -97,6 +97,14 @@ public:
 	virtual void SphereSearch(FBarrageKey ShapeSource, FVector3d Location, double Radius, const JPH::BroadPhaseLayerFilter& BroadPhaseFilter, const JPH::ObjectLayerFilter& ObjectFilter, const JPH::BodyFilter& BodiesFilter, uint32* OutFoundObjectCount, TArray<uint32>& OutFoundObjects);
 
 	virtual void CastRay(FVector3d CastFrom, FVector3d Direction, const JPH::BroadPhaseLayerFilter& BroadPhaseFilter, const JPH::ObjectLayerFilter& ObjectFilter, const JPH::BodyFilter& BodiesFilter, TSharedPtr<FHitResult> OutHit);
+
+	// Cast a ray and gather every sub-shape intersected, ascending by distance. Direction must already
+	// be scaled to the desired range. OutHits is cleared before filling.
+	virtual void CastRayAllHits(FVector3d CastFrom, FVector3d Direction,
+		const JPH::BroadPhaseLayerFilter& BroadPhaseFilter,
+		const JPH::ObjectLayerFilter& ObjectFilter,
+		const JPH::BodyFilter& BodiesFilter,
+		TArray<struct FBarrageRayHit>& OutHits);
 	
 	//and viola [sic] actually pretty elegant even without type polymorphism by using overloading polymorphism.
 	FBLet CreatePrimitive(FBBoxParams& Definition, FSkeletonKey Outkey, uint16 Layer, bool IsSensor = false, bool forceDynamic = false, bool isMovable = true, float Friction = 0.5f, float Restitution = 0.3f, float LinearDamping = 0.05f);

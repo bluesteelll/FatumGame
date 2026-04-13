@@ -11,6 +11,7 @@ class UFlecsWeaponProfile;
 class USkeletalMesh;
 class UStaticMesh;
 class UAnimMontage;
+class UNiagaraSystem;
 
 /** Sim-thread ring data (no UObject dependencies). */
 struct FPelletRingData
@@ -98,6 +99,30 @@ struct FWeaponStatic
 
 	/** Is burst fire? */
 	bool bIsBurst = false;
+
+	// ─────────────────────────────────────────────────────────
+	// FIRE DELIVERY (Projectile vs Hitscan)
+	// ─────────────────────────────────────────────────────────
+
+	/** 0 = Projectile (spawn entity), 1 = Hitscan (instant ray). Cast from EWeaponFireDelivery. */
+	uint8 FireDelivery = 0;
+
+	/** Hitscan max range (cm). */
+	float HitscanRange = 100000.f;
+
+	/** Hitscan impulse scale applied to dynamic targets. */
+	float HitscanImpulseScale = 300.f;
+
+	/** Tracer Niagara system (pooled). */
+	UNiagaraSystem* TracerEffect = nullptr;
+
+	/** Tracer User.BeamThickness parameter. */
+	float TracerThickness = 1.f;
+
+	/** Tracer visible duration (seconds) before pool slot release. */
+	float TracerDuration = 0.06f;
+
+	bool IsHitscan() const { return FireDelivery == 1; }
 
 	// ─────────────────────────────────────────────────────────
 	// AMMO & RELOAD

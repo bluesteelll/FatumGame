@@ -18,5 +18,12 @@ FProjectileStatic FProjectileStatic::FromProfile(const UFlecsProjectileProfile* 
 	S.FuseTime = Profile->FuseTime;
 	S.bMaintainSpeed = Profile->bMaintainSpeed;
 	S.TargetSpeed = Profile->DefaultSpeed;
+
+	// Damage falloff: precompute InvFalloffRange (0 if End <= Start).
+	S.DamageFalloffStart = Profile->DamageFalloffStart;
+	S.MinDamageMultiplier = Profile->MinDamageMultiplier;
+	const float FalloffSpan = Profile->DamageFalloffEnd - Profile->DamageFalloffStart;
+	S.InvFalloffRange = (FalloffSpan > KINDA_SMALL_NUMBER) ? (1.f / FalloffSpan) : 0.f;
+
 	return S;
 }

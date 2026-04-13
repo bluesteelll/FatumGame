@@ -222,6 +222,7 @@ void UFlecsArtillerySubsystem::Tick(float DeltaTime)
 		NiagaraMgr->ProcessPendingRemovals();
 		NiagaraMgr->UpdateEffects();
 		NiagaraMgr->ProcessPendingDeathEffects();
+		NiagaraMgr->ProcessPendingTracers();
 	}
 
 	// Step 4: Add new ISM instances for projectiles fired since last tick.

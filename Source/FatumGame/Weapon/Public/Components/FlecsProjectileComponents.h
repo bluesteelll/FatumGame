@@ -40,6 +40,19 @@ struct FProjectileStatic
 	/** Target speed if bMaintainSpeed (units/sec) */
 	float TargetSpeed = 0.f;
 
+	// ─────────────────────────────────────────────────────────
+	// DAMAGE FALLOFF (mirrored from UFlecsProjectileProfile)
+	// ─────────────────────────────────────────────────────────
+
+	/** Distance (cm) from spawn at which damage begins attenuating. */
+	float DamageFalloffStart = 5000.f;
+
+	/** Precomputed 1/(End-Start). 0 = falloff disabled. */
+	float InvFalloffRange = 0.f;
+
+	/** Damage multiplier floor at/after DamageFalloffEnd. */
+	float MinDamageMultiplier = 0.3f;
+
 	static FProjectileStatic FromProfile(const UFlecsProjectileProfile* Profile);
 };
 
@@ -75,6 +88,10 @@ struct FProjectileInstance
 	/** Entity that spawned this projectile (for friendly fire, damage attribution) */
 	UPROPERTY(BlueprintReadWrite, Category = "Projectile")
 	int64 OwnerEntityId = 0;
+
+	/** World-space spawn position — used for distance-based damage falloff. */
+	UPROPERTY(BlueprintReadOnly, Category = "Projectile")
+	FVector SpawnPosition = FVector::ZeroVector;
 
 	/** Returns true if this projectile was fired by the given entity (self-damage prevention). */
 	bool IsOwnedBy(uint64 EntityId) const
