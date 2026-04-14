@@ -901,8 +901,19 @@ bool UFlecsContainerLibrary::TransferItem(
 					WI->bFireRequested = false;
 					WI->bFireTriggerPending = false;
 					WI->bReloadRequested = false;
+					// Clear charge state on unequip
+					WI->bIsCharging = false;
+					WI->ChargeAccumulator = 0.f;
+					WI->bWasFireRequestedLastTick = false;
+					WI->bPendingAutoRestart = false;
+					WI->PendingPayload = FChargeShotPayload{};
+					WI->LatchedPayload = FChargeShotPayload{};
 				}
 
+				if (ItemEntity.has<FTagChargingWeapon>())
+				{
+					ItemEntity.remove<FTagChargingWeapon>();
+				}
 				ItemEntity.remove<FEquippedBy>();
 				UE_LOG(LogFlecsContainer, Log, TEXT("TransferItem: Unequipped weapon %lld (moved out of weapon slot)"), ItemEntityId);
 			}

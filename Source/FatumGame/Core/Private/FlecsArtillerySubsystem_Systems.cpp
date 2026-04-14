@@ -136,6 +136,7 @@ void UFlecsArtillerySubsystem::RegisterFlecsComponents()
 	World.component<FMagazineInstance>();
 	World.component<FTagMagazine>();
 	World.component<FTagReloading>();
+	World.component<FTagChargingWeapon>();
 
 	// ─────────────────────────────────────────────────────────
 	// QUICK-LOAD DEVICE COMPONENTS

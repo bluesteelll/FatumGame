@@ -48,7 +48,7 @@ Domain-based vertical folder layout under `Source/FatumGame/`:
 Core/           — Simulation core (FlecsArtillerySubsystem, FSimulationWorker, FLateSyncBridge, FlecsGameTags)
   Components/   — FlecsHealthComponents, FlecsEntityComponents, FlecsInteractionComponents
 Definitions/    — ALL Data Assets & Profiles (30 files)
-Weapon/         — Components/ (Weapon, Projectile, Explosion), Systems/ (DamageCollision, WeaponSystems, Explosion), Library/ (Damage, Weapon)
+Weapon/         — Components/ (Weapon, Projectile, Explosion, Penetration), Systems/ (DamageCollision, Penetration, WeaponSystems, Explosion), Library/ (Damage, Weapon, BulletHit, Hitscan)
 Movement/       — Components/ (Movement), Character systems, FlecsCharacterTypes
 Character/      — FlecsCharacter + all _*.cpp, FatumMovementComponent, FPostureStateMachine
 Abilities/      — Components/ (AbilityTypes, States, Resources), Lifecycle, TickFunctions, CapsuleHelper
@@ -73,13 +73,13 @@ Utils/          — FTimeDilationStack, ConeImpulse, ExplosionUtility, LedgeDete
 | `FlecsProjectileComponents.h` | FProjectileStatic, FProjectileInstance |
 | `FlecsItemComponents.h` | FItemStaticData, FContainerStatic, FItemInstance, FContainerInstance, FQuickLoadStatic, FTagQuickLoadDevice, etc. |
 | `FlecsDestructibleComponents.h` | FDestructibleStatic, FDebrisInstance, FFragmentationData, FPendingFragmentation |
-| `FlecsWeaponComponents.h` | FAimDirection, FPelletRingData, FWeaponStatic, FWeaponInstance, FEquippedBy, EActiveLoadMethod, EWeaponReloadPhase |
+| `FlecsWeaponComponents.h` | FAimDirection, FPelletRingData, FWeaponStatic, FWeaponInstance, FEquippedBy, EActiveLoadMethod, EWeaponReloadPhase, FChargeShotPayload, EChargeAmmoMode, FTagChargingWeapon |
 | `FlecsExplosionComponents.h` | FExplosionStatic, FExplosionContactData, FTagDetonate |
 | `FlecsPenetrationComponents.h` | EPenetrationMaterialCategory, GMaterialTable, FSurfaceIntegrity, FPenetrationStatic, FPenetrationInstance, FPenetrationMaterial |
 | `FlecsDoorComponents.h` | FDoorStatic, FDoorInstance |
 | **Plugin:** `FlecsBarrageComponents.h` | FBarrageBody, FISMRender, FCollisionPair, FTagCollision*, FTagCollisionPenetration |
 
-**Profiles:** PhysicsProfile, RenderProfile, HealthProfile, DamageProfile, ProjectileProfile, ContainerProfile, ItemDefinition, WeaponProfile, InteractionProfile, QuickLoadProfile, ExplosionProfile
+**Profiles:** PhysicsProfile, RenderProfile, HealthProfile, DamageProfile, ProjectileProfile (+distance falloff), ContainerProfile, ItemDefinition, WeaponProfile (dual FireDelivery: Projectile/Hitscan; +Charge fields), InteractionProfile, QuickLoadProfile, ExplosionProfile
 
 ---
 
@@ -139,7 +139,7 @@ WorldItemDespawnSystem → PickupGraceSystem → ProjectileLifetimeSystem → De
 PenetrationSystem → DamageCollisionSystem → BounceCollisionSystem → PickupCollisionSystem → DestructibleCollisionSystem
 ExplosionSystem
 ConstraintBreakSystem → FragmentationSystem → PendingFragmentationSystem
-WeaponEquipSystem → WeaponTickSystem → WeaponReloadSystem → WeaponFireSystem
+WeaponEquipSystem → WeaponChargeSystem → WeaponTickSystem → WeaponReloadSystem → WeaponFireSystem
 DoorSystems → StealthUpdateSystem → VitalsSystems
 DeathCheckSystem → DeadEntityCleanupSystem → CollisionPairCleanupSystem (LAST)
 ```
@@ -186,11 +186,14 @@ UFlecsSpawnLibrary::SpawnProjectileFromEntityDef(World, Definition, Location, Di
 ```
 
 ### Projectile Physics Types
+(Applies when `WeaponProfile.FireDelivery == Projectile`. Hitscan bypasses all of this — no body, instant ray; see Hitscan Weapons section.)
+
 | Bouncing | Gravity | Body Type | Use Case |
 |----------|---------|-----------|----------|
 | No | 0 | Sensor | Laser - flies straight |
 | No | >0 | Dynamic | Grenade - falls, explodes on contact |
 | Yes | any | Dynamic | Ricochet - bounces off walls |
+| — | — | (none) | Hitscan - instant ray, no entity spawned |
 
 ---
 
@@ -509,6 +512,194 @@ Fragments spawned by `FragmentEntity()` inherit `FPenetrationMaterial` from thei
 - `CreateCompoundBody()` — compound shape from FBCompoundSubShape array with per-sub-shape UserData
 - `GetSubShapeUserData()` — read compound sub-shape material via SubShapeID (unwraps decorators)
 - `GetJoltBodyID()` — expose Jolt BodyID for body-specific operations
+- `CastRayAllHits()` — multi-hit ray (NarrowPhaseQuery + `AllHitsRayCastCollector`), returns `TArray<FBarrageRayHit>` sorted ascending by distance. Decoupled POD result (no Jolt headers leaked to gameplay). Used by hitscan + future raycast queries.
+
+### Shared Bullet-Hit Pipeline
+
+`UFlecsBulletHitLibrary::ApplyBulletHit(World, Barrage, ShooterOrProjectile, Target, FBulletHitContext)` is the **single source of truth** for per-impact resolution: damage + crit + distance falloff + penetration + surface degradation + fragmentation trigger + (optional) impulse. Invoked by both the projectile collision path (`PenetrationSystem` / `DamageCollisionSystem`) and the hitscan path (`FlecsHitscanLibrary::FireHitscan`).
+
+- `FBulletHitContext` (POD, const-ref in) — geometry (ImpactPoint, Normal, IncomingDir, SpawnPosition), bullet state (speed/damage/crit/falloff), impulse toggle, `FPenetrationStatic*` master switch, in-out penetration state pointers (budget/multiplier/count/last-id — all-null or all-non-null), cached AABB.
+- `FBulletHitResult` — bTargetKilled, bPenetrated, bRicocheted, AppliedDamage, ExitPoint, PostHitDamageMultiplier.
+- Caller remains responsible for: velocity falloff on penetrating projectiles, teleporting body to ExitPoint, `FTagCollisionProcessed`, `FDeathContactPoint`, `FTagDead`/`FTagDetonate` on projectile, tracer VFX.
+
+---
+
+## Hitscan Weapons
+
+Instant ray-cast weapon delivery. Shares the penetration/damage/degradation/fragmentation pipeline with projectile weapons via `UFlecsBulletHitLibrary::ApplyBulletHit`.
+
+### Fire Delivery vs Fire Mode
+
+Two orthogonal axes on `UFlecsWeaponProfile`:
+
+| Enum | Values | Axis |
+|------|--------|------|
+| `EWeaponFireMode` | SemiAuto / FullAuto / Burst | Trigger behaviour |
+| `EWeaponFireDelivery` | Projectile / Hitscan | How the shot reaches the target |
+
+### Algorithm
+
+```text
+WeaponFireSystem (per pellet):
+  if WeaponStatic.IsHitscan():
+    FlecsHitscanLibrary::FireHitscan(World, Barrage, Shooter, Weapon, MuzzlePos, Dir, ...)
+      → BodyFilter excludes Shooter's Jolt body (no self-hit)
+      → Barrage->CastRayAllHits(Origin, Dir * HitscanRange, ...)   // single BroadPhase traversal
+      → for each FBarrageRayHit (sorted near→far):
+           build FBulletHitContext (SpawnPosition = Origin → distance falloff active)
+           ApplyBulletHit(...) → FBulletHitResult
+           if not bPenetrated → stop (first-hit, non-penetrating)
+           else: RemainingBudget updated, damage multiplier decays via PostHitDamageMultiplier
+      → NiagaraMgr->EnqueueTracer({Start=Muzzle, End=lastHitOrRayEnd, Effect, Thickness, Duration})
+  else:
+    (existing projectile spawn path — unchanged)
+```
+
+### Configuration (UFlecsWeaponProfile, Hitscan-only fields)
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `FireDelivery` | `Projectile` | Projectile spawn or Hitscan ray |
+| `HitscanRange` | 100000 | Max ray length (cm) |
+| `HitscanImpulseScale` | 300 | Multiplier on impulse applied to dynamic targets |
+| `TracerEffect` | nullptr | Niagara system — **must** expose `User.BeamStart` (Vector), `User.BeamEnd` (Vector), `User.BeamThickness` (float) |
+| `TracerThickness` | 1.0 | Uploaded to `User.BeamThickness` |
+| `TracerDuration` | 0.06 | Seconds before pooled component is released |
+
+### Damage Distance Falloff
+
+Added to `UFlecsProjectileProfile` (reused by both projectile and hitscan paths since projectile profile supplies damage behaviour for the ammo type):
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `DamageFalloffStart` | 5000 | Full damage inside this radius (cm) |
+| `DamageFalloffEnd` | 20000 | Reaches `MinDamageMultiplier` at/after this distance |
+| `MinDamageMultiplier` | 0.3 | Floor; set 1.0 to disable |
+
+Mirrored on `FProjectileStatic` with precomputed `InvFalloffRange = 1/(End-Start)` (0 = disabled). `FProjectileInstance::SpawnPosition` is stamped at spawn by `FlecsEntitySpawner`; hitscan passes `Origin` directly as SpawnPosition into `FBulletHitContext`. ApplyBulletHit reads `Ctx.SpawnPosition` → distance = (ImpactPoint - SpawnPosition).Size → lerp factor → multiplier.
+
+### Impulse
+
+Hitscan has no physics body to transfer momentum, so `ApplyBulletHit` synthesises an impulse along `IncomingDir` scaled by `Ctx.ImpulseStrength` when `bApplyImpulse=true`. Projectile path leaves this false — Jolt's contact response already supplied momentum.
+
+### Shooter Exclusion
+
+`FireHitscan` builds a `JPH::BodyFilter` (specifically `IgnoreSingleBodyFilter`) around the shooter's Jolt body ID. Avoids self-hit when the character's capsule sits on the ray origin.
+
+### Tracer Pool (FlecsNiagaraManager)
+
+- 32 pre-allocated `UNiagaraComponent` slots, parented to a lazily-spawned `TracerHostActor` (game thread, on first enqueue drain).
+- `EnqueueTracer(FPendingNiagaraTracer)` is MPSC-safe from sim thread; `ProcessPendingTracers()` runs on game thread from `FlecsArtillerySubsystem`.
+- Slot claim: `AcquireTracerSlot(Now)` scans for `ReleaseTimeSeconds == 0.0` (free); sets `User.BeamStart/BeamEnd` + `BeamThickness`, re-activates component, schedules release at `Now + Duration`.
+- **Exhaustion fallback:** `UNiagaraFunctionLibrary::SpawnSystemAtLocation` with `bAutoDestroy=true` + Verbose log (non-fatal; 32 slots × 0.06 s ≈ 530 shots/s headroom).
+
+### Key Files
+
+- `Source/FatumGame/Weapon/Public/Library/FlecsHitscanLibrary.h` — `FireHitscan()` entrypoint
+- `Source/FatumGame/Weapon/Private/Library/FlecsHitscanLibrary.cpp` — raycast + per-hit loop + tracer enqueue
+- `Source/FatumGame/Weapon/Public/Library/FlecsBulletHitLibrary.h` — `FBulletHitContext`, `FBulletHitResult`, `ApplyBulletHit()`
+- `Source/FatumGame/Weapon/Private/Library/FlecsBulletHitLibrary.cpp` — unified damage/pen/degrade/impulse resolution
+- `Source/FatumGame/Weapon/Private/Systems/WeaponFireSystem.cpp` — per-pellet Projectile/Hitscan branch
+- `Source/FatumGame/Rendering/Public/FlecsNiagaraManager.h` + cpp — `FPendingNiagaraTracer`, `EnqueueTracer`, `ProcessPendingTracers`, pooled `UNiagaraComponent[32]`
+- `Plugins/Barrage/Source/Barrage/Public/FBarrageRayHit.h` — POD ray hit result
+- `Plugins/Barrage/Source/Barrage/Public/CollisionDetectionFilters/AllHitsRayCastCollector.h` — multi-hit Jolt collector
+- `Plugins/Barrage/Source/Barrage/Public/BarrageDispatch.h` / `FWorldSimOwner.h` — `CastRayAllHits()`
+
+---
+
+## Charge Weapons
+
+Hold-to-charge trigger behaviour: fire input accumulates a charge meter; on release (or at max) a single charged shot emits with scaled stats and optional multi-ammo burst. Mutually exclusive with `bEnableTriggerPull`.
+
+### Trigger Flow
+
+```text
+Fire pressed (mag > 0) → bIsCharging=true, FTagChargingWeapon added
+  ChargeAccumulator += DT (clamped to MaxChargeTime)
+  if Accum >= Max && bAutoFireAtMaxCharge → emit, bPendingAutoRestart (until release)
+  Fire released:
+    Accum < MinChargeTime → cancel (no shot, no ammo)
+    Accum >= MinChargeTime → t = Accum/Max → shapedT = Curve(t) or t
+       build FChargeShotPayload{mults, AmmoCount} → WeaponInstance.PendingPayload
+       bIsCharging=false, FTagChargingWeapon removed
+WeaponFireSystem: Pending → Latched, fire once (multi-ammo loop), clear Latched
+```
+
+### FireMode × Charge Matrix
+
+| FireMode | bAutoFireAtMaxCharge | bAutoRestartCharge | Behaviour |
+|----------|----------------------|--------------------|-----------|
+| SemiAuto | any | any | Charge/release per trigger press |
+| FullAuto | **true** | false | Auto-emits at max; must release+repress to recharge |
+| FullAuto | **true** | true | Auto-emits at max, auto-restarts while held (cycling) |
+| FullAuto | false | — | **FORBIDDEN** — `checkf` in `FWeaponStatic::FromProfile` |
+| Burst    | any | any | Treated like SemiAuto for charge purposes |
+
+### Data Model
+
+- `FChargeShotPayload` (plain struct, no GENERATED_BODY): `bValid`, `ShapedT`, per-dimension multipliers, `AmmoCount`. `bValid=false` = empty.
+- **Two slots on `FWeaponInstance`** with strict ownership:
+  - `PendingPayload` — owned by `WeaponChargeSystem` (writes on emit; clears on cancel). `WeaponFireSystem` only reads/consumes.
+  - `LatchedPayload` — owned by `WeaponFireSystem` (Pending→Latched copy at tick-top; cleared after successful fire OR by reload-initiation site). `WeaponChargeSystem` never touches it.
+- `FTagChargingWeapon` — added/removed around active charge (query optimization / VFX hook).
+- Sim-thread fields on `FWeaponInstance`: `bIsCharging`, `ChargeAccumulator`, `bWasFireRequestedLastTick`, `bPendingAutoRestart`, `LastShotAmmoTypeIdx`.
+
+### Configuration (UFlecsWeaponProfile, Charge-only)
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `bEnableCharge` | false | Master enable. All below ignored when false. |
+| `MinChargeTime` | 0.2 | Minimum hold (s) for release to produce a shot |
+| `MaxChargeTime` | 1.5 | Saturation point (s); must exceed Min |
+| `bAutoFireAtMaxCharge` | false | Auto-fire when full (no release needed) |
+| `bAutoRestartCharge` | false | With AutoFire, restart charge while held |
+| `ChargeCurve` | nullptr | `UCurveFloat` remapping [0,1] → [0,1] (null = linear) |
+| `DamageMaxMultiplier` | 1.0 | Damage at t=1 |
+| `ProjectileSpeedMaxMultiplier` | 1.0 | Projectile speed at t=1 |
+| `PenetrationMaxMultiplier` | 1.0 | Penetration budget at t=1 |
+| `SpreadMaxMultiplier` | 1.0 | Spread at t=1 (<1 tightens) |
+| `BloomMaxMultiplier` | 1.0 | SpreadPerShot scalar on charged shot |
+| `RecoilMaxMultiplier` | 1.0 | **Reserved** — not wired |
+| `ImpulseMaxMultiplier` | 1.0 | **Reserved** — not wired |
+| `ChargeAmmoMode` | `Fixed` | `Fixed` = `AmmoPerShot`; `ScalesWithCharge` = lerp |
+| `MaxAmmoAtFullCharge` | 1 | Upper end of ammo lerp when `ScalesWithCharge` |
+
+### Scaling Application
+
+Applied at **6 local-copy mutation sites** inside `WeaponFireSystem` (no new override components): Projectile Speed, Spread, Hitscan Damage, Hitscan Penetration, Projectile Damage, Projectile Penetration. Bloom multiplier scales `SpreadPerShot` once for the burst.
+
+### Multi-Ammo Burst
+
+One "charged shot" may discharge N rounds in one tick:
+- `Fixed` mode: `N = AmmoPerShot` (legacy behaviour).
+- `ScalesWithCharge`: `N = round(lerp(AmmoPerShot, MaxAmmoAtFullCharge, shapedT))`.
+
+Loop is **inside `WeaponFireSystem`** (not a separate system). Bloom growth + `FireCooldownRemaining` update apply **ONCE per whole burst** (outside loop). Per-round: ammo pop + projectile/hitscan emit. `ShotsFiredTotal` increments per round for pattern indexing.
+
+### Cancel Hooks
+
+- **Reload start** (`WeaponReloadSystem`) — clears `LatchedPayload` (FireSystem ownership).
+- **Holster** (`WeaponEquipSystem`) — clears all charge state.
+- **Inventory drag-out** (`FlecsContainerLibrary`) — mirror clear.
+- **Any non-Idle reload phase** — `WeaponChargeSystem` step 2 cancels Pending + `bIsCharging` if `IsReloading()`, `bCycling`, or `ReloadPhase != Idle`.
+- **Empty mag** blocks charge start.
+
+### Empty-Latched Abort
+
+If `LatchedPayload.bValid && mag empty at fire time` → latch is consumed with **NO cooldown, NO recoil, NO bloom**. Shot effectively never happened. Prevents locked-out weapon state.
+
+### Key Files
+
+- `Source/FatumGame/Weapon/Private/Systems/WeaponChargeSystem.cpp` — NEW 7-step state machine
+- `Source/FatumGame/Weapon/Public/Components/FlecsWeaponComponents.h` — `FChargeShotPayload`, `EChargeAmmoMode`, `FTagChargingWeapon`, charge fields on Static/Instance
+- `Source/FatumGame/Weapon/Private/Components/FlecsWeaponComponents.cpp` — `FromProfile` charge copy + validation `checkf`s
+- `Source/FatumGame/Definitions/Public/FlecsWeaponProfile.h` — Charge config block
+- `Source/FatumGame/Weapon/Private/Systems/WeaponFireSystem.cpp` — multi-ammo loop + multiplier application + charge-gated fire decision
+- `Source/FatumGame/Weapon/Private/Systems/WeaponReloadSystem.cpp` — clears `LatchedPayload` on reload initiation
+- `Source/FatumGame/Weapon/Private/Systems/WeaponEquipSystem.cpp` — clears all charge state on holster
+- `Source/FatumGame/Item/Private/Library/FlecsContainerLibrary.cpp` — mirror clear on inventory-drag unequip
+- `Source/FatumGame/Core/Private/FlecsArtillerySubsystem_Systems.cpp` — registers `FTagChargingWeapon`
+- `Source/FatumGame/Weapon/Private/Systems/FlecsArtillerySubsystem_WeaponSystems.cpp` — `SetupWeaponChargeSystem()` between Equip and Tick
 
 ---
 

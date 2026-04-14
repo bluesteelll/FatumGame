@@ -69,31 +69,49 @@ void UFlecsArtillerySubsystem::SetupWeaponFireSystem()
 			// Unlimited ammo requires ProjectileDefinition on weapon
 			if (Static->bUnlimitedAmmo && !Static->ProjectileDefinition) return;
 
-			// Check fire request: continuous hold OR pending trigger (survives Start+Stop batching)
-			// Trigger pull weapons require CONTINUOUS hold — latched trigger not sufficient
-			if (Static->bEnableTriggerPull)
+			// ── PENDING → LATCHED promotion (charge ownership handoff) ──
+			// WeaponChargeSystem writes Pending; WeaponFireSystem owns Latched.
+			// One-shot atomic copy at tick-top, then clear Pending.
+			if (Weapon.PendingPayload.bValid && !Weapon.LatchedPayload.bValid)
 			{
-				if (!Weapon.bFireRequested)
-				{
-					// Fire released — cancel trigger pull, consume pending trigger
-					if (Weapon.bTriggerPulling)
-					{
-						Weapon.bTriggerPulling = false;
-						Weapon.TriggerPullTimer = 0.f;
-					}
-					Weapon.bFireTriggerPending = false;
-					return;
-				}
+				Weapon.LatchedPayload = Weapon.PendingPayload;
+				Weapon.PendingPayload = FChargeShotPayload{};
+			}
+
+			// ── CHARGE FIRE-DECISION GATE ──
+			// Charge weapons fire ONLY from a latched payload — bypass legacy press/trigger-pull/auto.
+			if (Static->bEnableCharge)
+			{
+				if (!Weapon.LatchedPayload.bValid) return;
 			}
 			else
 			{
-				if (!Weapon.bFireRequested && !Weapon.bFireTriggerPending)
+				// Check fire request: continuous hold OR pending trigger (survives Start+Stop batching)
+				// Trigger pull weapons require CONTINUOUS hold — latched trigger not sufficient
+				if (Static->bEnableTriggerPull)
+				{
+					if (!Weapon.bFireRequested)
+					{
+						// Fire released — cancel trigger pull, consume pending trigger
+						if (Weapon.bTriggerPulling)
+						{
+							Weapon.bTriggerPulling = false;
+							Weapon.TriggerPullTimer = 0.f;
+						}
+						Weapon.bFireTriggerPending = false;
+						return;
+					}
+				}
+				else
+				{
+					if (!Weapon.bFireRequested && !Weapon.bFireTriggerPending)
+						return;
+				}
+
+				// Semi-auto: block if already fired while trigger held
+				if (!Static->bIsAutomatic && !Static->bIsBurst && Weapon.bHasFiredSincePress)
 					return;
 			}
-
-			// Semi-auto: block if already fired while trigger held
-			if (!Static->bIsAutomatic && !Static->bIsBurst && Weapon.bHasFiredSincePress)
-				return;
 
 			// Post-fire cycling: must cycle before next shot (bolt/pump)
 			if (Static->bRequiresCycling && Weapon.bNeedsCycle && !Weapon.bCycling)
@@ -117,8 +135,23 @@ void UFlecsArtillerySubsystem::SetupWeaponFireSystem()
 				return;
 			}
 
+			// ── CHARGE multipliers (latch active = scaled stats; otherwise = 1.0 passthrough) ──
+			const bool bUsingLatch = Weapon.LatchedPayload.bValid;
+			const FChargeShotPayload& L = Weapon.LatchedPayload;
+			const float ChargeDmgMul   = bUsingLatch ? L.DamageMul          : 1.f;
+			const float ChargeSpdMul   = bUsingLatch ? L.ProjectileSpeedMul : 1.f;
+			const float ChargePenMul   = bUsingLatch ? L.PenetrationMul     : 1.f;
+			const float ChargeSprdMul  = bUsingLatch ? L.SpreadMul          : 1.f;
+			const float ChargeBlmMul   = bUsingLatch ? L.BloomMul           : 1.f;
+
+			// Ammo rounds to discharge in this fire tick (1 for non-charge / Fixed mode).
+			const int32 AmmoCount = bUsingLatch
+				? FMath::Max(1, L.AmmoCount)
+				: FMath::Max(1, Static->AmmoPerShot);
+
 			// ── Trigger pull delay (revolver double-action) ──
-			if (Static->bEnableTriggerPull)
+			// Skip for charge weapons (charge already gated upstream by latched payload).
+			if (Static->bEnableTriggerPull && !Static->bEnableCharge)
 			{
 				const float DeltaTime = WeaponEntity.world().get_info()->delta_time;
 
@@ -217,81 +250,13 @@ void UFlecsArtillerySubsystem::SetupWeaponFireSystem()
 				MuzzleLocation = MuzzleTransform.TransformPosition(Static->MuzzleOffset);
 			}
 
-			// ─────────────────────────────────────────────────────
-			// RESOLVE PROJECTILE DEFINITION FROM MAGAZINE AMMO STACK
-			// ─────────────────────────────────────────────────────
-			UFlecsEntityDefinition* ProjDef = nullptr;
-			float AmmoDamageMult = 1.f;
-			float AmmoSpeedMult = 1.f;
-
-			if (Static->bUnlimitedAmmo)
-			{
-				ProjDef = Static->ProjectileDefinition;
-			}
-			else
-			{
-				flecs::entity MagEntity = World.entity(static_cast<flecs::entity_t>(Weapon.InsertedMagazineId));
-				checkf(MagEntity.is_valid(), TEXT("WeaponFireSystem: InsertedMagazineId %lld is invalid"), Weapon.InsertedMagazineId);
-
-				FMagazineInstance* MagInst = MagEntity.try_get_mut<FMagazineInstance>();
-				const FMagazineStatic* MagStatic = MagEntity.try_get<FMagazineStatic>();
-				checkf(MagInst && MagStatic, TEXT("WeaponFireSystem: Magazine entity missing components"));
-
-				// Fire chambered round first, then chamber next from magazine
-				int32 AmmoTypeIdx;
-				if (Weapon.bChambered)
-				{
-					AmmoTypeIdx = Weapon.ChamberedAmmoTypeIdx;
-					Weapon.bChambered = false;
-
-					// Chamber next round from magazine (if available)
-					if (MagInst->AmmoCount > 0)
-					{
-						int32 NextIdx = MagInst->Pop();
-						Weapon.bChambered = true;
-						Weapon.ChamberedAmmoTypeIdx = static_cast<uint8>(NextIdx);
-					}
-				}
-				else
-				{
-					// No chambered round — pop directly from magazine
-					AmmoTypeIdx = MagInst->Pop();
-					checkf(AmmoTypeIdx >= 0, TEXT("WeaponFireSystem: Magazine is empty and no chambered round"));
-				}
-
-				checkf(AmmoTypeIdx >= 0 && AmmoTypeIdx < MagStatic->AcceptedAmmoTypeCount,
-					TEXT("WeaponFireSystem: AmmoTypeIdx %d out of range (%d)"), AmmoTypeIdx, MagStatic->AcceptedAmmoTypeCount);
-
-				UFlecsAmmoTypeDefinition* AmmoType = MagStatic->AcceptedAmmoTypes[AmmoTypeIdx];
-				checkf(AmmoType && AmmoType->ProjectileDefinition, TEXT("WeaponFireSystem: AmmoType or its ProjectileDefinition is null"));
-
-				ProjDef = AmmoType->ProjectileDefinition;
-				AmmoDamageMult = AmmoType->DamageMultiplier;
-				AmmoSpeedMult = AmmoType->SpeedMultiplier;
-			}
-
-			check(ProjDef);
-			UFlecsProjectileProfile* ProjProfile = ProjDef->ProjectileProfile;
-			if (!ProjProfile)
-			{
-				UE_LOG(LogTemp, Error, TEXT("WEAPON: ProjectileDefinition '%s' has no ProjectileProfile!"),
-					*ProjDef->EntityName.ToString());
-				return;
-			}
-			UFlecsPhysicsProfile* PhysProfile = ProjDef->PhysicsProfile;
-			UFlecsRenderProfile* RenderProfile = ProjDef->RenderProfile;
-
-			const float CollisionRadius = PhysProfile ? PhysProfile->CollisionRadius : 30.f;
-			const float GravityFactor = PhysProfile ? PhysProfile->GravityFactor : 0.f;
-			const float ProjFriction = PhysProfile ? PhysProfile->Friction : 0.2f;
-			const float ProjRestitution = PhysProfile ? PhysProfile->Restitution : 0.3f;
-			const float ProjLinearDamping = PhysProfile ? PhysProfile->LinearDamping : 0.0f;
-			const float ProjMass = PhysProfile ? PhysProfile->Mass : 0.1f;
-			const float ProjAngularDamping = PhysProfile ? PhysProfile->AngularDamping : 0.05f;
-			const bool bIsBouncing = ProjProfile->IsBouncing();
-			// ALL projectiles use dynamic body — sensors tunnel at high speed (no CCD).
-			// Non-bouncing non-gravity projectiles: dynamic + restitution=0 + gravity=0.
-			const bool bNeedsDynamic = true;
+			// ──────────────────────────────────────────────────────────────────
+			// MULTI-AMMO BURST: outer loop discharges AmmoCount rounds in one tick.
+			// Each round resolves its own ammo type (may differ in mixed magazines),
+			// builds its own pellet pattern (fresh bloom sample), and spawns its pellets.
+			// Aim/muzzle/spawn-direction (computed below) are shared across rounds.
+			// ──────────────────────────────────────────────────────────────────
+			int32 RoundsFired = 0;
 
 			// ─────────────────────────────────────────────────────
 			// AIM CORRECTION: Raycast from camera to find actual target,
@@ -345,7 +310,107 @@ void UFlecsArtillerySubsystem::SetupWeaponFireSystem()
 				SpawnDirection = FireDirection;
 			}
 
-			float Speed = ProjProfile->DefaultSpeed * Static->ProjectileSpeedMultiplier * AmmoSpeedMult;
+			// ═══════════════════════════════════════════════════════════════
+			// PER-ROUND LOOP — fires AmmoCount rounds (1 for legacy, N for charged burst).
+			// Empty mag mid-burst: partial fire (RoundsFired < AmmoCount), no underflow crash.
+			// ═══════════════════════════════════════════════════════════════
+			for (int32 RoundIdx = 0; RoundIdx < AmmoCount; ++RoundIdx)
+			{
+				// ─────────────────────────────────────────────────────
+				// RESOLVE PROJECTILE DEFINITION FROM MAGAZINE AMMO STACK
+				// ─────────────────────────────────────────────────────
+				UFlecsEntityDefinition* ProjDef = nullptr;
+				float AmmoDamageMult = 1.f;
+				float AmmoSpeedMult = 1.f;
+				int32 ThisRoundAmmoTypeIdx = -1;
+
+				if (Static->bUnlimitedAmmo)
+				{
+					ProjDef = Static->ProjectileDefinition;
+				}
+				else
+				{
+					flecs::entity MagEntity = World.entity(static_cast<flecs::entity_t>(Weapon.InsertedMagazineId));
+					checkf(MagEntity.is_valid(), TEXT("WeaponFireSystem: InsertedMagazineId %lld is invalid"), Weapon.InsertedMagazineId);
+
+					FMagazineInstance* MagInst = MagEntity.try_get_mut<FMagazineInstance>();
+					const FMagazineStatic* MagStatic = MagEntity.try_get<FMagazineStatic>();
+					checkf(MagInst && MagStatic, TEXT("WeaponFireSystem: Magazine entity missing components"));
+
+					// Mid-burst empty check: bail out cleanly (partial fire). Pre-fire empty path
+					// upstream guarantees first round always has ammo.
+					if (!Weapon.bChambered && MagInst->AmmoCount <= 0)
+					{
+						break;
+					}
+
+					// Fire chambered round first, then chamber next from magazine
+					int32 AmmoTypeIdx;
+					if (Weapon.bChambered)
+					{
+						AmmoTypeIdx = Weapon.ChamberedAmmoTypeIdx;
+						Weapon.bChambered = false;
+
+						// Chamber next round from magazine (if available)
+						if (MagInst->AmmoCount > 0)
+						{
+							int32 NextIdx = MagInst->Pop();
+							Weapon.bChambered = true;
+							Weapon.ChamberedAmmoTypeIdx = static_cast<uint8>(NextIdx);
+						}
+					}
+					else
+					{
+						// No chambered round — pop directly from magazine
+						AmmoTypeIdx = MagInst->Pop();
+						checkf(AmmoTypeIdx >= 0, TEXT("WeaponFireSystem: Magazine is empty and no chambered round"));
+					}
+
+					checkf(AmmoTypeIdx >= 0 && AmmoTypeIdx < MagStatic->AcceptedAmmoTypeCount,
+						TEXT("WeaponFireSystem: AmmoTypeIdx %d out of range (%d)"), AmmoTypeIdx, MagStatic->AcceptedAmmoTypeCount);
+
+					UFlecsAmmoTypeDefinition* AmmoType = MagStatic->AcceptedAmmoTypes[AmmoTypeIdx];
+					checkf(AmmoType && AmmoType->ProjectileDefinition, TEXT("WeaponFireSystem: AmmoType or its ProjectileDefinition is null"));
+
+					ProjDef = AmmoType->ProjectileDefinition;
+					AmmoDamageMult = AmmoType->DamageMultiplier;
+					AmmoSpeedMult = AmmoType->SpeedMultiplier;
+					ThisRoundAmmoTypeIdx = AmmoTypeIdx;
+
+					if (bUsingLatch && Weapon.LastShotAmmoTypeIdx != -1
+						&& Weapon.LastShotAmmoTypeIdx != static_cast<int8>(ThisRoundAmmoTypeIdx))
+					{
+						UE_LOG(LogTemp, VeryVerbose, TEXT("Mixed ammo types in charged burst (entity=%lld round=%d)"),
+							static_cast<int64>(WeaponEntity.id()), RoundIdx);
+					}
+					Weapon.LastShotAmmoTypeIdx = static_cast<int8>(ThisRoundAmmoTypeIdx);
+				}
+
+				check(ProjDef);
+				UFlecsProjectileProfile* ProjProfile = ProjDef->ProjectileProfile;
+				if (!ProjProfile)
+				{
+					UE_LOG(LogTemp, Error, TEXT("WEAPON: ProjectileDefinition '%s' has no ProjectileProfile!"),
+						*ProjDef->EntityName.ToString());
+					break;
+				}
+				UFlecsPhysicsProfile* PhysProfile = ProjDef->PhysicsProfile;
+				UFlecsRenderProfile* RenderProfile = ProjDef->RenderProfile;
+
+				const float CollisionRadius = PhysProfile ? PhysProfile->CollisionRadius : 30.f;
+				const float GravityFactor = PhysProfile ? PhysProfile->GravityFactor : 0.f;
+				const float ProjFriction = PhysProfile ? PhysProfile->Friction : 0.2f;
+				const float ProjRestitution = PhysProfile ? PhysProfile->Restitution : 0.3f;
+				const float ProjLinearDamping = PhysProfile ? PhysProfile->LinearDamping : 0.0f;
+				const float ProjMass = PhysProfile ? PhysProfile->Mass : 0.1f;
+				const float ProjAngularDamping = PhysProfile ? PhysProfile->AngularDamping : 0.05f;
+				const bool bIsBouncing = ProjProfile->IsBouncing();
+				// ALL projectiles use dynamic body — sensors tunnel at high speed (no CCD).
+				// Non-bouncing non-gravity projectiles: dynamic + restitution=0 + gravity=0.
+				const bool bNeedsDynamic = true;
+
+				// Charge speed multiplier folded in here (was the ProjectileSpeedMultiplier mutation site).
+				float Speed = ProjProfile->DefaultSpeed * Static->ProjectileSpeedMultiplier * AmmoSpeedMult * ChargeSpdMul;
 
 			// ─────────────────────────────────────────────────────
 			// SPREAD: BaseSpread * BaseMultiplier + Bloom * BloomMultiplier
@@ -368,7 +433,7 @@ void UFlecsArtillerySubsystem::SetupWeaponFireSystem()
 				EffectiveSpread = Static->BaseSpread * BaseMult + Bloom;
 			}
 			// Decidegrees → radians (÷10 → degrees → radians)
-			const float SpreadRadians = FMath::DegreesToRadians(EffectiveSpread * 0.1f);
+			const float SpreadRadians = FMath::DegreesToRadians(EffectiveSpread * 0.1f) * ChargeSprdMul;
 
 			// ─────────────────────────────────────────────────────────
 			// PELLET DIRECTIONS
@@ -448,7 +513,7 @@ void UFlecsArtillerySubsystem::SetupWeaponFireSystem()
 				if (ProjDef->DamageProfile)
 				{
 					HitscanDmg = FDamageStatic::FromProfile(ProjDef->DamageProfile);
-					HitscanDmg.Damage *= Static->DamageMultiplier * AmmoDamageMult;
+					HitscanDmg.Damage *= Static->DamageMultiplier * AmmoDamageMult * ChargeDmgMul;
 					bHaveHitscanDmg = true;
 				}
 				if (ProjProfile)
@@ -459,6 +524,7 @@ void UFlecsArtillerySubsystem::SetupWeaponFireSystem()
 				if (ProjProfile && ProjProfile->bPenetrating)
 				{
 					HitscanPen = FPenetrationStatic::FromProfile(ProjProfile);
+					HitscanPen.PenetrationBudget *= ChargePenMul;
 					bHaveHitscanPen = true;
 				}
 				HitscanNiagara = UFlecsNiagaraManager::Get(GetWorld());
@@ -545,7 +611,7 @@ void UFlecsArtillerySubsystem::SetupWeaponFireSystem()
 				if (ProjDef->DamageProfile)
 				{
 					FDamageStatic DmgStatic = FDamageStatic::FromProfile(ProjDef->DamageProfile);
-					DmgStatic.Damage *= Static->DamageMultiplier * AmmoDamageMult;
+					DmgStatic.Damage *= Static->DamageMultiplier * AmmoDamageMult * ChargeDmgMul;
 					ProjEntity.set<FDamageStatic>(DmgStatic);
 				}
 
@@ -556,6 +622,7 @@ void UFlecsArtillerySubsystem::SetupWeaponFireSystem()
 				if (ProjProfile->bPenetrating)
 				{
 					FPenetrationStatic PenStatic = FPenetrationStatic::FromProfile(ProjProfile);
+					PenStatic.PenetrationBudget *= ChargePenMul;
 					ProjEntity.set<FPenetrationStatic>(PenStatic);
 
 					FPenetrationInstance PenInst;
@@ -610,20 +677,35 @@ void UFlecsArtillerySubsystem::SetupWeaponFireSystem()
 					TargetPoint.X, TargetPoint.Y, TargetPoint.Z);
 			}
 
-			// Ammo was already consumed by MagInst->Pop() above (for non-unlimited).
-			// Read current magazine state for UI.
-
-			// Increment bloom (CurrentBloom = bloom only, capped at MaxBloom)
-			Weapon.CurrentBloom = FMath::Min(Weapon.CurrentBloom + Static->SpreadPerShot, Static->MaxBloom);
-			Weapon.TimeSinceLastShot = 0.f;
-
-			// Enqueue shot-fired event for game thread recoil
+			// Enqueue shot-fired event for game thread recoil (per round in burst)
 			{
 				FShotFiredEvent ShotEvent;
 				ShotEvent.WeaponEntityId = static_cast<int64>(WeaponEntity.id());
-				ShotEvent.ShotIndex = Weapon.ShotsFiredTotal++;
+				ShotEvent.ShotIndex = Weapon.ShotsFiredTotal + RoundsFired;
 				PendingShotEvents.Enqueue(ShotEvent);
 			}
+
+			++RoundsFired;
+			} // end RoundIdx for-loop (multi-ammo burst)
+
+			// ═══════════════════════════════════════════════════════════════
+			// PER-BURST BOOKKEEPING (runs once, regardless of AmmoCount).
+			// Empty-mag-on-latched handling: if nothing fired but latch was valid,
+			// consume latch silently with no cooldown/recoil (charge wasted on empty).
+			// ═══════════════════════════════════════════════════════════════
+			if (RoundsFired == 0)
+			{
+				if (bUsingLatch)
+				{
+					Weapon.LatchedPayload = FChargeShotPayload{};
+				}
+				return;
+			}
+
+			// Bloom growth ONCE per whole burst (charge-scaled)
+			Weapon.CurrentBloom = FMath::Min(Weapon.CurrentBloom + Static->SpreadPerShot * ChargeBlmMul, Static->MaxBloom);
+			Weapon.TimeSinceLastShot = 0.f;
+			Weapon.ShotsFiredTotal += RoundsFired;
 
 			// Get ammo count from magazine for UI (+1 if chambered)
 			int32 CurrentAmmoForUI = Weapon.bChambered ? 1 : 0;
@@ -663,6 +745,12 @@ void UFlecsArtillerySubsystem::SetupWeaponFireSystem()
 			// If cooldown was -0.003 when we fire, += FireInterval gives 0.097
 			// instead of 0.1, compensating for the overshoot.
 			Weapon.FireCooldownRemaining += Static->FireInterval;
+
+			// Charge latch is consumed by this burst
+			if (bUsingLatch)
+			{
+				Weapon.LatchedPayload = FChargeShotPayload{};
+			}
 
 			// Start post-fire cycling (bolt/pump must cycle before next shot)
 			if (Static->bRequiresCycling)

@@ -12,6 +12,7 @@ class UStaticMesh;
 class USkeletalMesh;
 class UAnimMontage;
 class UCurveVector;
+class UCurveFloat;
 class UNiagaraSystem;
 enum class ECharacterMoveMode : uint8;
 enum class ECharacterPosture : uint8;
@@ -47,6 +48,18 @@ enum class EWeaponFireDelivery : uint8
 {
 	Projectile	UMETA(DisplayName = "Projectile (Spawns Entity)"),
 	Hitscan		UMETA(DisplayName = "Hitscan (Instant Ray)")
+};
+
+/**
+ * How charged-shot ammo count is determined.
+ * Fixed:            one "shot" always consumes AmmoPerShot rounds (legacy behavior).
+ * ScalesWithCharge: ammo count scales from AmmoPerShot at t=0 to MaxAmmoAtFullCharge at t=1.
+ */
+UENUM(BlueprintType)
+enum class EChargeAmmoMode : uint8
+{
+	Fixed             UMETA(DisplayName = "Fixed (AmmoPerShot)"),
+	ScalesWithCharge  UMETA(DisplayName = "Scales With Charge")
 };
 
 /**
@@ -200,6 +213,88 @@ public:
 	 *  All rings rotate by the same random angle per shot. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Firing")
 	TArray<FPelletRing> PelletRings;
+
+	// ═══════════════════════════════════════════════════════════════
+	// CHARGE SHOT (hold-to-charge, multi-ammo burst on release)
+	// When enabled, fire input charges the weapon rather than firing
+	// immediately. On release (or at max if bAutoFireAtMaxCharge),
+	// a single "charged shot" fires with scaled damage/speed/penetration/
+	// spread/bloom and may discharge multiple rounds in one tick.
+	// ═══════════════════════════════════════════════════════════════
+
+	/** Master enable for charge-shot behavior. When false, all other Charge fields ignored. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Charge")
+	bool bEnableCharge = false;
+
+	/** Minimum hold time (seconds) before release produces a shot. Shorter release = no shot, no ammo. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Charge",
+		meta = (ClampMin = "0.01", EditCondition = "bEnableCharge", EditConditionHides))
+	float MinChargeTime = 0.2f;
+
+	/** Maximum hold time (seconds). Charge saturates here. Must be > MinChargeTime. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Charge",
+		meta = (ClampMin = "0.02", EditCondition = "bEnableCharge", EditConditionHides))
+	float MaxChargeTime = 1.5f;
+
+	/** If true, auto-fires when MaxChargeTime is reached (player doesn't need to release). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Charge",
+		meta = (EditCondition = "bEnableCharge", EditConditionHides))
+	bool bAutoFireAtMaxCharge = false;
+
+	/** If true (with bAutoFireAtMaxCharge), after auto-fire the charge restarts while fire held. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Charge",
+		meta = (EditCondition = "bEnableCharge && bAutoFireAtMaxCharge", EditConditionHides))
+	bool bAutoRestartCharge = false;
+
+	/** Optional shaping curve mapping raw charge [0,1] → shaped [0,1]. Null = linear. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Charge",
+		meta = (EditCondition = "bEnableCharge", EditConditionHides))
+	TObjectPtr<UCurveFloat> ChargeCurve;
+
+	/** Damage multiplier at full charge (1.0 = no scaling). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Charge",
+		meta = (ClampMin = "0.1", EditCondition = "bEnableCharge", EditConditionHides))
+	float DamageMaxMultiplier = 1.f;
+
+	/** Projectile speed multiplier at full charge. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Charge",
+		meta = (ClampMin = "0.1", EditCondition = "bEnableCharge", EditConditionHides))
+	float ProjectileSpeedMaxMultiplier = 1.f;
+
+	/** Penetration budget multiplier at full charge. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Charge",
+		meta = (ClampMin = "0.1", EditCondition = "bEnableCharge", EditConditionHides))
+	float PenetrationMaxMultiplier = 1.f;
+
+	/** Spread multiplier at full charge (< 1 = tighter shot on full charge). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Charge",
+		meta = (ClampMin = "0", EditCondition = "bEnableCharge", EditConditionHides))
+	float SpreadMaxMultiplier = 1.f;
+
+	/** Bloom-growth multiplier at full charge (scales SpreadPerShot on the charged shot). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Charge",
+		meta = (ClampMin = "0", EditCondition = "bEnableCharge", EditConditionHides))
+	float BloomMaxMultiplier = 1.f;
+
+	/** Recoil multiplier at full charge (reserved — not yet applied). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Charge",
+		meta = (ClampMin = "0", EditCondition = "bEnableCharge", EditConditionHides))
+	float RecoilMaxMultiplier = 1.f;
+
+	/** Impulse multiplier at full charge (reserved — not yet applied). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Charge",
+		meta = (ClampMin = "0", EditCondition = "bEnableCharge", EditConditionHides))
+	float ImpulseMaxMultiplier = 1.f;
+
+	/** How the charged shot chooses how many rounds to discharge in one tick. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Charge",
+		meta = (EditCondition = "bEnableCharge", EditConditionHides))
+	EChargeAmmoMode ChargeAmmoMode = EChargeAmmoMode::Fixed;
+
+	/** Ammo count at full charge when ChargeAmmoMode=ScalesWithCharge. Lerps from AmmoPerShot at t=0. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Charge",
+		meta = (ClampMin = "1", EditCondition = "bEnableCharge && ChargeAmmoMode == EChargeAmmoMode::ScalesWithCharge", EditConditionHides))
+	int32 MaxAmmoAtFullCharge = 1;
 
 	// ═══════════════════════════════════════════════════════════════
 	// TRIGGER PULL (revolver-style delayed fire)

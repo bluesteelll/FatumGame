@@ -459,6 +459,7 @@ private:
 	/** Weapon tick, reload, and fire systems. */
 	void SetupWeaponSystems();
 	void SetupWeaponEquipSystem();
+	void SetupWeaponChargeSystem();
 	void SetupWeaponTickSystem();
 	void SetupWeaponReloadSystem();
 	void SetupWeaponFireSystem();

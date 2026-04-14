@@ -197,6 +197,8 @@ void UFlecsArtillerySubsystem::SetupWeaponReloadSystem()
 					}
 
 					Weapon.RoundsInsertedThisReload = 0;
+					// Reload cancels any latched charge shot
+					Weapon.LatchedPayload = FChargeShotPayload{};
 					Entity.add<FTagReloading>();
 
 					// Determine effective open time
@@ -321,6 +323,8 @@ void UFlecsArtillerySubsystem::SetupWeaponReloadSystem()
 					Weapon.SelectedMagazineId = BestMagId;
 					Weapon.ReloadPhase = EWeaponReloadPhase::RemovingMag;
 					Weapon.ReloadPhaseTimer = Static->RemoveMagTime * MagSpeedMod;
+					// Reload cancels any latched charge shot
+					Weapon.LatchedPayload = FChargeShotPayload{};
 					Entity.add<FTagReloading>();
 
 					if (auto* MsgSub = UFlecsMessageSubsystem::SelfPtr)

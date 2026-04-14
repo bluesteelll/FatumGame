@@ -62,6 +62,17 @@ void UFlecsArtillerySubsystem::SetupWeaponEquipSystem()
 								// Stop cycling timer but preserve bNeedsCycle (resumes on re-equip)
 								WI->bCycling = false;
 								WI->CycleTimeRemaining = 0.f;
+								// Clear all charge state on holster
+								WI->bIsCharging = false;
+								WI->ChargeAccumulator = 0.f;
+								WI->bWasFireRequestedLastTick = false;
+								WI->bPendingAutoRestart = false;
+								WI->PendingPayload = FChargeShotPayload{};
+								WI->LatchedPayload = FChargeShotPayload{};
+							}
+							if (OldWeapon.has<FTagChargingWeapon>())
+							{
+								OldWeapon.remove<FTagChargingWeapon>();
 							}
 						}
 					}

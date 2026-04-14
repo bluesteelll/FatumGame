@@ -121,5 +121,31 @@ FWeaponStatic FWeaponStatic::FromProfile(const UFlecsWeaponProfile* Profile, con
 		S.ProjectilesPerShot = Total;
 	}
 
+	// Charge Shot
+	S.bEnableCharge = Profile->bEnableCharge;
+	S.MinChargeTime = Profile->MinChargeTime;
+	S.MaxChargeTime = Profile->MaxChargeTime;
+	S.bAutoFireAtMaxCharge = Profile->bAutoFireAtMaxCharge;
+	S.bAutoRestartCharge = Profile->bAutoRestartCharge;
+	S.ChargeCurve = Profile->ChargeCurve;
+	S.DamageMaxMultiplier = Profile->DamageMaxMultiplier;
+	S.ProjectileSpeedMaxMultiplier = Profile->ProjectileSpeedMaxMultiplier;
+	S.PenetrationMaxMultiplier = Profile->PenetrationMaxMultiplier;
+	S.SpreadMaxMultiplier = Profile->SpreadMaxMultiplier;
+	S.BloomMaxMultiplier = Profile->BloomMaxMultiplier;
+	S.RecoilMaxMultiplier = Profile->RecoilMaxMultiplier;
+	S.ImpulseMaxMultiplier = Profile->ImpulseMaxMultiplier;
+	S.ChargeAmmoMode = static_cast<uint8>(Profile->ChargeAmmoMode);
+	S.MaxAmmoAtFullCharge = Profile->MaxAmmoAtFullCharge;
+
+	if (S.bEnableCharge)
+	{
+		checkf(Profile->MinChargeTime > KINDA_SMALL_NUMBER,
+			TEXT("%s: MinChargeTime must be > 0 when bEnableCharge"), *Profile->GetName());
+		checkf(Profile->MaxChargeTime > Profile->MinChargeTime,
+			TEXT("%s: MaxChargeTime (%.3f) must be > MinChargeTime (%.3f)"),
+			*Profile->GetName(), Profile->MaxChargeTime, Profile->MinChargeTime);
+	}
+
 	return S;
 }

@@ -12,6 +12,24 @@ class USkeletalMesh;
 class UStaticMesh;
 class UAnimMontage;
 class UNiagaraSystem;
+class UCurveFloat;
+
+/** Charged-shot payload emitted by WeaponChargeSystem and consumed by WeaponFireSystem.
+ *  Plain struct (NO GENERATED_BODY) — lives inline inside FWeaponInstance.
+ *  bValid=false sentinel is the "empty" state. */
+struct FChargeShotPayload
+{
+	bool  bValid = false;
+	float ShapedT = 0.f;            // shaped charge [0,1] (after ChargeCurve)
+	float DamageMul = 1.f;
+	float ProjectileSpeedMul = 1.f;
+	float PenetrationMul = 1.f;
+	float SpreadMul = 1.f;
+	float BloomMul = 1.f;
+	float RecoilMul = 1.f;          // reserved
+	float ImpulseMul = 1.f;         // reserved
+	int32 AmmoCount = 1;            // rounds to discharge in this burst
+};
 
 /** Sim-thread ring data (no UObject dependencies). */
 struct FPelletRingData
@@ -284,6 +302,28 @@ struct FWeaponStatic
 	int32 PelletRingCount = 0;
 	FPelletRingData PelletRings[MaxPelletRings];
 
+	// ─────────────────────────────────────────────────────────
+	// CHARGE SHOT
+	// ─────────────────────────────────────────────────────────
+
+	bool bEnableCharge = false;
+	float MinChargeTime = 0.2f;
+	float MaxChargeTime = 1.5f;
+	bool bAutoFireAtMaxCharge = false;
+	bool bAutoRestartCharge = false;
+	/** Optional shaping curve mapping raw charge [0,1] → shaped [0,1]. Null = linear. Game-thread read only. */
+	UCurveFloat* ChargeCurve = nullptr;
+	float DamageMaxMultiplier = 1.f;
+	float ProjectileSpeedMaxMultiplier = 1.f;
+	float PenetrationMaxMultiplier = 1.f;
+	float SpreadMaxMultiplier = 1.f;
+	float BloomMaxMultiplier = 1.f;
+	float RecoilMaxMultiplier = 1.f;   // reserved
+	float ImpulseMaxMultiplier = 1.f;  // reserved
+	/** Cast from EChargeAmmoMode. 0=Fixed, 1=ScalesWithCharge. */
+	uint8 ChargeAmmoMode = 0;
+	int32 MaxAmmoAtFullCharge = 1;
+
 	static FWeaponStatic FromProfile(const UFlecsWeaponProfile* Profile, const class UFlecsCaliberRegistry* CaliberRegistry = nullptr);
 };
 
@@ -450,6 +490,31 @@ struct FWeaponInstance
 	bool bReloadCancelRequested = false;
 
 	// ─────────────────────────────────────────────────────────
+	// CHARGE STATE (non-UPROPERTY — sim-thread only; FChargeShotPayload has no GENERATED_BODY)
+	// ─────────────────────────────────────────────────────────
+
+	/** True while actively accumulating charge (fire held, all conditions clean). */
+	bool bIsCharging = false;
+
+	/** Seconds of charge accumulated so far. Clamped to Static->MaxChargeTime. */
+	float ChargeAccumulator = 0.f;
+
+	/** Previous-tick snapshot of bFireRequested (for falling-edge release detection). */
+	bool bWasFireRequestedLastTick = false;
+
+	/** After bAutoFireAtMaxCharge fires while held, this blocks re-start until user releases. */
+	bool bPendingAutoRestart = false;
+
+	/** Ammo type index of the most recent round fired in the current burst (-1 = none yet). */
+	int8 LastShotAmmoTypeIdx = -1;
+
+	/** Emitted by WeaponChargeSystem; promoted to Latched by WeaponFireSystem at tick-top. */
+	FChargeShotPayload PendingPayload;
+
+	/** Active during fire tick — all scaled stats read from here. Cleared after successful fire. */
+	FChargeShotPayload LatchedPayload;
+
+	// ─────────────────────────────────────────────────────────
 	// HELPERS
 	// ─────────────────────────────────────────────────────────
 
@@ -557,6 +622,9 @@ struct FTagWeapon {};
 
 /** Weapon is currently reloading (query optimization) */
 struct FTagReloading {};
+
+/** Weapon is currently accumulating charge (for query filtering / VFX hooks). */
+struct FTagChargingWeapon {};
 
 /** Tag on weapon slot container — enables weapon-only validation. */
 struct FTagWeaponSlot {};

@@ -5,6 +5,7 @@
 void UFlecsArtillerySubsystem::SetupWeaponSystems()
 {
 	SetupWeaponEquipSystem();
+	SetupWeaponChargeSystem();
 	SetupWeaponTickSystem();
 	SetupWeaponReloadSystem();
 	SetupWeaponFireSystem();
