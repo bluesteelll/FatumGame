@@ -11,7 +11,12 @@
 #include "FlecsRecoilState.h"
 #include "FActionStateSystem.h"
 #include "FCharacterInteractionState.h"
+#include "Containers/Queue.h"
+#include <atomic>
 #include "FlecsCharacter.generated.h"
+
+enum class EMeleeAttackPhase   : uint8;
+enum class EMeleeSwingDirection: uint8;
 
 class UFlecsArtillerySubsystem;
 class UFlecsEntityDefinition;
@@ -525,6 +530,18 @@ protected:
 	/** Telekinesis scroll (hold distance) */
 	void OnTelekinesisScroll(const FInputActionValue& Value);
 
+	// ─────────────────────────────────────────────────────────
+	// MELEE INPUT (Phase 4)
+	// Routes through UFlecsMeleeLibrary → CommandQueue → sim-thread writes on
+	// FMeleeWeaponInstance. Uses ActiveWeaponEntityId — only has effect when the
+	// equipped weapon is a melee weapon (non-melee entities lack FMeleeWeaponInstance
+	// so the sim-thread writer is a no-op).
+	// ─────────────────────────────────────────────────────────
+	void Input_MeleeAttackPressed(const FInputActionValue& Value);
+	void Input_MeleeAttackReleased(const FInputActionValue& Value);
+	void Input_MeleeBlockPressed(const FInputActionValue& Value);
+	void Input_MeleeBlockReleased(const FInputActionValue& Value);
+
 	/** Called by UFatumMovementComponent::OnPostureChanged delegate */
 	void HandlePostureChanged(ECharacterPosture NewPosture);
 
@@ -754,6 +771,52 @@ private:
 	void WriteCameraAtomics();
 	void ConsumeTeleportSnap();
 	void TickTimeDilation(float DeltaTime);
+
+	// ─────────────────────────────────────────────────────────
+	// MELEE BRIDGE (Phase 3 — wiring only, no consumers yet)
+	// Atomic: sim → game, packed {Phase, Direction, ShapedT}.
+	// Hit-stop MPSC queue: sim → game (DilationStack push on drain).
+	// Blade socket writer: game → sim (per-weapon triple buffer).
+	// ─────────────────────────────────────────────────────────
+
+	/** Packed melee-attack state published by sim thread.
+	 *  [63:56] Phase (uint8), [55:48] Direction (uint8), [31:0] ShapedT (bit_cast float).
+	 *  Written on transitions (not per-tick) by Phase 5 systems. */
+	std::atomic<uint64> MeleeAttackStatePacked{0};
+
+	/** Sim-thread publisher. Transitions only — do NOT spam per tick. */
+	void PublishMeleeAttackState(EMeleeAttackPhase Phase, EMeleeSwingDirection Direction, float ShapedT);
+
+	/** Game-thread reader. Unpacks the atomic into out-params.
+	 *  NOTE: The {Idle, Horizontal, 0.0f} initial state packs to 0, which is indistinguishable
+	 *  from "never published". That's harmless — callers act on Phase (Idle ⇒ no work) rather
+	 *  than a "published" flag, so returning a bool would only tempt ambiguous use (§0.2 fix). */
+	void ReadMeleeAttackState(EMeleeAttackPhase& OutPhase, EMeleeSwingDirection& OutDirection, float& OutShapedT) const;
+
+	/** Per-impact hit-stop request queued from sim thread, consumed on game thread by
+	 *  DrainPendingHitStops → DilationStack.Push. Mirrors FlecsNiagaraManager::EnqueueTracer. */
+	struct FPendingHitStopEvent
+	{
+		FName Tag;
+		float Scale       = 1.f;
+		float Duration    = 0.f;
+		float EntrySpeed  = 0.f;
+		float ExitSpeed   = 0.f;
+	};
+
+	TQueue<FPendingHitStopEvent, EQueueMode::Mpsc> PendingHitStopQueue;
+
+	/** Enqueue a hit-stop event — safe from any thread (MPSC). */
+	void EnqueueHitStop(const FPendingHitStopEvent& Ev);
+
+	/** Game thread: pop all queued events and push them onto DilationStack. Must run
+	 *  BEFORE DilationStack.Tick each frame to apply this tick's events in-phase. */
+	void DrainPendingHitStops();
+
+	/** Game thread: sample equipped melee weapon's blade sockets and write into the
+	 *  per-weapon triple buffer. No-op when no melee weapon equipped or when the current
+	 *  phase does not need samples (Idle/Charging/Recovery). */
+	void WriteMeleeWeaponBladeSocket(float DeltaTime);
 	void TickPostureAndResnap(float DeltaTime);
 	void UpdateCamera();
 	void ProcessPendingWeaponEquip();

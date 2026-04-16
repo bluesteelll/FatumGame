@@ -9,6 +9,9 @@
 #include "FlecsEntityDefinition.h"
 #include "FlecsContainerLibrary.h"
 #include "FlecsItemDefinition.h"
+#include "FlecsMeleeLibrary.h"
+#include "FlecsMeleeComponents.h"
+#include "FlecsArtillerySubsystem.h"
 #include "Camera/CameraComponent.h"
 #include "InputActionValue.h"
 #include "GameFramework/Controller.h"
@@ -54,6 +57,12 @@ void AFlecsCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 	FatumInput->BindNativeAction(InputConfig, TAG_Input_Ability3,  ETriggerEvent::Started,   this, &AFlecsCharacter::OnTelekinesisToggle);
 	FatumInput->BindNativeAction(InputConfig, TAG_Input_TKThrow,   ETriggerEvent::Started,   this, &AFlecsCharacter::OnTelekinesisThrow);
 	FatumInput->BindNativeAction(InputConfig, TAG_Input_TKScroll,  ETriggerEvent::Triggered, this, &AFlecsCharacter::OnTelekinesisScroll);
+
+	// ── Melee (Phase 4) ─────────────────────────────────────────────
+	FatumInput->BindNativeAction(InputConfig, TAG_Input_MeleeAttack, ETriggerEvent::Started,   this, &AFlecsCharacter::Input_MeleeAttackPressed);
+	FatumInput->BindNativeAction(InputConfig, TAG_Input_MeleeAttack, ETriggerEvent::Completed, this, &AFlecsCharacter::Input_MeleeAttackReleased);
+	FatumInput->BindNativeAction(InputConfig, TAG_Input_MeleeBlock,  ETriggerEvent::Started,   this, &AFlecsCharacter::Input_MeleeBlockPressed);
+	FatumInput->BindNativeAction(InputConfig, TAG_Input_MeleeBlock,  ETriggerEvent::Completed, this, &AFlecsCharacter::Input_MeleeBlockReleased);
 }
 
 UInputComponent* AFlecsCharacter::CreatePlayerInputComponent()
@@ -114,6 +123,36 @@ void AFlecsCharacter::Look(const FInputActionValue& Value)
 		// Accumulate raw mouse delta for weapon inertia (recoil-free).
 		// Negate pitch: LookAxisVector.Y sign convention differs from ControlRotation.Pitch.
 		RecoilState.RawMouseDelta += FVector2D(-LookAxisVector.Y, LookAxisVector.X);  // (Pitch, Yaw)
+
+		// ── Melee direction buffer pump (Phase 4) ───────────────────
+		// Game-thread direct write into the character's FMeleeAttackDirectionBuffer.
+		// Per Phase 4 spec §3: the ring buffer is single-producer (this handler),
+		// single-consumer (MeleeSwingInitSystem on sim thread, Phase 5) — the race
+		// on WriteIndex/Count is acceptable since the worst-case outcome is a stale
+		// last-sample during promotion, which Resolve() already tolerates.
+		// Pump only when a melee weapon is equipped (buffer is added at equip).
+		const int64 CharId = GetCharacterEntityId();
+		UWorld* W = (CharId != 0) ? GetWorld() : nullptr;
+		if (W)
+		{
+			if (UFlecsArtillerySubsystem* Sub = W->GetSubsystem<UFlecsArtillerySubsystem>())
+			{
+				if (flecs::world* FW = Sub->GetFlecsWorld())
+				{
+					flecs::entity CharEntity = FW->entity(static_cast<flecs::entity_t>(CharId));
+					if (CharEntity.is_valid() && CharEntity.is_alive())
+					{
+						FMeleeAttackDirectionBuffer* Buf = CharEntity.try_get_mut<FMeleeAttackDirectionBuffer>();
+						if (Buf)
+						{
+							// LookAxisVector: X=yaw delta, Y=pitch delta (UE convention).
+							Buf->Push(FVector2f(static_cast<float>(LookAxisVector.X),
+							                    static_cast<float>(LookAxisVector.Y)));
+						}
+					}
+				}
+			}
+		}
 	}
 }
 
@@ -365,4 +404,39 @@ void AFlecsCharacter::OnDestroyItem(const FInputActionValue& Value)
 	{
 		DestroyLastSpawnedEntity();
 	}
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MELEE INPUT (Phase 4)
+// ═══════════════════════════════════════════════════════════════════════════
+// Routes through UFlecsMeleeLibrary → CommandQueue → sim-thread writes on
+// FMeleeWeaponInstance. Uses ActiveWeaponEntityId — sim-thread try_get_mut is
+// a silent no-op when the equipped weapon isn't melee (ranged weapons don't
+// carry FMeleeWeaponInstance), so no type-check is required game-side.
+//
+// Edge-trigger & charge accumulation live in MeleeChargeSystem; these handlers
+// only mutate the "requested" flag on the weapon instance.
+
+void AFlecsCharacter::Input_MeleeAttackPressed(const FInputActionValue& /*Value*/)
+{
+	if (ActiveWeaponEntityId == 0) return;
+	UFlecsMeleeLibrary::SetMeleeAttackRequested(this, ActiveWeaponEntityId, true);
+}
+
+void AFlecsCharacter::Input_MeleeAttackReleased(const FInputActionValue& /*Value*/)
+{
+	if (ActiveWeaponEntityId == 0) return;
+	UFlecsMeleeLibrary::SetMeleeAttackRequested(this, ActiveWeaponEntityId, false);
+}
+
+void AFlecsCharacter::Input_MeleeBlockPressed(const FInputActionValue& /*Value*/)
+{
+	if (ActiveWeaponEntityId == 0) return;
+	UFlecsMeleeLibrary::SetMeleeBlockRequested(this, ActiveWeaponEntityId, true);
+}
+
+void AFlecsCharacter::Input_MeleeBlockReleased(const FInputActionValue& /*Value*/)
+{
+	if (ActiveWeaponEntityId == 0) return;
+	UFlecsMeleeLibrary::SetMeleeBlockRequested(this, ActiveWeaponEntityId, false);
 }

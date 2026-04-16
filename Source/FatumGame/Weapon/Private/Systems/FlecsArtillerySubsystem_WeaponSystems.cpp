@@ -9,4 +9,12 @@ void UFlecsArtillerySubsystem::SetupWeaponSystems()
 	SetupWeaponTickSystem();
 	SetupWeaponReloadSystem();
 	SetupWeaponFireSystem();
+
+	// MeleeInputResolveSystem not needed: input flows through UFlecsMeleeLibrary
+	// → CommandQueue → direct writes to FMeleeWeaponInstance.bAttackRequested /
+	//   bBlockRequested. Direction buffer is pumped from AFlecsCharacter::Look.
+	SetupMeleeChargeSystem();
+	SetupMeleeSwingInitSystem();
+	SetupMeleePhaseAdvanceSystem();
+	SetupMeleeSweepSystem();
 }

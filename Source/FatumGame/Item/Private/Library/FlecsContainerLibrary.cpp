@@ -11,6 +11,7 @@
 #include "FlecsVitalsComponents.h"
 #include "FlecsWeaponComponents.h"
 #include "FlecsWeaponProfile.h"
+#include "FlecsMeleeComponents.h"
 #include "FlecsCaliberRegistry.h"
 #include "FatumGameSettings.h"
 
@@ -228,6 +229,15 @@ static int32 AddItemToContainerDirect(
 			}
 
 			NewEntity.set<FWeaponInstance>(WepInst);
+		}
+
+		// Initialize melee weapon instance if this is a melee weapon entity
+		if (NewEntity.has<FTagMeleeWeapon>())
+		{
+			FMeleeWeaponInstance MeleeInst;
+			// BladeBuffer is allocated at melee-equip time (WeaponEquipSystem); stays nullptr
+			// until then. on_remove hook frees it exactly once on any destruction path (N-C2).
+			NewEntity.set<FMeleeWeaponInstance>(MeleeInst);
 		}
 
 		return NewEntity;
@@ -914,6 +924,25 @@ bool UFlecsContainerLibrary::TransferItem(
 				{
 					ItemEntity.remove<FTagChargingWeapon>();
 				}
+
+				// Melee weapon unequip mirror — reset charge/swing state + drop tags.
+				// BladeBuffer lifetime is owned by the on_remove hook; we do NOT delete here
+				// (N-C2, §F.4). Instance component is preserved so re-equip can reuse it;
+				// re-equip will free the stale buffer and allocate a fresh one if needed.
+				FMeleeWeaponInstance* MWI = ItemEntity.try_get_mut<FMeleeWeaponInstance>();
+				if (MWI)
+				{
+					MWI->ResetAllChargeAndSwingState();
+				}
+				if (ItemEntity.has<FTagMeleeAttacking>())
+				{
+					ItemEntity.remove<FTagMeleeAttacking>();
+				}
+				if (ItemEntity.has<FTagMeleeCharging>())
+				{
+					ItemEntity.remove<FTagMeleeCharging>();
+				}
+
 				ItemEntity.remove<FEquippedBy>();
 				UE_LOG(LogFlecsContainer, Log, TEXT("TransferItem: Unequipped weapon %lld (moved out of weapon slot)"), ItemEntityId);
 			}

@@ -464,6 +464,12 @@ private:
 	void SetupWeaponReloadSystem();
 	void SetupWeaponFireSystem();
 
+	/** Melee weapon systems (Phase 4+). */
+	void SetupMeleeChargeSystem();
+	void SetupMeleeSwingInitSystem();
+	void SetupMeleePhaseAdvanceSystem();
+	void SetupMeleeSweepSystem();
+
 	/** Door trigger unlock + door state machine. */
 	void SetupDoorSystems();
 

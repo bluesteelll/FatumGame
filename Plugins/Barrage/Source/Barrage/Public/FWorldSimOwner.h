@@ -342,6 +342,17 @@ public:
 		const JPH::ObjectLayerFilter& ObjectFilter,
 		const JPH::BodyFilter& BodiesFilter,
 		TArray<struct FBarrageRayHit>& OutHits) const;
+
+	// Sweep an oriented capsule from StartPos to EndPos and collect every sub-shape intersected
+	// (sorted ascending by Fraction). HalfHeight and Radius are UE cm. Orientation is world-space
+	// capsule axis (identity = capsule Y-axis up in Jolt). OutHits is cleared before filling.
+	// Used by melee sweep system.
+	void CastCapsuleAllHits(FVector StartPos, FVector EndPos, FQuat Orientation,
+		float HalfHeight, float Radius,
+		const JPH::BroadPhaseLayerFilter& BroadPhaseFilter,
+		const JPH::ObjectLayerFilter& ObjectFilter,
+		const JPH::BodyFilter& BodiesFilter,
+		TArray<struct FBarrageShapeHit>& OutHits) const;
 	JPH::EMotionType LayerToMotionTypeMapping(uint16 Layer);
 	JPH::Ref<JPH::Shape> AttemptBoxCache(double JoltX, double JoltY, double JoltZ, float HEReduceMin);
 	//we could use type indirection or inheritance, but the fact of the matter is that this is much easier

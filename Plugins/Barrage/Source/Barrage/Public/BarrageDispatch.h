@@ -105,6 +105,16 @@ public:
 		const JPH::ObjectLayerFilter& ObjectFilter,
 		const JPH::BodyFilter& BodiesFilter,
 		TArray<struct FBarrageRayHit>& OutHits);
+
+	// Sweep an oriented capsule from StartPos to EndPos and gather every sub-shape intersected,
+	// ascending by sweep fraction. HalfHeight and Radius are UE cm (cylindrical portion half-height).
+	// Orientation is the world-space capsule axis rotation. OutHits is cleared before filling.
+	virtual void CastCapsuleAllHits(FVector StartPos, FVector EndPos, FQuat Orientation,
+		float HalfHeight, float Radius,
+		const JPH::BroadPhaseLayerFilter& BroadPhaseFilter,
+		const JPH::ObjectLayerFilter& ObjectFilter,
+		const JPH::BodyFilter& BodiesFilter,
+		TArray<struct FBarrageShapeHit>& OutHits);
 	
 	//and viola [sic] actually pretty elegant even without type polymorphism by using overloading polymorphism.
 	FBLet CreatePrimitive(FBBoxParams& Definition, FSkeletonKey Outkey, uint16 Layer, bool IsSensor = false, bool forceDynamic = false, bool isMovable = true, float Friction = 0.5f, float Restitution = 0.3f, float LinearDamping = 0.05f);

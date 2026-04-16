@@ -7,6 +7,7 @@
 #include "CoordinateUtils.h"
 #include "FBPhysicsInput.h"
 #include "FBarrageRayHit.h"
+#include "FBarrageShapeHit.h"
 
 //https://github.com/GaijinEntertainment/DagorEngine/blob/71a26585082f16df80011e06e7a4e95302f5bb7f/prog/engine/phys/physJolt/joltPhysics.cpp#L800
 //this is how gaijin uses jolt, and war thunder's honestly a pretty strong comp to our use case.
@@ -194,6 +195,24 @@ void UBarrageDispatch::CastRayAllHits(
 	if (!CastFrom.ContainsNaN())
 	{
 		JoltGameSim->CastRayAllHits(CastFrom, Direction, BroadPhaseFilter, ObjectFilter, BodiesFilter, OutHits);
+	}
+}
+
+void UBarrageDispatch::CastCapsuleAllHits(
+	FVector StartPos,
+	FVector EndPos,
+	FQuat Orientation,
+	float HalfHeight,
+	float Radius,
+	const JPH::BroadPhaseLayerFilter& BroadPhaseFilter,
+	const JPH::ObjectLayerFilter& ObjectFilter,
+	const JPH::BodyFilter& BodiesFilter,
+	TArray<FBarrageShapeHit>& OutHits)
+{
+	if (!StartPos.ContainsNaN() && !EndPos.ContainsNaN() && JoltGameSim)
+	{
+		JoltGameSim->CastCapsuleAllHits(StartPos, EndPos, Orientation, HalfHeight, Radius,
+			BroadPhaseFilter, ObjectFilter, BodiesFilter, OutHits);
 	}
 }
 

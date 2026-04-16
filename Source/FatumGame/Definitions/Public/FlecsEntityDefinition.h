@@ -31,6 +31,7 @@ class UFlecsMagazineProfile;
 class UFlecsAmmoTypeDefinition;
 class UFlecsQuickLoadProfile;
 class UFlecsExplosionProfile;
+class UFlecsMeleeProfile;
 
 /**
  * Unified entity definition - a preset combining multiple profiles.
@@ -110,6 +111,10 @@ public:
 	/** Weapon - makes entity a weapon with firing and ammo */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Instanced, Category = "Profiles")
 	TObjectPtr<UFlecsWeaponProfile> WeaponProfile;
+
+	/** Melee - makes entity a melee weapon with swing state machine, charge, and block */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Instanced, Category = "Profiles")
+	TObjectPtr<UFlecsMeleeProfile> MeleeProfile;
 
 	/** Magazine - makes entity a magazine with ammo capacity */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Instanced, Category = "Profiles")
@@ -227,6 +232,7 @@ public:
 			|| ProjectileProfile != nullptr
 			|| ContainerProfile != nullptr
 			|| WeaponProfile != nullptr
+			|| MeleeProfile != nullptr
 			|| MagazineProfile != nullptr
 			|| ExplosionProfile != nullptr
 			|| InteractionProfile != nullptr
@@ -262,6 +268,9 @@ public:
 
 	/** Check if this is a weapon */
 	bool IsWeapon() const { return WeaponProfile != nullptr; }
+
+	/** Check if this is a melee weapon */
+	bool IsMeleeWeapon() const { return MeleeProfile != nullptr; }
 
 	/** Check if this is a magazine */
 	bool IsMagazine() const { return MagazineProfile != nullptr; }

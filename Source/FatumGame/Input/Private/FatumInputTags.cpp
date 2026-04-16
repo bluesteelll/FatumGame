@@ -22,3 +22,5 @@ UE_DEFINE_GAMEPLAY_TAG(TAG_Input_ADS,          "InputTag.ADS");
 UE_DEFINE_GAMEPLAY_TAG(TAG_Input_Reload,       "InputTag.Reload");
 UE_DEFINE_GAMEPLAY_TAG(TAG_Input_WeaponSlot1,  "InputTag.WeaponSlot1");
 UE_DEFINE_GAMEPLAY_TAG(TAG_Input_WeaponSlot2,  "InputTag.WeaponSlot2");
+UE_DEFINE_GAMEPLAY_TAG(TAG_Input_MeleeAttack,  "InputTag.MeleeAttack");
+UE_DEFINE_GAMEPLAY_TAG(TAG_Input_MeleeBlock,   "InputTag.MeleeBlock");

@@ -49,6 +49,7 @@
 #include "FlecsVitalsComponents.h"
 #include "FlecsExplosionComponents.h"
 #include "FlecsPenetrationComponents.h"
+#include "FlecsMeleeComponents.h"
 
 // ═══════════════════════════════════════════════════════════════
 // COMPONENT REGISTRATION
@@ -243,6 +244,32 @@ void UFlecsArtillerySubsystem::RegisterFlecsComponents()
 	World.component<FCharacterInventoryRef>();
 	World.component<FTemperatureZoneStatic>();
 	World.component<FTagTemperatureZone>();
+
+	// ─────────────────────────────────────────────────────────
+	// MELEE COMBAT (Phase 2 — data model only, no systems yet)
+	// ─────────────────────────────────────────────────────────
+	World.component<FMeleeWeaponStatic>();
+	World.component<FMeleeWeaponInstance>().on_remove(
+		[](flecs::entity, FMeleeWeaponInstance& Inst)
+		{
+			// Exactly-once blade-buffer teardown regardless of removal path (N-C2).
+			// WeaponEquipSystem unequip and FlecsContainerLibrary unequip paths only
+			// call entity.remove<FMeleeWeaponInstance>() — they must NOT delete here.
+			if (Inst.BladeBuffer)
+			{
+				delete Inst.BladeBuffer;
+				Inst.BladeBuffer = nullptr;
+			}
+		});
+	World.component<FMeleeAttackDirectionBuffer>();
+	World.component<FBladeSocketSync>();
+	World.component<FPendingBlockAbsorb>();
+	World.component<FBoneRef>();
+
+	World.component<FTagMeleeWeapon>();
+	World.component<FTagMeleeAttacking>();
+	World.component<FTagMeleeCharging>();
+	World.component<FTagMeleeBlocking>();
 }
 
 // ═══════════════════════════════════════════════════════════════

@@ -8,6 +8,8 @@
 #include "FlecsDestructibleComponents.h"
 #include "FlecsInteractionComponents.h"
 #include "FlecsWeaponComponents.h"
+#include "FlecsMeleeComponents.h"
+#include "FlecsMeleeProfile.h"
 #include "FlecsItemDefinition.h"
 #include "FlecsEntityDefinition.h"
 #include "FlecsHealthProfile.h"
@@ -126,6 +128,13 @@ flecs::entity UFlecsArtillerySubsystem::GetOrCreateEntityPrefab(UFlecsEntityDefi
 	if (EntityDefinition->WeaponProfile)
 	{
 		Prefab.set<FWeaponStatic>(FWeaponStatic::FromProfile(EntityDefinition->WeaponProfile, CaliberRegistry));
+		Prefab.add<FTagWeapon>();
+	}
+
+	if (EntityDefinition->MeleeProfile)
+	{
+		Prefab.set<FMeleeWeaponStatic>(FMeleeWeaponStatic::FromProfile(EntityDefinition->MeleeProfile));
+		Prefab.add<FTagMeleeWeapon>();
 		Prefab.add<FTagWeapon>();
 	}
 

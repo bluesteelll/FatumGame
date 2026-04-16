@@ -8,6 +8,7 @@
 #include "FlecsEntityComponents.h"
 #include "FlecsEntityDefinition.h"
 #include "FlecsWeaponProfile.h"
+#include "FlecsMeleeComponents.h"
 #include "FlecsMessageSubsystem.h"
 #include "FlecsUIMessages.h"
 #include "FSimStateCache.h"
@@ -74,6 +75,24 @@ void UFlecsArtillerySubsystem::SetupWeaponEquipSystem()
 							{
 								OldWeapon.remove<FTagChargingWeapon>();
 							}
+
+							// Melee weapon holster — mirror ranged field-by-field clear.
+							// BladeBuffer stays allocated across holster (§E.2 "holster persists");
+							// only reset phase/charge state + drop active tags. Buffer is freed
+							// only on unequip-from-inventory / entity death via the on_remove hook.
+							FMeleeWeaponInstance* MWI = OldWeapon.try_get_mut<FMeleeWeaponInstance>();
+							if (MWI)
+							{
+								MWI->ResetAllChargeAndSwingState();
+							}
+							if (OldWeapon.has<FTagMeleeAttacking>())
+							{
+								OldWeapon.remove<FTagMeleeAttacking>();
+							}
+							if (OldWeapon.has<FTagMeleeCharging>())
+							{
+								OldWeapon.remove<FTagMeleeCharging>();
+							}
 						}
 					}
 				}
@@ -108,9 +127,12 @@ void UFlecsArtillerySubsystem::SetupWeaponEquipSystem()
 					return;
 				}
 
-				// Read EquipTime from target weapon for draw phase
+				// Read EquipTime from target weapon for draw phase.
+				// Melee weapons have no EquipTime field — use a fixed default matching the
+				// ranged fallback until designer tuning surfaces a dedicated melee value.
 				const FWeaponStatic* WS = NewWeapon.try_get<FWeaponStatic>();
-				float DrawTime = WS ? WS->EquipTime * 0.5f : 0.25f;
+				const FMeleeWeaponStatic* MWS = NewWeapon.try_get<FMeleeWeaponStatic>();
+				float DrawTime = WS ? WS->EquipTime * 0.5f : (MWS ? 0.25f : 0.25f);
 
 				SlotState.EquipPhase = EWeaponEquipPhase::Drawing;
 				SlotState.EquipTimer = DrawTime;
@@ -161,6 +183,56 @@ void UFlecsArtillerySubsystem::SetupWeaponEquipSystem()
 				SlotState.ActiveSlotIndex = SlotState.PendingSlotIndex;
 				SlotState.PendingSlotIndex = -1;
 				SlotState.EquipPhase = EWeaponEquipPhase::Idle;
+
+				// ─────────────────────────────────────────────────────────
+				// MELEE EQUIP FINALIZATION (§F.5)
+				// Dispatch on presence of FMeleeWeaponStatic. Ranged-only paths below
+				// (SimStateCache ammo, WeaponProfile signal) are skipped for melee —
+				// melee has no ammo and no ADS/recoil profile. Blade trail and attach
+				// offset are resolved via a separate path in Phase 7.
+				// ─────────────────────────────────────────────────────────
+				if (NewWeapon.has<FMeleeWeaponStatic>())
+				{
+					// Allocate per-weapon blade-socket triple buffer. Writer: game thread
+					// (AFlecsCharacter::Tick). Reader: MeleeSweepSystem. Freed by the
+					// on_remove hook registered in RegisterFlecsComponents (N-C2).
+					//
+					// Use the set<>+get_mut<> pattern (option b in the Phase 3 plan) —
+					// Flecs may memcpy the instance on set<>, so we allocate AFTER the
+					// struct is stored to avoid pointer-ownership confusion.
+					FMeleeWeaponInstance* MWI = NewWeapon.try_get_mut<FMeleeWeaponInstance>();
+					checkf(MWI, TEXT("Melee weapon entity %lld missing FMeleeWeaponInstance at equip"),
+						NewWeaponId);
+
+					// Defensive: free any lingering buffer from a prior equip cycle. Double-
+					// allocation would leak the previous pointer past the on_remove hook.
+					if (MWI->BladeBuffer)
+					{
+						delete MWI->BladeBuffer;
+						MWI->BladeBuffer = nullptr;
+					}
+
+					// TODO(Phase 8): branch for simple-AI weapons — null BladeBuffer +
+					// FBladeSocketSync component on the weapon instead of triple buffer.
+					FMeleeWeaponInstance::FBladeSocketData DefaultSample;
+					MWI->BladeBuffer = new FBladeSocketTripleBuffer(DefaultSample);
+
+					// Ensure character carries the per-character direction-sample buffer.
+					if (!CharEntity.has<FMeleeAttackDirectionBuffer>())
+					{
+						CharEntity.set<FMeleeAttackDirectionBuffer>({});
+					}
+
+					// Resolve cosmetic attach target (none for Phase 3 — blade trail VFX is
+					// attached separately in Phase 7). Send a null-mesh equip signal so the
+					// game-thread recoil/visual system detaches any prior ranged mesh.
+					EnqueueWeaponEquipSignal(CharEntity, NewWeaponId, SlotState.ActiveSlotIndex,
+						nullptr, nullptr, FTransform::Identity);
+
+					UE_LOG(LogTemp, Log, TEXT("MELEE EQUIP: Drew melee weapon %lld from slot %d"),
+						NewWeaponId, SlotState.ActiveSlotIndex);
+					break;
+				}
 
 				// Resolve visual data for game thread
 				const FWeaponStatic* WS = NewWeapon.try_get<FWeaponStatic>();

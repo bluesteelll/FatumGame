@@ -38,6 +38,10 @@
 #include "FlecsAbilityStates.h"
 #include "FlecsResourceTypes.h"
 #include "FlecsResourcePoolProfile.h"
+#include "FlecsMeleeComponents.h"
+#include "FlecsItemComponents.h"
+#include <bit>
+#include <cstring>
 #include "FlecsHealthProfile.h"
 #include "FlecsSwingableComponents.h"
 #include "FRopeVisualRenderer.h"
@@ -437,6 +441,7 @@ void AFlecsCharacter::Tick(float DeltaTime)
 	SyncMovementStateToECS();                 // 9. Posture → Flecs (on change)
 	ProcessPendingWeaponEquip();              // 10. Sim→game weapon attach
 	WriteAimDirection();                      // 11. LateSyncBridge FAimDirection
+	WriteMeleeWeaponBladeSocket(DeltaTime);   // 12. Game→sim blade socket triple buffer (Phase 3)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -497,6 +502,11 @@ void AFlecsCharacter::TickTimeDilation(float DeltaTime)
 	double Now = FPlatformTime::Seconds();
 	float RealDT = (LastRealTickTime > 0.0) ? FMath::Clamp(static_cast<float>(Now - LastRealTickTime), 0.0001f, 0.1f) : DeltaTime;
 	LastRealTickTime = Now;
+
+	// Drain sim→game hit-stop events BEFORE ticking the stack so new entries are
+	// visible to this frame's min-wins resolve (§F.3 / C1).
+	DrainPendingHitStops();
+
 	DilationStack.Tick(RealDT);
 
 	float TargetScale = DilationStack.GetTargetScale();
@@ -665,7 +675,18 @@ void AFlecsCharacter::ProcessPendingWeaponEquip()
 	if (HUDWidget)
 		HUDWidget->SetWeaponEntityId(WeaponId);
 
-	AttachWeaponVisual(PendingWeaponEquip.Mesh, PendingWeaponEquip.AttachOffset);
+	// Melee equip path (Phase 3 §F.5) sends null mesh — detach any prior ranged mesh so
+	// WeaponMeshComponent doesn't retain stale geometry (§0.1 fix). AttachWeaponVisual
+	// early-returns on null, which would leak the previous weapon's sockets to
+	// WriteMeleeWeaponBladeSocket.
+	if (PendingWeaponEquip.Mesh)
+	{
+		AttachWeaponVisual(PendingWeaponEquip.Mesh, PendingWeaponEquip.AttachOffset);
+	}
+	else
+	{
+		DetachWeaponVisual();
+	}
 
 	ClearGameBit(ActionBit::WeaponSwitching);
 
@@ -768,3 +789,136 @@ void AFlecsCharacter::DrawInertiaDebug(UCanvas* Canvas, APlayerController* PC)
 #endif
 
 // Input binding + handler methods: see FlecsCharacter_Input.cpp
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MELEE BRIDGE (Phase 3 — §E.1 atomic, §F.3 hit-stop MPSC, §E.2 blade buffer)
+// ═══════════════════════════════════════════════════════════════════════════
+
+namespace
+{
+	constexpr uint64 MeleePhaseShift     = 56;
+	constexpr uint64 MeleeDirectionShift = 48;
+	constexpr uint64 MeleeShapedTMask    = 0x00000000FFFFFFFFull;
+	constexpr uint64 MeleePhaseMask      = 0xFF00000000000000ull;
+	constexpr uint64 MeleeDirectionMask  = 0x00FF000000000000ull;
+
+	FORCEINLINE uint32 MeleeFloatToBits(float V)
+	{
+		// std::bit_cast is C++20 and available in UE 5.7's toolchain; fall back to memcpy
+		// for maximum compiler portability (matches the pattern used elsewhere in UE).
+		uint32 Bits = 0;
+		static_assert(sizeof(Bits) == sizeof(V), "float must be 32 bits");
+		std::memcpy(&Bits, &V, sizeof(Bits));
+		return Bits;
+	}
+
+	FORCEINLINE float MeleeBitsToFloat(uint32 Bits)
+	{
+		float V = 0.f;
+		std::memcpy(&V, &Bits, sizeof(V));
+		return V;
+	}
+}
+
+void AFlecsCharacter::PublishMeleeAttackState(EMeleeAttackPhase Phase, EMeleeSwingDirection Direction, float ShapedT)
+{
+	const uint64 PhaseBits     = static_cast<uint64>(static_cast<uint8>(Phase))     << MeleePhaseShift;
+	const uint64 DirectionBits = static_cast<uint64>(static_cast<uint8>(Direction)) << MeleeDirectionShift;
+	const uint64 ShapedTBits   = static_cast<uint64>(MeleeFloatToBits(ShapedT))     & MeleeShapedTMask;
+
+	MeleeAttackStatePacked.store(PhaseBits | DirectionBits | ShapedTBits, std::memory_order_release);
+}
+
+void AFlecsCharacter::ReadMeleeAttackState(EMeleeAttackPhase& OutPhase, EMeleeSwingDirection& OutDirection, float& OutShapedT) const
+{
+	const uint64 Packed = MeleeAttackStatePacked.load(std::memory_order_acquire);
+
+	OutPhase     = static_cast<EMeleeAttackPhase>(    static_cast<uint8>((Packed & MeleePhaseMask)     >> MeleePhaseShift));
+	OutDirection = static_cast<EMeleeSwingDirection>( static_cast<uint8>((Packed & MeleeDirectionMask) >> MeleeDirectionShift));
+	OutShapedT   = MeleeBitsToFloat(static_cast<uint32>(Packed & MeleeShapedTMask));
+}
+
+void AFlecsCharacter::EnqueueHitStop(const FPendingHitStopEvent& Ev)
+{
+	// MPSC: safe from any thread. Game thread drains in TickTimeDilation.
+	PendingHitStopQueue.Enqueue(Ev);
+}
+
+void AFlecsCharacter::DrainPendingHitStops()
+{
+	FPendingHitStopEvent Ev;
+	while (PendingHitStopQueue.Dequeue(Ev))
+	{
+		FDilationEntry Entry;
+		Entry.Tag              = Ev.Tag;
+		Entry.DesiredScale     = Ev.Scale;
+		Entry.Duration         = Ev.Duration;
+		Entry.bPlayerFullSpeed = true;
+		Entry.EntrySpeed       = Ev.EntrySpeed;
+		Entry.ExitSpeed        = Ev.ExitSpeed;
+		DilationStack.Push(Entry);
+	}
+}
+
+void AFlecsCharacter::WriteMeleeWeaponBladeSocket(float /*DeltaTime*/)
+{
+	// Only sample while the equipped weapon is a melee weapon in an active attack phase.
+	// During Idle/Charging/Recovery the sweep system does not read the buffer, so writing
+	// is wasted work and just thrashes the triple buffer's write slot.
+	if (ActiveWeaponEntityId == 0 || !WeaponMeshComponent)
+	{
+		return;
+	}
+
+	// Defensive: a melee equip with null mesh + prior ranged detach means the skeletal
+	// mesh asset is cleared. Socket lookups on a null asset return garbage (§0.1 fix).
+	if (!WeaponMeshComponent->GetSkeletalMeshAsset())
+	{
+		return;
+	}
+
+	EMeleeAttackPhase     Phase     = EMeleeAttackPhase::Idle;
+	EMeleeSwingDirection  Direction = EMeleeSwingDirection::Horizontal;
+	float                 ShapedT   = 0.f;
+	ReadMeleeAttackState(Phase, Direction, ShapedT);
+
+	if (Phase != EMeleeAttackPhase::Windup && Phase != EMeleeAttackPhase::Release)
+	{
+		return;
+	}
+
+	UFlecsArtillerySubsystem* Sub = GetWorld() ? GetWorld()->GetSubsystem<UFlecsArtillerySubsystem>() : nullptr;
+	if (!Sub)
+	{
+		return;
+	}
+
+	flecs::world* World = Sub->GetFlecsWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	flecs::entity WeaponEntity = World->entity(static_cast<flecs::entity_t>(ActiveWeaponEntityId));
+	if (!WeaponEntity.is_valid() || !WeaponEntity.is_alive())
+	{
+		return;
+	}
+
+	const FMeleeWeaponStatic* MStatic = WeaponEntity.try_get<FMeleeWeaponStatic>();
+	FMeleeWeaponInstance*     MInst   = WeaponEntity.try_get_mut<FMeleeWeaponInstance>();
+	if (!MStatic || !MInst || !MInst->BladeBuffer)
+	{
+		return;
+	}
+
+	const FVector Start = WeaponMeshComponent->GetSocketLocation(MStatic->BladeStartSocket);
+	const FVector Tip   = WeaponMeshComponent->GetSocketLocation(MStatic->BladeTipSocket);
+
+	FMeleeWeaponInstance::FBladeSocketData Sample;
+	Sample.Start      = Start;
+	Sample.Tip        = Tip;
+	Sample.FrameStamp = static_cast<uint64>(GFrameCounter);
+
+	MInst->BladeBuffer->Write(Sample);
+}

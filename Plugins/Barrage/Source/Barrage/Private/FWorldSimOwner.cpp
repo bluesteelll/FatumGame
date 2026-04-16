@@ -8,7 +8,9 @@
 #include "CastShapeCollectors/SphereSearchCollector.h"
 #include "CollisionDetectionFilters/FirstHitRayCastCollector.h"
 #include "CollisionDetectionFilters/AllHitsRayCastCollector.h"
+#include "CollisionDetectionFilters/AllHitsShapeCastCollector.h"
 #include "FBarrageRayHit.h"
+#include "FBarrageShapeHit.h"
 #include "Algo/Sort.h"
 #include "Chaos/TriangleMeshImplicitObject.h"
 #include "Jolt/Physics/Collision/BroadPhase/BroadPhaseBruteForce.h"
@@ -248,6 +250,91 @@ void FWorldSimOwner::CastRayAllHits(FVector3d CastFrom, FVector3d Direction,
 	Algo::Sort(OutHits, [](const FBarrageRayHit& A, const FBarrageRayHit& B)
 	{
 		return A.Distance < B.Distance;
+	});
+}
+
+void FWorldSimOwner::CastCapsuleAllHits(FVector StartPos, FVector EndPos, FQuat Orientation,
+	float HalfHeight, float Radius,
+	const BroadPhaseLayerFilter& BroadPhaseFilter,
+	const ObjectLayerFilter& ObjectFilter,
+	const BodyFilter& BodiesFilter,
+	TArray<FBarrageShapeHit>& OutHits) const
+{
+	OutHits.Reset();
+	if (StartPos.ContainsNaN() || EndPos.ContainsNaN() || Orientation.ContainsNaN())
+	{
+		return;
+	}
+
+	const float JoltHalfHeight = static_cast<float>(CoordinateUtils::RadiusToJolt(HalfHeight));
+	const float JoltRadius     = static_cast<float>(CoordinateUtils::RadiusToJolt(Radius));
+	if (JoltHalfHeight <= 0.f || JoltRadius <= 0.f)
+	{
+		return;
+	}
+
+	// CapsuleShape is a value-type Ref target; keep it on the stack via a Ref.
+	JPH::CapsuleShape Capsule(JoltHalfHeight, JoltRadius);
+
+	const JPH::Vec3 JoltStart     = CoordinateUtils::ToJoltCoordinates(FVector3d(StartPos));
+	const JPH::Vec3 JoltEnd       = CoordinateUtils::ToJoltCoordinates(FVector3d(EndPos));
+	const JPH::Vec3 JoltSweep     = JoltEnd - JoltStart;
+	const JPH::Quat JoltRotation  = CoordinateUtils::ToJoltRotation(FQuat4d(Orientation));
+
+	const JPH::RMat44 StartXform = JPH::RMat44::sRotationTranslation(JoltRotation, JoltStart);
+
+	JPH::RShapeCast ShapeCast(
+		&Capsule,
+		JPH::Vec3::sReplicate(1.0f),
+		StartXform,
+		JoltSweep);
+
+	ShapeCastSettings Settings;
+	Settings.mBackFaceModeTriangles          = EBackFaceMode::CollideWithBackFaces;
+	Settings.mBackFaceModeConvex             = EBackFaceMode::CollideWithBackFaces;
+	Settings.mUseShrunkenShapeAndConvexRadius = false;
+	Settings.mReturnDeepestPoint              = true;
+
+	AllHitsShapeCastCollector Collector;
+	physics_system->GetNarrowPhaseQueryNoLock().CastShape(
+		ShapeCast,
+		Settings,
+		ShapeCast.mCenterOfMassStart.GetTranslation(),
+		Collector,
+		BroadPhaseFilter,
+		ObjectFilter,
+		BodiesFilter);
+
+	if (Collector.Hits.Num() == 0)
+	{
+		return;
+	}
+
+	OutHits.Reserve(Collector.Hits.Num());
+	const JPH::Vec3 JoltStartTrans = ShapeCast.mCenterOfMassStart.GetTranslation();
+
+	for (const AllHitsShapeCastCollector::FRawHit& Raw : Collector.Hits)
+	{
+		FBarrageShapeHit& Out = OutHits.AddDefaulted_GetRef();
+		Out.BodyIDValue     = Raw.BodyID.GetIndexAndSequenceNumber();
+		Out.SubShapeIDValue = Raw.SubShapeID.GetValue();
+		Out.Fraction        = Raw.Fraction;
+
+		// Jolt's mContactPointOn2 is relative to the cast-start translation.
+		const JPH::Vec3 ContactJolt = JoltStartTrans + Raw.ContactPointOn2;
+		const FVector3f ContactUE   = CoordinateUtils::FromJoltCoordinates(ContactJolt);
+		Out.ImpactPoint = FVector(ContactUE.X, ContactUE.Y, ContactUE.Z);
+
+		// Penetration axis points from body2 to swept shape. Negate so normal points back along the sweep
+		// (matches SphereCastCollector convention: "normal = -PenetrationAxis.Normalized()").
+		const JPH::Vec3 NormalJolt = -Raw.PenetrationAxis.Normalized();
+		const FVector3f NormalUE   = CoordinateUtils::FromJoltUnitVector(NormalJolt);
+		Out.ImpactNormal = FVector(NormalUE.X, NormalUE.Y, NormalUE.Z);
+	}
+
+	Algo::Sort(OutHits, [](const FBarrageShapeHit& A, const FBarrageShapeHit& B)
+	{
+		return A.Fraction < B.Fraction;
 	});
 }
 
