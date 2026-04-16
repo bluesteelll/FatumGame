@@ -12,6 +12,7 @@
 #include "FWorldSimOwner.h"
 #include "FlecsResourceTypes.h"
 #include "FlecsAbilityDefinition.h"
+#include "FlecsMeleeComponents.h"  // FTagMeleeBlocking — regen suppression (Phase 6)
 
 /** Dispatch a tick function for a given slot. Handles result (deactivation, consume). */
 static void DispatchSlotTick(FAbilityTickContext& Ctx, FAbilitySystem* AbilSys, int32 i,

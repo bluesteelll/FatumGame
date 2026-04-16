@@ -93,6 +93,7 @@ void UFlecsArtillerySubsystem::SetupMeleeChargeSystem()
 			{
 				CancelMeleeCharge(Entity, Inst);
 				Inst.bWasAttackRequestedLastTick = Inst.bAttackRequested;
+				Inst.bWasBlockRequestedLastTick  = Inst.bBlockRequested;
 				return;
 			}
 
@@ -120,6 +121,7 @@ void UFlecsArtillerySubsystem::SetupMeleeChargeSystem()
 					Inst.PendingPayload = P;
 				}
 				Inst.bWasAttackRequestedLastTick = Inst.bAttackRequested;
+				Inst.bWasBlockRequestedLastTick  = Inst.bBlockRequested;
 				return;
 			}
 
@@ -184,5 +186,57 @@ void UFlecsArtillerySubsystem::SetupMeleeChargeSystem()
 
 			// ── STEP 7: snapshot for next-tick edge detection ──
 			Inst.bWasAttackRequestedLastTick = Inst.bAttackRequested;
+
+			// ── STEP 8: block state edge detection (Phase 6 — §B.2 BlockAbsorbSystem) ──
+			// FTagMeleeBlocking lives on the CHARACTER entity, not the weapon.
+			// bIsBlocking + BlockStartTimestampSim live on the weapon instance.
+			if (Static->bCanBlock)
+			{
+				const bool bBlockPressed  = Inst.bBlockRequested && !Inst.bWasBlockRequestedLastTick;
+				const bool bBlockReleased = !Inst.bBlockRequested && Inst.bWasBlockRequestedLastTick;
+
+				if (bBlockPressed && !Inst.bIsBlocking && Inst.Phase == EMeleeAttackPhase::Idle)
+				{
+					Inst.bIsBlocking = true;
+					// TODO(N-M2): use FSimulationWorker wall-clock RealDT accumulator for
+					// time-dilation-immune perfect-block timing. Flecs world.time() is acceptable
+					// for single-player MVP without heavy dilation.
+					Inst.BlockStartTimestampSim = Entity.world().get_info()->world_time_total;
+
+					flecs::entity CharEntity = Entity.world().entity(
+						static_cast<uint64>(EquippedBy.CharacterEntityId));
+					if (CharEntity.is_valid() && CharEntity.is_alive())
+					{
+						CharEntity.add<FTagMeleeBlocking>();
+					}
+				}
+				else if (bBlockReleased && Inst.bIsBlocking)
+				{
+					Inst.bIsBlocking = false;
+
+					flecs::entity CharEntity = Entity.world().entity(
+						static_cast<uint64>(EquippedBy.CharacterEntityId));
+					if (CharEntity.is_valid() && CharEntity.is_alive())
+					{
+						CharEntity.remove<FTagMeleeBlocking>();
+					}
+				}
+
+				// Cancel block when a swing starts (Phase != Idle is caught by Step 1 early-return,
+				// so this handles the edge case of attack-and-block on the same tick).
+				if (Inst.bIsBlocking && Inst.PendingPayload.bValid)
+				{
+					Inst.bIsBlocking = false;
+
+					flecs::entity CharEntity = Entity.world().entity(
+						static_cast<uint64>(EquippedBy.CharacterEntityId));
+					if (CharEntity.is_valid() && CharEntity.is_alive())
+					{
+						CharEntity.remove<FTagMeleeBlocking>();
+					}
+				}
+			}
+
+			Inst.bWasBlockRequestedLastTick = Inst.bBlockRequested;
 		});
 }

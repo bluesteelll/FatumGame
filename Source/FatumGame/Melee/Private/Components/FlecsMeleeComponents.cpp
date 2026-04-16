@@ -122,6 +122,7 @@ void FMeleeWeaponInstance::ResetAllChargeAndSwingState()
 	bAttackRequested            = false;
 	bBlockRequested             = false;
 	bWasAttackRequestedLastTick = false;
+	bWasBlockRequestedLastTick  = false;
 
 	bIsCharging         = false;
 	ChargeAccumulator   = 0.f;

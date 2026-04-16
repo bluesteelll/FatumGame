@@ -469,6 +469,8 @@ private:
 	void SetupMeleeSwingInitSystem();
 	void SetupMeleePhaseAdvanceSystem();
 	void SetupMeleeSweepSystem();
+	/** Block absorb drain — Phase 6. Runs after MeleeSweepSystem, before stamina regen. */
+	void SetupBlockAbsorbSystem();
 
 	/** Door trigger unlock + door state machine. */
 	void SetupDoorSystems();

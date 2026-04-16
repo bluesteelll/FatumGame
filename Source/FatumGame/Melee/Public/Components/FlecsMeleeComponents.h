@@ -251,6 +251,8 @@ struct FMeleeWeaponInstance
 	bool bBlockRequested             = false;
 	/** Previous-tick snapshot of bAttackRequested — edge-trigger release detection (N-m3). */
 	bool bWasAttackRequestedLastTick = false;
+	/** Previous-tick snapshot of bBlockRequested — edge-trigger detection for block start/stop (Phase 6). */
+	bool bWasBlockRequestedLastTick  = false;
 
 	// ─────────────────────────────────────────────────────────
 	// CHARGE STATE (sim-thread only)

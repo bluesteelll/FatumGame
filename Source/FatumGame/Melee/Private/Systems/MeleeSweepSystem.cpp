@@ -83,10 +83,17 @@ void UFlecsArtillerySubsystem::SetupMeleeSweepSystem()
 {
 	flecs::world& World = *FlecsWorld;
 
+	// Pre-cached query: find a character's equipped melee weapon for block-check lookups.
+	// Tiny cardinality (2 weapons per character, few characters) — linear scan is fine.
+	flecs::query<const FMeleeWeaponInstance, const FMeleeWeaponStatic, const FEquippedBy>
+		DefenderWeaponQuery = World.query_builder<const FMeleeWeaponInstance, const FMeleeWeaponStatic, const FEquippedBy>()
+			.with<FTagMeleeWeapon>()
+			.build();
+
 	World.system<FMeleeWeaponInstance, const FMeleeWeaponStatic, const FEquippedBy>("MeleeSweepSystem")
 		.with<FTagMeleeAttacking>()
 		.without<FTagDead>()
-		.each([this, &World](flecs::entity WeaponEntity,
+		.each([this, &World, DefenderWeaponQuery](flecs::entity WeaponEntity,
 			FMeleeWeaponInstance& Inst,
 			const FMeleeWeaponStatic& Static,
 			const FEquippedBy& EquippedBy)
@@ -322,8 +329,97 @@ void UFlecsArtillerySubsystem::SetupMeleeSweepSystem()
 					Ctx.InOutPenetrationCount        = &Inst.PenState.PenetrationCount;
 					Ctx.InOutLastPenetratedTargetId  = &Inst.PenState.LastPenetratedTargetId;
 
-					// TODO(Phase 6): check FTagMeleeBlocking on Target → build FPendingBlockAbsorb
-					// and attenuate Ctx.BaseDamage BEFORE ApplyBulletHit (blueprint §F.1).
+					// ── Block check — continuous quality (Phase 6, blueprint §F.1 / §F.7). ──
+					// FTagMeleeBlocking is on the CHARACTER entity (the Target), not the weapon.
+					if (Target.has<FTagMeleeBlocking>())
+					{
+						// Find defender's melee weapon for block parameters.
+						const FMeleeWeaponInstance* DefWeaponInst = nullptr;
+						const FMeleeWeaponStatic*   DefWeaponStatic = nullptr;
+						DefenderWeaponQuery.each(
+							[&](flecs::entity, const FMeleeWeaponInstance& DI,
+								const FMeleeWeaponStatic& DS, const FEquippedBy& DEq)
+							{
+								if (static_cast<uint64>(DEq.CharacterEntityId) == TargetId
+									&& DI.bIsBlocking)
+								{
+									DefWeaponInst   = &DI;
+									DefWeaponStatic = &DS;
+								}
+							});
+
+						if (DefWeaponInst && DefWeaponStatic)
+						{
+							// Directional quality: continuous, no cone gate (Q8).
+							// HitVec = normalize(AttackerPos - DefenderPos) — FROM defender TO attacker.
+							// Dot aligned with DefenderForward ⇒ facing attacker ⇒ max absorb.
+							const FAimDirection* DefAim = Target.try_get<FAimDirection>();
+							const FVector DefenderFwd = DefAim
+								? DefAim->Direction
+								: FVector::ForwardVector;
+
+							// Get defender position from their Barrage body.
+							FVector TargetPos = FVector::ZeroVector;
+							{
+								const FBarrageBody* TargetBody = Target.try_get<FBarrageBody>();
+								if (TargetBody && TargetBody->IsValid())
+								{
+									const FBarrageKey TKey = CachedBarrageDispatch->GetBarrageKeyFromSkeletonKey(
+										TargetBody->BarrageKey);
+									const FBLet TargetPrim = CachedBarrageDispatch->GetShapeRef(TKey);
+									if (FBarragePrimitive::IsNotNull(TargetPrim))
+									{
+										TargetPos = FVector(FBarragePrimitive::GetPosition(TargetPrim));
+									}
+								}
+							}
+
+							const FVector HitVec = (AttackerChestPos - TargetPos).GetSafeNormal();
+							const float Dot = FVector::DotProduct(DefenderFwd, HitVec);
+							// Remap [-1, 1] → [0, 1]
+							const float DirQuality = FMath::Clamp((Dot + 1.0f) * 0.5f, 0.0f, 1.0f);
+							ensure(DirQuality >= 0.f && DirQuality <= 1.f);
+
+							// Timing quality — N-M2: ideally wall-clock, MVP uses world.time().
+							// TODO(N-M2): use FSimulationWorker RealDT accumulator for dilation immunity.
+							const float SimNow = World.get_info()->world_time_total;
+							const float TimeSinceBlock = SimNow - DefWeaponInst->BlockStartTimestampSim;
+							const EBlockTimingQuality Timing =
+								(TimeSinceBlock <= DefWeaponStatic->PerfectBlockWindowSeconds)
+									? EBlockTimingQuality::Perfect
+									: EBlockTimingQuality::Normal;
+
+							// Absorb fraction (blueprint §F.7)
+							const float AbsorbFraction = FMath::Lerp(
+								DefWeaponStatic->MinBlockAbsorb,
+								DefWeaponStatic->MaxBlockAbsorb,
+								DirQuality);
+
+							// Stamina cost (blueprint §F.7)
+							const float StaminaCost = DefWeaponStatic->BaseBlockStaminaCost
+								* (1.0f - DirQuality * DefWeaponStatic->DirectionalDiscountFactor)
+								* ((Timing == EBlockTimingQuality::Perfect)
+									? DefWeaponStatic->PerfectTimingStaminaMultiplier
+									: 1.0f);
+
+							// Damage reduction — read-only from defender, safe in attacker path.
+							Ctx.BaseDamage *= (1.0f - AbsorbFraction);
+
+							// Defer stamina consumption via FPendingBlockAbsorb accumulator (N-C1).
+							// Cross-entity set — safe inside Flecs .each() (auto-deferred).
+							FPendingBlockAbsorb* Existing = Target.try_get_mut<FPendingBlockAbsorb>();
+							if (Existing)
+							{
+								Existing->AddAbsorb(StaminaCost, AbsorbFraction, Timing);
+							}
+							else
+							{
+								FPendingBlockAbsorb Fresh;
+								Fresh.AddAbsorb(StaminaCost, AbsorbFraction, Timing);
+								Target.set<FPendingBlockAbsorb>(Fresh);
+							}
+						}
+					}
 
 					UFlecsBulletHitLibrary::ApplyBulletHit(
 						World, CachedBarrageDispatch,

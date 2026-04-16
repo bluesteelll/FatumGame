@@ -17,4 +17,5 @@ void UFlecsArtillerySubsystem::SetupWeaponSystems()
 	SetupMeleeSwingInitSystem();
 	SetupMeleePhaseAdvanceSystem();
 	SetupMeleeSweepSystem();
+	SetupBlockAbsorbSystem();
 }
