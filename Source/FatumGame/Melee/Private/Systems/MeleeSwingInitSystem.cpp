@@ -13,6 +13,7 @@
 //                  MeleePhaseAdvanceSystem → MeleeSweepSystem → ...
 
 #include "FlecsArtillerySubsystem.h"
+#include "FlecsCharacter.h"                    // AFlecsCharacter::PublishMeleeAttackState
 #include "FlecsGameTags.h"
 #include "FlecsMeleeComponents.h"
 #include "FlecsWeaponComponents.h"             // FEquippedBy
@@ -38,15 +39,20 @@ void UFlecsArtillerySubsystem::SetupMeleeSwingInitSystem()
 	World.system<FMeleeWeaponInstance, const FMeleeWeaponStatic, const FEquippedBy>("MeleeSwingInitSystem")
 		.with<FTagMeleeWeapon>()
 		.without<FTagDead>()
-		.each([&World](flecs::entity Entity,
+		.each([&World, this](flecs::entity Entity,
 			FMeleeWeaponInstance& Inst,
 			const FMeleeWeaponStatic& Static,
 			const FEquippedBy& EquippedBy)
 		{
-			// ── Gate 0: only run on idle weapons with a pending payload. ──
-			if (Inst.Phase != EMeleeAttackPhase::Idle) return;
+			// ── Gate 0: only run with a pending payload on an idle-or-charging weapon. ──
+			// Charging is accepted because Mordhau-style release emits Pending while Phase
+			// is still Charging — we promote straight to Release (no separate Windup phase).
+			if (Inst.Phase != EMeleeAttackPhase::Idle && Inst.Phase != EMeleeAttackPhase::Charging) return;
 			if (!Inst.PendingPayload.bValid) return;
 			if (!EquippedBy.IsEquipped()) return;
+
+			UE_LOG(LogTemp, Warning, TEXT("[MELEE-DBG] SwingInit ENTRY: entity=%lld Pending.valid=1 shapedT=%.3f"),
+				static_cast<int64>(Entity.id()), Inst.PendingPayload.ShapedT);
 
 			// ── Step 1: resolve character entity. ──
 			// Required for direction buffer + stamina pool lookup.
@@ -54,18 +60,26 @@ void UFlecsArtillerySubsystem::SetupMeleeSwingInitSystem()
 			if (!Character.is_valid() || !Character.is_alive())
 			{
 				// Stale equip reference — abort without consuming stamina.
-				UE_LOG(LogTemp, Verbose,
-					TEXT("MeleeSwingInit: character entity %lld invalid; cancelling pending"),
+				UE_LOG(LogTemp, Warning,
+					TEXT("[MELEE-DBG] SwingInit: character entity %lld invalid → CANCEL pending"),
 					EquippedBy.CharacterEntityId);
 				CancelPendingNoStamina(Inst);
 				return;
 			}
 
 			// ── Step 2: RESOLVE DIRECTION FIRST (blueprint C2 order). ──
+			// Buffer is an accumulator of (yaw, pitch) mouse deltas since the last
+			// Reset() — MeleeChargeSystem resets it at charge start, so AccumulatedDelta
+			// contains ONLY motion during this hold. Classification branches into
+			// Horizontal / Vertical / DiagonalTL / DiagonalTR / Thrust.
 			EMeleeSwingDirection Resolved = EMeleeSwingDirection::Horizontal;
 			if (const FMeleeAttackDirectionBuffer* DirBuf = Character.try_get<FMeleeAttackDirectionBuffer>())
 			{
-				Resolved = DirBuf->Resolve(kSwingDirectionWindowSecondsPlaceholder);
+				Resolved = DirBuf->Resolve();
+				UE_LOG(LogTemp, Warning,
+					TEXT("[MELEE-DBG] SwingInit: AccumulatedDelta=(yaw=%.2f, pitch=%.2f) mag=%.2f → Dir=%d"),
+					DirBuf->AccumulatedDelta.X, DirBuf->AccumulatedDelta.Y,
+					DirBuf->AccumulatedDelta.Size(), (int32)Resolved);
 			}
 			else
 			{
@@ -90,11 +104,16 @@ void UFlecsArtillerySubsystem::SetupMeleeSwingInitSystem()
 					if (Pools->Pools[StamIdx].CurrentValue < StaminaCost)
 					{
 						// Insufficient stamina — cancel pending; NO consumption (blueprint C2).
+						UE_LOG(LogTemp, Warning,
+							TEXT("[MELEE-DBG] SwingInit: STAMINA TOO LOW (current=%.1f need=%.1f) → CANCEL pending"),
+							Pools->Pools[StamIdx].CurrentValue, StaminaCost);
 						CancelPendingNoStamina(Inst);
 						return;
 					}
 				}
 			}
+			UE_LOG(LogTemp, Warning, TEXT("[MELEE-DBG] SwingInit: direction=%d stamina OK (hasPool=%d cost=%.1f) → will promote Pending→Latched"),
+				(int32)Resolved, bHasStaminaPool ? 1 : 0, StaminaCost);
 
 			// MVP tolerance: characters without a stamina pool swing for free. Log so we notice.
 			if (!bHasStaminaPool)
@@ -136,27 +155,39 @@ void UFlecsArtillerySubsystem::SetupMeleeSwingInitSystem()
 			}
 			Inst.HitCount            = 0;
 			Inst.bSwingRebounded     = false;
+			Inst.bSwingBladeStuck    = false;  // fresh swing: blade free to find its first target
 			Inst.LastSweepFrameStamp = 0;   // forces stale-handling on first Release tick (C5)
 			Inst.LastTipSpeed        = 0.f;
 
-			// ── Step 8: enter Windup + tag for sweep/phase-advance queries. ──
-			Inst.Phase             = EMeleeAttackPhase::Windup;
-			Inst.PhaseTimer        = Inst.WindupDuration;
+			// ── Step 8: enter Release directly — skip Windup entirely. ──
+			// The Charging phase already provided the windup visual via procedural anim
+			// (scaled by ChargeAccumulator / MaxChargeTime), so on release we go straight
+			// into the strike. This gives the Mordhau-style "hold = windup, release = strike"
+			// feel. Windup phase stays in the enum for potential future AnimMontage driven
+			// pre-strike timing, but is not entered by the default charge path.
+			Inst.Phase             = EMeleeAttackPhase::Release;
+			Inst.PhaseTimer        = Inst.ReleaseDuration;
 			Inst.ResolvedDirection = Resolved;
 			Inst.ShapedT           = Inst.LatchedPayload.ShapedT;
 			Entity.add<FTagMeleeAttacking>();
 
 			// ── Step 9: publish atomic to game thread. ──
-			// TODO(Phase 5+ followup): reverse lookup flecs::entity → AFlecsCharacter* is not
-			// present in the codebase. Without it, we cannot call PublishMeleeAttackState()
-			// from sim. Game thread will fall back to always-on socket sampling in
-			// WriteMeleeWeaponBladeSocket (acceptable per Phase 5 scope). Wire this once a
-			// clean reverse map (e.g. FlecsCharacterActorRegistry) lands.
+			// Reverse lookup via FCharacterPhysBridge::CharacterActor — set during
+			// RegisterCharacterBridge, covers full lifetime. Sim-thread calls
+			// PublishMeleeAttackState() which only touches the MeleeAttackStatePacked
+			// std::atomic on the actor — no UObject state reads, no world access.
+			if (FCharacterPhysBridge* Bridge = this->FindCharacterBridge(Character))
+			{
+				if (AFlecsCharacter* Actor = Bridge->CharacterActor)
+				{
+					Actor->PublishMeleeAttackState(Inst.Phase, Inst.ResolvedDirection, Inst.ShapedT);
+				}
+			}
 
-			UE_LOG(LogTemp, Verbose,
-				TEXT("MeleeSwingInit: entity=%lld Windup=%.3f Release=%.3f Recovery=%.3f Dir=%d ShapedT=%.3f"),
+			UE_LOG(LogTemp, Warning,
+				TEXT("[MELEE-DBG] SwingInit: entity=%lld Phase=Release (Windup skipped) Release=%.3f Recovery=%.3f Dir=%d ShapedT=%.3f PUBLISHED"),
 				static_cast<int64>(Entity.id()),
-				Inst.WindupDuration, Inst.ReleaseDuration, Inst.RecoveryDuration,
+				Inst.ReleaseDuration, Inst.RecoveryDuration,
 				static_cast<int32>(Resolved), Inst.ShapedT);
 		});
 }

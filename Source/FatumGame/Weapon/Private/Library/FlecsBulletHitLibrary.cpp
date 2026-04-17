@@ -172,6 +172,19 @@ FBulletHitResult UFlecsBulletHitLibrary::ApplyBulletHit(
 	FVector ExitPoint = Ctx.ImpactPoint + IncomingDir * PhysicalThickness;
 	float DegradeResistance = TargetPenMat ? TargetPenMat->GetResistance() : 999.f;
 
+	// Diagnostic: material category (None if no FPenetrationMaterial component)
+	const FString MatCategoryName = TargetPenMat
+		? FString::Printf(TEXT("Cat=%d Res=%.2f"), (int32)TargetPenMat->MaterialCategory, TargetPenMat->GetResistance())
+		: FString(TEXT("NO-MATERIAL (impenetrable)"));
+
+	UE_LOG(LogTemp, Warning,
+		TEXT("[PEN-DBG] target=%llu %s | cosAngle=%.3f (incidence) | PenStatic=%s Budget=%.2f penCount=%d/%d"),
+		(uint64)Target.id(), *MatCategoryName, CosAngle,
+		Ctx.PenStatic ? TEXT("OK") : TEXT("NULL"),
+		(Ctx.PenStatic && Ctx.InOutRemainingBudget) ? *Ctx.InOutRemainingBudget : -1.f,
+		(Ctx.PenStatic && Ctx.InOutPenetrationCount) ? *Ctx.InOutPenetrationCount : -1,
+		Ctx.PenStatic ? Ctx.PenStatic->MaxPenetrations : -1);
+
 	if (Ctx.PenStatic && Ctx.InOutRemainingBudget && Ctx.InOutPenetrationCount
 		&& TargetPenMat && TargetPenMat->GetResistance() < 900.f)
 	{
@@ -185,6 +198,21 @@ FBulletHitResult UFlecsBulletHitLibrary::ApplyBulletHit(
 		if (CosAngle < RicochetThreshold)
 		{
 			Out.bRicocheted = true;
+			UE_LOG(LogTemp, Warning,
+				TEXT("[PEN-DBG]   → RICOCHET (cosAngle %.3f < threshold %.3f, too oblique)"),
+				CosAngle, RicochetThreshold);
+		}
+		else if (!MaxAllowed)
+		{
+			UE_LOG(LogTemp, Warning,
+				TEXT("[PEN-DBG]   → STOP (MaxPenetrations %d reached)"),
+				Ctx.PenStatic->MaxPenetrations);
+		}
+		else if (!bBudgetOk)
+		{
+			UE_LOG(LogTemp, Warning,
+				TEXT("[PEN-DBG]   → STOP (budget exhausted: %.3f)"),
+				*Ctx.InOutRemainingBudget);
 		}
 		else if (MaxAllowed && bBudgetOk && Barrage)
 		{
@@ -224,7 +252,23 @@ FBulletHitResult UFlecsBulletHitLibrary::ApplyBulletHit(
 			EffectiveThickness = PhysicalThickness * EffRes / FMath::Max(CosAngle, 0.1f);
 			bWillPenetrate = (EffectiveThickness < *Ctx.InOutRemainingBudget);
 			DegradeResistance = TargetPenMat->GetResistance();
+
+			UE_LOG(LogTemp, Warning,
+				TEXT("[PEN-DBG]   physThick=%.2fcm × effRes=%.2f / cosAngle=%.3f = effThick=%.2fcm vs budget=%.2f → penetrate=%d"),
+				PhysicalThickness, EffRes, FMath::Max(CosAngle, 0.1f),
+				EffectiveThickness, *Ctx.InOutRemainingBudget, bWillPenetrate ? 1 : 0);
 		}
+	}
+	else
+	{
+		// Penetration system inactive for this hit — either no PenStatic, no material, or
+		// material is impenetrable (resistance >= 900). Target always stops the blade/bullet.
+		UE_LOG(LogTemp, Warning,
+			TEXT("[PEN-DBG]   → STOP (penetration inactive: %s%s)"),
+			(!Ctx.PenStatic || !Ctx.InOutRemainingBudget || !Ctx.InOutPenetrationCount)
+				? TEXT("no-pen-state") : TEXT(""),
+			(!TargetPenMat || TargetPenMat->GetResistance() >= 900.f)
+				? TEXT(" impenetrable") : TEXT(""));
 	}
 
 	// 9) Surface degradation (every hit that can degrade)
@@ -292,7 +336,7 @@ FBulletHitResult UFlecsBulletHitLibrary::ApplyBulletHit(
 		}
 	}
 
-	// 13) Impulse (hitscan only)
+	// 13) Impulse (hitscan / melee)
 	if (Ctx.bApplyImpulse && Barrage && Ctx.ImpulseStrength > 0.f)
 	{
 		const FBarrageBody* TBody = Target.try_get<FBarrageBody>();
@@ -303,7 +347,22 @@ FBulletHitResult UFlecsBulletHitLibrary::ApplyBulletHit(
 			{
 				const FVector Impulse = IncomingDir * (Ctx.ImpulseStrength * FMath::Max(FinalDamage, 1.f));
 				Barrage->AddBodyImpulse(TPrim->KeyIntoBarrage, Impulse);
+				UE_LOG(LogTemp, Warning,
+					TEXT("[MELEE-DBG] ApplyBulletHit IMPULSE APPLIED: target=%llu impulse=(%s) mag=%.1f"),
+					(uint64)Target.id(), *Impulse.ToString(), Impulse.Size());
 			}
+			else
+			{
+				UE_LOG(LogTemp, Warning,
+					TEXT("[MELEE-DBG] ApplyBulletHit IMPULSE SKIPPED: target=%llu barrage primitive null"),
+					(uint64)Target.id());
+			}
+		}
+		else
+		{
+			UE_LOG(LogTemp, Warning,
+				TEXT("[MELEE-DBG] ApplyBulletHit IMPULSE SKIPPED: target=%llu no FBarrageBody or not valid"),
+				(uint64)Target.id());
 		}
 	}
 
@@ -323,6 +382,18 @@ FBulletHitResult UFlecsBulletHitLibrary::ApplyBulletHit(
 		*Ctx.InOutCurrentDamageMultiplier *= PenDmgMult;
 		*Ctx.InOutLastPenetratedTargetId = Ctx.TargetEntityId;
 		Out.PostHitDamageMultiplier = *Ctx.InOutCurrentDamageMultiplier;
+
+		UE_LOG(LogTemp, Warning,
+			TEXT("[PEN-DBG]   AFTER PENETRATE: budgetLeft=%.2f penCount=%d nextHitDmgMult=%.2f (thisHit dmg=%.1f crit=%d)"),
+			*Ctx.InOutRemainingBudget, *Ctx.InOutPenetrationCount,
+			*Ctx.InOutCurrentDamageMultiplier, FinalDamage, bCritical ? 1 : 0);
+	}
+	else
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("[PEN-DBG]   HIT FINAL: dmg=%.1f crit=%d penetrated=%d ricocheted=%d"),
+			FinalDamage, bCritical ? 1 : 0,
+			bWillPenetrate ? 1 : 0, Out.bRicocheted ? 1 : 0);
 	}
 
 	return Out;

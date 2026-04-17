@@ -22,6 +22,7 @@
 #include "FlecsWeaponComponents.h"             // FEquippedBy
 #include "FlecsBarrageComponents.h"            // FBarrageBody
 #include "FlecsPenetrationComponents.h"        // FPenetrationMaterial
+#include "FlecsNiagaraManager.h"               // Impact VFX enqueue (Phase 7)
 #include "Library/FlecsBulletHitLibrary.h"
 
 #include "BarrageDispatch.h"
@@ -106,6 +107,22 @@ void UFlecsArtillerySubsystem::SetupMeleeSweepSystem()
 			if (!EquippedBy.IsEquipped()) return;
 			if (!CachedBarrageDispatch) return;
 
+			// ── Gate 2: swing-long blade-stuck state. ──
+			// Once the blade hits something non-penetrable this swing, no further
+			// sweeping happens until a NEW swing starts (MeleeSwingInitSystem clears
+			// this flag). Without this the "stuck" state was scoped to a single sim
+			// tick and the sweep picked up fresh targets across the Release phase.
+			if (Inst.bSwingBladeStuck)
+			{
+				return;
+			}
+
+			UE_LOG(LogTemp, Warning,
+				TEXT("[MELEE-DBG] Sweep TICK: entity=%lld BladeBuffer=%p LastSweepStamp=%llu"),
+				(int64)WeaponEntity.id(),
+				Inst.BladeBuffer,
+				(uint64)Inst.LastSweepFrameStamp);
+
 			// ── Step 1: Source dispatch (N-C3). ──
 			FVector SnapshotStart      = FVector::ZeroVector;
 			FVector SnapshotTip        = FVector::ZeroVector;
@@ -114,10 +131,19 @@ void UFlecsArtillerySubsystem::SetupMeleeSweepSystem()
 			if (Inst.BladeBuffer != nullptr)
 			{
 				// Player / full-AI path: drain triple buffer.
-				const FMeleeWeaponInstance::FBladeSocketData& Sample = Inst.BladeBuffer->Read();
+				// CRITICAL: Read() alone returns the LAST-KNOWN read slot. Without
+				// SwapReadBuffers() the reader is stuck on the default/initial slot
+				// forever. SwapAndRead() does both atomically per UE TTripleBuffer
+				// contract (header comments line 221-223). If no new data is
+				// available, SwapReadBuffers() is a no-op — we keep the previous tick's
+				// sample, which is the intended behaviour.
+				const FMeleeWeaponInstance::FBladeSocketData& Sample = Inst.BladeBuffer->SwapAndRead();
 				SnapshotStart      = Sample.Start;
 				SnapshotTip        = Sample.Tip;
 				SnapshotFrameStamp = Sample.FrameStamp;
+				UE_LOG(LogTemp, Warning,
+					TEXT("[MELEE-DBG] Sweep READ sample: frameStamp=%llu start=(%s) tip=(%s)"),
+					(uint64)Sample.FrameStamp, *Sample.Start.ToString(), *Sample.Tip.ToString());
 			}
 			else
 			{
@@ -227,6 +253,12 @@ void UFlecsArtillerySubsystem::SetupMeleeSweepSystem()
 			TArray<FBarrageShapeHit> SubstepHits;
 			SubstepHits.Reserve(16);
 
+			// Mordhau-style energy cleave: blade continues through soft targets until
+			// penetration budget is exhausted or it hits a "hard" material (metal / armor /
+			// thick concrete). Signalled by ApplyBulletHit returning bPenetrated=false.
+			// Stops further hits within this substep AND skips remaining substeps.
+			bool bBladeStuck = false;
+
 			for (int32 i = 1; i <= SubstepCount; ++i)
 			{
 				const float tPrev = static_cast<float>(i - 1) / static_cast<float>(SubstepCount);
@@ -248,6 +280,11 @@ void UFlecsArtillerySubsystem::SetupMeleeSweepSystem()
 					HalfHeight, Static.CapsuleRadius,
 					BPFilter, ObjFilter, AttackerFilter,
 					SubstepHits);
+
+				UE_LOG(LogTemp, Warning,
+					TEXT("[MELEE-DBG] Sweep substep %d/%d: hits=%d tipSpeed=%.1f centerA=(%s) centerB=(%s) halfHeight=%.1f radius=%.1f"),
+					i, SubstepCount, SubstepHits.Num(), TipSpeed,
+					*CenterA.ToString(), *CenterB.ToString(), HalfHeight, Static.CapsuleRadius);
 
 				// ── Per-hit loop (sorted near→far by Fraction). ──
 				for (const FBarrageShapeHit& Hit : SubstepHits)
@@ -318,10 +355,24 @@ void UFlecsArtillerySubsystem::SetupMeleeSweepSystem()
 					Ctx.SubShapeIDValue = Hit.SubShapeIDValue;
 					Ctx.PenStatic       = &Static.MeleePen;
 					Ctx.bApplyImpulse   = true;
+					// ApplyBulletHit multiplies impulse by FinalDamage (intentional for ranged
+					// variance). For melee we want BaseImpulse to express the FINAL magnitude
+					// at a base hit, so pre-divide by BaseDamage. This keeps the formula
+					// tunable: at reference tip speed + base damage + no charge multipliers,
+					// the applied impulse ≈ BaseImpulse. Charge, crits and tip-speed scale
+					// linearly on top.
+					const float DamageScale = FMath::Max(Static.BaseDamage, 1.f);
 					Ctx.ImpulseStrength = Static.BaseImpulse
 						* Inst.LatchedPayload.ImpulseMul
-						* (TipSpeed / FMath::Max(Static.ReferenceTipSpeed, 1.f));
+						* (TipSpeed / FMath::Max(Static.ReferenceTipSpeed, 1.f))
+						/ DamageScale;
 					Ctx.bCanDegrade     = true;
+
+					UE_LOG(LogTemp, Warning,
+						TEXT("[MELEE-DBG] Sweep HIT: target=%lld dmg=%.1f impulse=%.1f tipSpeed=%.1f dir=(%s) TargetHasBarrageBody=%d"),
+						(int64)TargetId, Ctx.BaseDamage, Ctx.ImpulseStrength, TipSpeed,
+						*IncomingDir.ToString(),
+						Target.has<FBarrageBody>() ? 1 : 0);
 
 					// Per-swing penetration state pointers — blueprint C3 (NOT thread_local).
 					Ctx.InOutRemainingBudget         = &Inst.PenState.RemainingBudget;
@@ -421,12 +472,53 @@ void UFlecsArtillerySubsystem::SetupMeleeSweepSystem()
 						}
 					}
 
-					UFlecsBulletHitLibrary::ApplyBulletHit(
+					FBulletHitResult HitResult = UFlecsBulletHitLibrary::ApplyBulletHit(
 						World, CachedBarrageDispatch,
 						AttackerEntity, Target, Ctx);
+
+					UE_LOG(LogTemp, Warning,
+						TEXT("[MELEE-DBG] Sweep RESULT: target=%lld appliedDmg=%.1f killed=%d penetrated=%d ricochet=%d"),
+						(int64)TargetId, HitResult.AppliedDamage,
+						HitResult.bTargetKilled ? 1 : 0,
+						HitResult.bPenetrated ? 1 : 0,
+						HitResult.bRicocheted ? 1 : 0);
+
+					// Energy-cleave gate: blade stops on the first non-penetrating contact.
+					// Damage on THIS target is already applied above; we just prevent the
+					// sweep from continuing to subsequent targets (soft bodies behind the
+					// first hard one, etc.). Penetration-budget exhaustion, material-hardness
+					// rebound, and acute-angle ricochet all flow through bPenetrated=false.
+					if (!HitResult.bPenetrated)
+					{
+						bBladeStuck = true;
+						Inst.bSwingBladeStuck = true;  // persist across sim ticks (Gate 2)
+						UE_LOG(LogTemp, Warning,
+							TEXT("[MELEE-DBG] Sweep: blade stuck on target=%lld (penetrated=false) → stop sweep for rest of swing"),
+							(int64)TargetId);
+						break;  // exit per-hit loop (no more targets this substep)
+					}
+
+					// ── Impact VFX (Phase 7): one-shot spawn at impact point. ──
+					// Uses ImpactEffectOverride from the weapon profile if set.
+					// Enqueued to NiagaraManager MPSC queue for game-thread spawn.
+					if (HitResult.AppliedDamage > 0.f && Static.ImpactEffectOverride)
+					{
+						UFlecsNiagaraManager* NiagaraMgr = this->GetNiagaraManager();
+						if (NiagaraMgr)
+						{
+							FPendingDeathEffect FX;
+							FX.Location = Hit.ImpactPoint;
+							FX.Rotation = FQuat::FindBetweenNormals(FVector::ForwardVector,
+								Hit.ImpactNormal.IsNearlyZero() ? FVector::UpVector : Hit.ImpactNormal);
+							FX.Effect = Static.ImpactEffectOverride;
+							FX.Scale = 1.0f;
+							NiagaraMgr->EnqueueDeathEffect(FX);
+						}
+					}
 				}
 
 				if (Inst.HitCount >= FMeleeWeaponInstance::MaxHitsPerSwing) break;
+				if (bBladeStuck) break;  // blade halted on hard surface / budget exhausted
 			}
 
 			// ── Step 7: update sweep state. ──

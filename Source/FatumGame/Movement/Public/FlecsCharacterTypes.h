@@ -107,6 +107,10 @@ struct FPendingWeaponEquip
 	std::atomic<int64> WeaponId{0};
 	std::atomic<bool> bPending{false};
 	std::atomic<int32> SlotIndex{-1};
+	/** Sim sets true when the equipped weapon carries FMeleeWeaponInstance.
+	 *  Game thread reads in ProcessPendingWeaponEquip → caches on AFlecsCharacter
+	 *  for IsActiveWeaponMelee() → drives LMB/RMB input routing. */
+	std::atomic<bool> bIsMelee{false};
 	USkeletalMesh* Mesh = nullptr;                // UObject* safe: DataAsset outlives game
 	FTransform AttachOffset;
 	UFlecsWeaponProfile* WeaponProfile = nullptr;  // UObject* safe: DataAsset outlives game

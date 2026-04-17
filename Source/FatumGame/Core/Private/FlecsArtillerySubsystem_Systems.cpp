@@ -79,6 +79,7 @@ void UFlecsArtillerySubsystem::RegisterFlecsComponents()
 	World.component<FProjectileInstance>();
 	World.component<FItemInstance>();
 	World.component<FItemUniqueData>();
+	World.component<FItemTags>();
 	World.component<FContainerInstance>();
 	World.component<FContainerGridInstance>();
 	World.component<FContainerSlotsInstance>();

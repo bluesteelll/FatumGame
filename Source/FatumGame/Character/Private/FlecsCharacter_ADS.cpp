@@ -3,6 +3,7 @@
 
 #include "FlecsCharacter.h"
 #include "FlecsWeaponProfile.h"
+#include "FlecsMeleeLibrary.h"
 #include "FatumMovementComponent.h"
 #include "Camera/CameraComponent.h"
 #include "Components/SkeletalMeshComponent.h"
@@ -14,6 +15,17 @@
 void AFlecsCharacter::OnADSStarted(const FInputActionValue& Value)
 {
 	if (InputAtomics) InputAtomics->SetInputBit(InputBit::ADSHeld);
+
+	// ─── MELEE BRANCH ────────────────────────────────────────────────
+	// Melee weapons reuse the ADS (RMB) binding for Block. Skip the ranged
+	// ADS state bit entirely — no scope alpha, no sprint cancel tied to ADS.
+	if (IsActiveWeaponMelee())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[MELEE-DBG] OnADSStarted: melee path → SetMeleeBlockRequested(true) on %lld"),
+			ActiveWeaponEntityId);
+		UFlecsMeleeLibrary::SetMeleeBlockRequested(this, ActiveWeaponEntityId, true);
+		return;
+	}
 
 	// Rule table handles blocks (Sprint, Mantling, Climbing, etc.)
 	// CanceledOnEntry handles Sprint cancel
@@ -32,6 +44,15 @@ void AFlecsCharacter::OnADSStarted(const FInputActionValue& Value)
 void AFlecsCharacter::OnADSCompleted(const FInputActionValue& Value)
 {
 	if (InputAtomics) InputAtomics->ClearInputBit(InputBit::ADSHeld);
+
+	if (IsActiveWeaponMelee())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[MELEE-DBG] OnADSCompleted: melee path → SetMeleeBlockRequested(false) on %lld"),
+			ActiveWeaponEntityId);
+		UFlecsMeleeLibrary::SetMeleeBlockRequested(this, ActiveWeaponEntityId, false);
+		return;
+	}
+
 	RecoilState.bWantsADS = false;
 
 	ClearGameBit(ActionBit::ADS);

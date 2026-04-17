@@ -10,6 +10,7 @@
 
 class UCurveFloat;
 class UNiagaraSystem;
+class USkeletalMesh;
 
 /**
  * Melee weapon profile - defines swing behavior, damage, charge, block, and penetration.
@@ -24,6 +25,23 @@ class FATUMGAME_API UFlecsMeleeProfile : public UDataAsset
 	GENERATED_BODY()
 
 public:
+	// ═══════════════════════════════════════════════════════════════
+	// VISUALS
+	// ═══════════════════════════════════════════════════════════════
+
+	/** Skeletal mesh applied to the character's WeaponMeshComponent on equip.
+	 *  MUST contain the BladeStartSocket / BladeTipSocket sockets below —
+	 *  the sweep reads their world transforms every Tick. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Visuals|Equipped")
+	TObjectPtr<USkeletalMesh> EquippedMesh;
+
+	/** Local transform applied to the weapon mesh on equip (relative to WeaponMeshComponent's
+	 *  parent, typically FollowCamera). Identity = mesh pivot sits at the camera origin which
+	 *  is usually invisible in 1P. Designer tunes this to place the weapon in front-and-below
+	 *  the camera view. Mirrors UFlecsWeaponProfile::AttachOffset. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Visuals|Equipped")
+	FTransform AttachOffset;
+
 	// ═══════════════════════════════════════════════════════════════
 	// GEOMETRY
 	// ═══════════════════════════════════════════════════════════════

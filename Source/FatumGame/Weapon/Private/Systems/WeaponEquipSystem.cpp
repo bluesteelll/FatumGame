@@ -29,13 +29,30 @@ void UFlecsArtillerySubsystem::SetupWeaponEquipSystem()
 			if (SlotState.EquipTimer > 0.f) return;
 
 			// Resolve weapon slot container
-			if (SlotState.WeaponSlotContainerId == 0) return;
+			if (SlotState.WeaponSlotContainerId == 0)
+			{
+				UE_LOG(LogTemp, Warning, TEXT("[MELEE-DBG] EquipSystem: WeaponSlotContainerId == 0 → ABORT phase=%d"),
+					(int32)SlotState.EquipPhase);
+				return;
+			}
 			flecs::entity Container = CharEntity.world().entity(
 				static_cast<flecs::entity_t>(SlotState.WeaponSlotContainerId));
-			if (!Container.is_valid() || !Container.is_alive()) return;
+			if (!Container.is_valid() || !Container.is_alive())
+			{
+				UE_LOG(LogTemp, Warning, TEXT("[MELEE-DBG] EquipSystem: Container %lld invalid/dead → ABORT"),
+					SlotState.WeaponSlotContainerId);
+				return;
+			}
 
 			const FContainerSlotsInstance* Slots = Container.try_get<FContainerSlotsInstance>();
-			if (!Slots) return;
+			if (!Slots)
+			{
+				UE_LOG(LogTemp, Warning, TEXT("[MELEE-DBG] EquipSystem: Container has NO FContainerSlotsInstance → ABORT"));
+				return;
+			}
+
+			UE_LOG(LogTemp, Warning, TEXT("[MELEE-DBG] EquipSystem: phase=%d timer expired, processing..."),
+				(int32)SlotState.EquipPhase);
 
 			switch (SlotState.EquipPhase)
 			{
@@ -142,8 +159,12 @@ void UFlecsArtillerySubsystem::SetupWeaponEquipSystem()
 			case EWeaponEquipPhase::Drawing:
 			{
 				int64 NewWeaponId = Slots->GetItemInSlot(SlotState.PendingSlotIndex);
+				UE_LOG(LogTemp, Warning, TEXT("[MELEE-DBG] EquipSystem DRAW: pending=%d weaponId=%lld"),
+					SlotState.PendingSlotIndex, NewWeaponId);
 				if (NewWeaponId == 0)
 				{
+					UE_LOG(LogTemp, Warning, TEXT("[MELEE-DBG] EquipSystem DRAW: slot %d EMPTY → ABORT (melee not in that slot?)"),
+						SlotState.PendingSlotIndex);
 					SlotState.PendingSlotIndex = -1;
 					SlotState.EquipPhase = EWeaponEquipPhase::Idle;
 					EnqueueWeaponEquipSignal(CharEntity, 0, -1, nullptr, nullptr, FTransform::Identity);
@@ -154,11 +175,19 @@ void UFlecsArtillerySubsystem::SetupWeaponEquipSystem()
 					static_cast<flecs::entity_t>(NewWeaponId));
 				if (!NewWeapon.is_valid() || !NewWeapon.is_alive())
 				{
+					UE_LOG(LogTemp, Warning, TEXT("[MELEE-DBG] EquipSystem DRAW: entity %lld INVALID/DEAD → ABORT"),
+						NewWeaponId);
 					SlotState.PendingSlotIndex = -1;
 					SlotState.EquipPhase = EWeaponEquipPhase::Idle;
 					EnqueueWeaponEquipSignal(CharEntity, 0, -1, nullptr, nullptr, FTransform::Identity);
 					return;
 				}
+
+				const bool bHasMeleeStatic = NewWeapon.has<FMeleeWeaponStatic>();
+				const bool bHasRangedStatic = NewWeapon.has<FWeaponStatic>();
+				const bool bHasMeleeInst = NewWeapon.has<FMeleeWeaponInstance>();
+				UE_LOG(LogTemp, Warning, TEXT("[MELEE-DBG] EquipSystem DRAW: entity %lld components: MeleeStatic=%d RangedStatic=%d MeleeInst=%d"),
+					NewWeaponId, bHasMeleeStatic ? 1 : 0, bHasRangedStatic ? 1 : 0, bHasMeleeInst ? 1 : 0);
 
 				// Equip weapon
 				FEquippedBy Eq;
@@ -223,13 +252,21 @@ void UFlecsArtillerySubsystem::SetupWeaponEquipSystem()
 						CharEntity.set<FMeleeAttackDirectionBuffer>({});
 					}
 
-					// Resolve cosmetic attach target (none for Phase 3 — blade trail VFX is
-					// attached separately in Phase 7). Send a null-mesh equip signal so the
-					// game-thread recoil/visual system detaches any prior ranged mesh.
+					// Resolve cosmetic attach target. Melee equip uses its own SkeletalMesh
+					// (carries BladeStart/BladeTip sockets) — distinct from UFlecsRenderProfile
+					// (StaticMesh, used for the world/ISM pickup visual). WeaponProfile stays
+					// null — melee has no ADS/recoil profile. Blade trail VFX is attached
+					// separately in Phase 7.
+					const FMeleeWeaponStatic* MWS = NewWeapon.try_get<FMeleeWeaponStatic>();
+					USkeletalMesh* MeleeMesh = MWS ? MWS->EquippedMesh.Get() : nullptr;
+					const FTransform MeleeOffset = MWS ? MWS->AttachOffset : FTransform::Identity;
+					UE_LOG(LogTemp, Warning, TEXT("[MELEE-DBG] EquipSystem MELEE-BRANCH: MWS=%p EquippedMesh=%s offset loc=(%s) → EnqueueWeaponEquipSignal"),
+						MWS, MeleeMesh ? *MeleeMesh->GetName() : TEXT("NULL"),
+						*MeleeOffset.GetLocation().ToString());
 					EnqueueWeaponEquipSignal(CharEntity, NewWeaponId, SlotState.ActiveSlotIndex,
-						nullptr, nullptr, FTransform::Identity);
+						MeleeMesh, nullptr, MeleeOffset, /*bIsMelee=*/true);
 
-					UE_LOG(LogTemp, Log, TEXT("MELEE EQUIP: Drew melee weapon %lld from slot %d"),
+					UE_LOG(LogTemp, Warning, TEXT("[MELEE-DBG] EquipSystem MELEE-BRANCH: DONE (weapon=%lld slot=%d)"),
 						NewWeaponId, SlotState.ActiveSlotIndex);
 					break;
 				}

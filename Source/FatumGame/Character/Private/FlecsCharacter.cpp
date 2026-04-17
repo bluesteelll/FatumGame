@@ -44,6 +44,7 @@
 #include <cstring>
 #include "FlecsHealthProfile.h"
 #include "FlecsSwingableComponents.h"
+#include "FlecsNiagaraManager.h"
 #include "FRopeVisualRenderer.h"
 #include "FlecsStealthComponents.h"
 #include "FlecsWeaponProfile.h"
@@ -441,7 +442,12 @@ void AFlecsCharacter::Tick(float DeltaTime)
 	SyncMovementStateToECS();                 // 9. Posture → Flecs (on change)
 	ProcessPendingWeaponEquip();              // 10. Sim→game weapon attach
 	WriteAimDirection();                      // 11. LateSyncBridge FAimDirection
+	UpdateMeleeProceduralAnim(DeltaTime);     // 12a. TEMP (Phase 9): drive WeaponMeshComponent swing pose
+	                                          //      MUST run BEFORE WriteMeleeWeaponBladeSocket so the sweep
+	                                          //      reads sockets from the posed mesh, not the rest pose.
+	                                          //      TODO(MIGRATE): delete when AnimMontage swing is wired.
 	WriteMeleeWeaponBladeSocket(DeltaTime);   // 12. Game→sim blade socket triple buffer (Phase 3)
+	UpdateMeleeBladeTrail();                  // 13. Blade trail VFX lifecycle (Phase 7)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -637,10 +643,17 @@ void AFlecsCharacter::ProcessPendingWeaponEquip()
 
 	PendingWeaponEquip.bPending.store(false, std::memory_order_relaxed);
 	int64 WeaponId = PendingWeaponEquip.WeaponId.load(std::memory_order_acquire);
+	const bool bIsMelee = PendingWeaponEquip.bIsMelee.load(std::memory_order_acquire);
+	UE_LOG(LogTemp, Warning, TEXT("[MELEE-DBG] ProcessPendingWeaponEquip: WeaponId=%lld Mesh=%s Slot=%d bIsMelee=%d"),
+		WeaponId,
+		PendingWeaponEquip.Mesh ? *PendingWeaponEquip.Mesh->GetName() : TEXT("NULL"),
+		PendingWeaponEquip.SlotIndex.load(std::memory_order_acquire),
+		bIsMelee ? 1 : 0);
 
 	if (WeaponId == 0)
 	{
 		// Unequip — holstered or aborted
+		bActiveWeaponIsMelee = false;
 		ActiveWeaponEntityId = 0;
 		ActiveWeaponSlotIndex = -1;
 		ActiveWeaponProfile = nullptr;
@@ -665,6 +678,7 @@ void AFlecsCharacter::ProcessPendingWeaponEquip()
 	}
 
 	// Equip new weapon
+	bActiveWeaponIsMelee = bIsMelee;
 	ActiveWeaponEntityId = WeaponId;
 	ActiveWeaponSlotIndex = PendingWeaponEquip.SlotIndex.load(std::memory_order_acquire);
 	ActiveWeaponProfile = PendingWeaponEquip.WeaponProfile;
@@ -887,6 +901,10 @@ void AFlecsCharacter::WriteMeleeWeaponBladeSocket(float /*DeltaTime*/)
 		return;
 	}
 
+	UE_LOG(LogTemp, Warning,
+		TEXT("[MELEE-DBG] WriteBladeSocket: Phase=%d (Release=3) — proceeding to socket read"),
+		(int32)Phase);
+
 	UFlecsArtillerySubsystem* Sub = GetWorld() ? GetWorld()->GetSubsystem<UFlecsArtillerySubsystem>() : nullptr;
 	if (!Sub)
 	{
@@ -920,5 +938,423 @@ void AFlecsCharacter::WriteMeleeWeaponBladeSocket(float /*DeltaTime*/)
 	Sample.Tip        = Tip;
 	Sample.FrameStamp = static_cast<uint64>(GFrameCounter);
 
-	MInst->BladeBuffer->Write(Sample);
+	// CRITICAL: Write() alone only updates the current write slot — it does NOT
+	// swap buffers or mark the triple buffer dirty. Without SwapWriteBuffers the
+	// reader's SwapReadBuffers() sees IsDirty()==false and never swaps, leaving
+	// it stuck on the initial default slot (frameStamp=0 forever). WriteAndSwap()
+	// does both atomically per UE TTripleBuffer contract (Containers/TripleBuffer.h L231).
+	MInst->BladeBuffer->WriteAndSwap(Sample);
+
+	UE_LOG(LogTemp, Warning,
+		TEXT("[MELEE-DBG] WriteBladeSocket WROTE: frameStamp=%llu start=(%s) tip=(%s) BufferPtr=%p"),
+		(uint64)Sample.FrameStamp, *Start.ToString(), *Tip.ToString(), MInst->BladeBuffer);
+}
+
+void AFlecsCharacter::UpdateMeleeBladeTrail()
+{
+	// Blade trail lifecycle: start trail when entering Release, stop when leaving.
+	// All UObject access (WeaponMeshComponent, NiagaraManager) is game-thread-safe.
+	EMeleeAttackPhase     Phase     = EMeleeAttackPhase::Idle;
+	EMeleeSwingDirection  Direction = EMeleeSwingDirection::Horizontal;
+	float                 ShapedT   = 0.f;
+	ReadMeleeAttackState(Phase, Direction, ShapedT);
+
+	if (Phase == EMeleeAttackPhase::Release && !bMeleeTrailActive)
+	{
+		// Start trail — need weapon static for TrailEffect + socket names.
+		if (ActiveWeaponEntityId == 0 || !WeaponMeshComponent) return;
+
+		UFlecsArtillerySubsystem* Sub = GetWorld() ? GetWorld()->GetSubsystem<UFlecsArtillerySubsystem>() : nullptr;
+		if (!Sub) return;
+
+		flecs::world* World = Sub->GetFlecsWorld();
+		if (!World) return;
+
+		flecs::entity WeaponEntity = World->entity(static_cast<flecs::entity_t>(ActiveWeaponEntityId));
+		if (!WeaponEntity.is_valid() || !WeaponEntity.is_alive()) return;
+
+		const FMeleeWeaponStatic* MStatic = WeaponEntity.try_get<FMeleeWeaponStatic>();
+		if (!MStatic || !MStatic->TrailEffect) return;
+
+		UFlecsNiagaraManager* NiagaraMgr = UFlecsNiagaraManager::Get(GetWorld());
+		if (!NiagaraMgr) return;
+
+		NiagaraMgr->EnqueueBladeTrail(
+			static_cast<uint64>(ActiveWeaponEntityId),
+			MStatic->TrailEffect,
+			WeaponMeshComponent,
+			MStatic->BladeStartSocket,
+			MStatic->BladeTipSocket);
+		bMeleeTrailActive = true;
+	}
+	else if (Phase != EMeleeAttackPhase::Release && bMeleeTrailActive)
+	{
+		// Stop trail.
+		UFlecsNiagaraManager* NiagaraMgr = UFlecsNiagaraManager::Get(GetWorld());
+		if (NiagaraMgr)
+		{
+			NiagaraMgr->DequeueBladeTrailDetach(static_cast<uint64>(ActiveWeaponEntityId));
+		}
+		bMeleeTrailActive = false;
+	}
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TEMP (Phase 9): PROCEDURAL MELEE WEAPON-MESH ANIMATION
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// TODO(MIGRATE): This entire block — UpdateMeleeProceduralAnim + the three
+// anon-namespace pose-table helpers below — is a placeholder for a real
+// UAnimMontage/UAnimBlueprint swing animation. When that pipeline lands:
+//   1. Delete this section (from namespace TempMeleeAnim through the
+//      closing brace of UpdateMeleeProceduralAnim).
+//   2. Remove the call from AFlecsCharacter::Tick (grep for "Phase 9").
+//   3. Remove the public UPROPERTY / private state declarations in the header
+//      (grep for "Phase 9").
+//   4. Remove the two bMeleeRestTransformCached resets in FlecsCharacter_Combat.cpp
+//      AttachWeaponVisual / DetachWeaponVisual.
+// No sim-thread code (MeleeSweepSystem, MeleeChargeSystem, etc.) reads anything
+// defined here — the procedural path consumes the same MeleeAttackStatePacked
+// atomic the sim publishes. Deletion is a pure subtraction.
+
+namespace TempMeleeAnim
+{
+	// Per-direction pose targets. TODO(MIGRATE): These tables become AnimSequences
+	// authored in UE. Units: degrees (applied as FRotator(Pitch,Yaw,Roll)).
+	struct FDirectionPose
+	{
+		float WindupYawDeg   = 0.f;
+		float WindupPitchDeg = 0.f;
+		float WindupRollDeg  = 0.f;
+
+		/** Release arc is obtained by adding (SweepYawSign, SweepPitchSign) *
+		 *  MeleeProceduralReleaseSweepDegrees to the windup rotation — designer
+		 *  tunes magnitude at runtime without touching code. */
+		float SweepYawSign   = 0.f;
+		float SweepPitchSign = 0.f;
+		float SweepRollSign  = 0.f;
+
+		/** Camera-space LOCAL offset at the end of windup (ratio of BackOffsetCm).
+		 *  X = forward(+) / back(-), Y = right(+) / left(-), Z = up(+) / down(-).
+		 *  Gives each direction a visually distinct starting pose — without lateral
+		 *  motion the eye sees only "sword rotates around hilt" and can't tell swings
+		 *  apart. Scaled by MeleeProceduralWindupBackOffset so designer can tune
+		 *  intensity. */
+		FVector WindupOffsetMul = FVector(-1.f, 0.f, 0.f);
+
+		/** Camera-space LOCAL offset at the end of release (same scaling as windup).
+		 *  Drives the observable arc: weapon travels from WindupOffsetMul → ReleaseOffsetMul
+		 *  during Release phase → back to zero during Recovery. */
+		FVector ReleaseOffsetMul = FVector(1.f, 0.f, 0.f);
+	};
+
+	static FDirectionPose GetPoseForDirection(EMeleeSwingDirection Dir)
+	{
+		FDirectionPose P;
+		// Offset convention (camera-local; multiplied by MeleeProceduralWindupBackOffset):
+		//   X: forward(+) / back(-)      — depth along camera look direction
+		//   Y: right(+)   / left(-)      — lateral
+		//   Z: up(+)      / down(-)      — vertical
+		switch (Dir)
+		{
+			case EMeleeSwingDirection::Horizontal:
+				// Right slash (cock RIGHT, sweep to LEFT across the screen).
+				P.WindupYawDeg   = -90.f;
+				P.WindupPitchDeg =  20.f;
+				P.WindupRollDeg  =  30.f;
+				P.SweepYawSign   =  1.5f;     // yaw sweeps strongly left→right
+				P.SweepPitchSign = -0.05f;
+				P.SweepRollSign  = -0.3f;
+				// Windup: weapon goes BACK + RIGHT + slightly up (over right shoulder).
+				P.WindupOffsetMul  = FVector(-0.6f,  1.5f,  0.4f);
+				// Release: weapon slashes FAR-LEFT and forward.
+				P.ReleaseOffsetMul = FVector( 0.8f, -1.8f, -0.3f);
+				break;
+
+			case EMeleeSwingDirection::Vertical:
+				// Overhead chop: cock UP, sweep DOWN.
+				P.WindupYawDeg   = 0.f;
+				P.WindupPitchDeg = 80.f;
+				P.WindupRollDeg  = 0.f;
+				P.SweepYawSign   = 0.f;
+				P.SweepPitchSign = -1.5f;
+				P.SweepRollSign  = 0.f;
+				// Windup: straight UP above the head.
+				P.WindupOffsetMul  = FVector(-0.3f,  0.0f,  1.8f);
+				// Release: DOWN and forward — hits the ground in front.
+				P.ReleaseOffsetMul = FVector( 0.9f,  0.0f, -1.2f);
+				break;
+
+			case EMeleeSwingDirection::DiagonalTL:
+				// Upper-LEFT → lower-RIGHT (slash from player's left-shoulder direction).
+				P.WindupYawDeg   = -45.f;
+				P.WindupPitchDeg =  50.f;
+				P.WindupRollDeg  =  20.f;
+				P.SweepYawSign   =  1.2f;
+				P.SweepPitchSign = -1.0f;
+				P.SweepRollSign  = -0.3f;
+				P.WindupOffsetMul  = FVector(-0.4f, -1.4f,  1.3f);
+				P.ReleaseOffsetMul = FVector( 0.8f,  1.6f, -1.0f);
+				break;
+
+			case EMeleeSwingDirection::DiagonalTR:
+				// Upper-RIGHT → lower-LEFT (mirror of TL).
+				P.WindupYawDeg   =  45.f;
+				P.WindupPitchDeg =  50.f;
+				P.WindupRollDeg  = -20.f;
+				P.SweepYawSign   = -1.2f;
+				P.SweepPitchSign = -1.0f;
+				P.SweepRollSign  =  0.3f;
+				P.WindupOffsetMul  = FVector(-0.4f,  1.4f,  1.3f);
+				P.ReleaseOffsetMul = FVector( 0.8f, -1.6f, -1.0f);
+				break;
+
+			case EMeleeSwingDirection::Thrust:
+				// Straight jab: pull straight BACK, then THRUST FORWARD hard.
+				P.WindupYawDeg   = 0.f;
+				P.WindupPitchDeg = -10.f;
+				P.WindupRollDeg  = 0.f;
+				P.SweepYawSign   = 0.f;
+				P.SweepPitchSign = 0.f;
+				P.SweepRollSign  = 0.f;
+				P.WindupOffsetMul  = FVector(-2.0f, 0.0f, 0.0f);
+				P.ReleaseOffsetMul = FVector( 2.5f, 0.0f, 0.0f);
+				break;
+
+			default:
+				break;
+		}
+		return P;
+	}
+
+	/** Apply a FDirectionPose at normalized pose time [0,1]: 0 = rest, 1 = release end.
+	 *  Caller chooses WindupBlend and ReleaseBlend to blend between phases. */
+	static FTransform BuildSwingOffset(const FDirectionPose& Pose,
+	                                   float BackOffsetCm,
+	                                   float SweepDegrees,
+	                                   float WindupBlend,
+	                                   float ReleaseBlend)
+	{
+		// Rotation: interpolated between rest(0) → windup → release-end.
+		//   Windup pose rotation = (Pitch,Yaw,Roll) × WindupBlend
+		//   Release adds sweep on top: Windup + Sweep × ReleaseBlend
+		const float Yaw   = Pose.WindupYawDeg   * WindupBlend + Pose.SweepYawSign   * SweepDegrees * ReleaseBlend;
+		const float Pitch = Pose.WindupPitchDeg * WindupBlend + Pose.SweepPitchSign * SweepDegrees * ReleaseBlend;
+		const float Roll  = Pose.WindupRollDeg  * WindupBlend + Pose.SweepRollSign  * SweepDegrees * ReleaseBlend;
+
+		// Translation: camera-local blend from rest (0) → WindupOffsetMul during windup
+		// → ReleaseOffsetMul during release. Both offsets come from the direction-specific
+		// pose table. Scaled by BackOffsetCm so designers can tune "amplitude" globally.
+		//
+		// Blend math: at WindupBlend=1, ReleaseBlend=0 → WindupOffset.
+		//             at WindupBlend=1, ReleaseBlend=1 → ReleaseOffset (end of strike).
+		//             (windup is held at 1 throughout Release; Release ramps 0→1.)
+		// Mixed: we can't simply add — want a LERP from Windup to Release as ReleaseBlend ramps.
+		const FVector WindupPos  = Pose.WindupOffsetMul  * BackOffsetCm;
+		const FVector ReleasePos = Pose.ReleaseOffsetMul * BackOffsetCm;
+		const FVector LerpedArc  = FMath::Lerp(WindupPos, ReleasePos, FMath::Clamp(ReleaseBlend, 0.f, 1.f));
+		// Recovery case: WindupBlend fades to 0 while ReleaseBlend is also fading to 0 →
+		// result naturally settles to zero (rest).
+		const FVector Translation = LerpedArc * FMath::Clamp(WindupBlend, 0.f, 1.f);
+
+		FTransform Offset;
+		Offset.SetRotation(FQuat(FRotator(Pitch, Yaw, Roll)));
+		Offset.SetTranslation(Translation);
+		return Offset;
+	}
+}
+
+// TEMP (Phase 9): drive WeaponMeshComponent relative transform from
+// MeleeAttackStatePacked so the player sees the swing AND the blade sockets
+// trace meaningful world positions for MeleeSweepSystem.
+// TODO(MIGRATE): replace with UAnimMontage on WeaponMeshComponent's AnimInstance.
+void AFlecsCharacter::UpdateMeleeProceduralAnim(float DeltaTime)
+{
+	// Gate 1 — master enable. Designers can toggle in editor for AnimMontage A/B.
+	if (!bMeleeProceduralAnimEnabled)
+	{
+		return;
+	}
+
+	// Gate 2 — need a weapon mesh with actual geometry. Same early-out pattern as
+	// WriteMeleeWeaponBladeSocket so a null skel asset doesn't read garbage sockets.
+	if (!WeaponMeshComponent || !WeaponMeshComponent->GetSkeletalMeshAsset())
+	{
+		return;
+	}
+
+	// Gate 3 — must be a melee-equipped weapon (FMeleeWeaponInstance present on the
+	// Flecs weapon entity). Ranged weapons skip this path entirely.
+	if (ActiveWeaponEntityId == 0)
+	{
+		return;
+	}
+
+	UFlecsArtillerySubsystem* Sub = GetWorld() ? GetWorld()->GetSubsystem<UFlecsArtillerySubsystem>() : nullptr;
+	if (!Sub)
+	{
+		return;
+	}
+	flecs::world* World = Sub->GetFlecsWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	flecs::entity WeaponEntity = World->entity(static_cast<flecs::entity_t>(ActiveWeaponEntityId));
+	if (!WeaponEntity.is_valid() || !WeaponEntity.is_alive())
+	{
+		return;
+	}
+
+	const FMeleeWeaponStatic*   MStatic = WeaponEntity.try_get<FMeleeWeaponStatic>();
+	const FMeleeWeaponInstance* MInst   = WeaponEntity.try_get<FMeleeWeaponInstance>();
+	if (!MStatic || !MInst)
+	{
+		// Not a melee weapon — bail. UpdateCamera() already set the mesh transform
+		// via the recoil/inertia stack; do not touch it here.
+		return;
+	}
+
+	// Pull published melee state (written by sim thread on transitions).
+	EMeleeAttackPhase     Phase     = EMeleeAttackPhase::Idle;
+	EMeleeSwingDirection  Direction = EMeleeSwingDirection::Horizontal;
+	float                 ShapedT   = 0.f; // unused today — procedural poses are purely phase-driven.
+	ReadMeleeAttackState(Phase, Direction, ShapedT);
+
+	// Cache the rest transform the FIRST time we observe Idle. This is whatever
+	// UpdateCamera() just wrote this tick (BaseWeaponTransform + recoil/inertia
+	// layers = the live hip pose). All procedural swing math composes against
+	// this cached rest — which means we OVERRIDE the recoil/inertia stack while
+	// swinging (intentional: AnimMontage will do the same when it lands, so the
+	// procedural path mirrors the future migration target's visual contract).
+	//
+	// We re-cache on weapon equip (see AttachWeaponVisual / DetachWeaponVisual).
+	if (!bMeleeRestTransformCached)
+	{
+		if (Phase != EMeleeAttackPhase::Idle)
+		{
+			// First tick after equip landed mid-swing (unlikely but possible on
+			// hot-swap). Skip — next Idle will cache cleanly.
+			return;
+		}
+		MeleeRestTransform        = WeaponMeshComponent->GetRelativeTransform();
+		bMeleeRestTransformCached = true;
+	}
+
+	// Track time-in-phase on game thread. Reset on observed phase transition.
+	// Drift vs. sim PhaseTimer is cosmetic only (phase durations match MStatic),
+	// and any drift self-corrects on the next transition.
+	if (Phase != MeleePrevPhase)
+	{
+		MeleePhaseElapsed = 0.f;
+		MeleePrevPhase    = Phase;
+	}
+	else
+	{
+		MeleePhaseElapsed += DeltaTime;
+	}
+
+	// Compute (WindupBlend, ReleaseBlend) ∈ [0,1]² per current phase.
+	//   Idle      → (0, 0)                — rest
+	//   Charging  → (ShapedT, 0)          — Mordhau-style: cock-back scales with how long
+	//                                       LMB has been held. ShapedT is published by
+	//                                       MeleeChargeSystem every sim tick (accumulator /
+	//                                       MaxChargeTime, curve-shaped).
+	//   Windup    → (easeInOut(t), 0)     — LEGACY: retained for future AnimMontage pre-
+	//                                       strike timing; charge path skips this phase.
+	//   Release   → (1, t)                — sweep windup → end
+	//   Recovery  → (easeOut(1-t), 1-t)   — settle back to rest
+	// phase-internal t = clamp(elapsed / duration, 0, 1). For Windup/Release/Recovery
+	// the durations live on MStatic (WindupTime / ReleaseTime / RecoveryTime).
+	float WindupBlend  = 0.f;
+	float ReleaseBlend = 0.f;
+
+	switch (Phase)
+	{
+		case EMeleeAttackPhase::Idle:
+			// Rest pose. Snap cleanly (no blend) — handles interrupted swings.
+			WindupBlend  = 0.f;
+			ReleaseBlend = 0.f;
+			break;
+
+		case EMeleeAttackPhase::Charging:
+			// Cock-back scales with charge progress. ShapedT is published live by
+			// MeleeChargeSystem (charge accumulator / MaxChargeTime, curve-shaped).
+			WindupBlend  = FMath::Clamp(ShapedT, 0.f, 1.f);
+			ReleaseBlend = 0.f;
+			break;
+
+		case EMeleeAttackPhase::Windup:
+		{
+			const float Duration = FMath::Max(MStatic->WindupTime, KINDA_SMALL_NUMBER);
+			const float t        = FMath::Clamp(MeleePhaseElapsed / Duration, 0.f, 1.f);
+			WindupBlend  = FMath::InterpEaseInOut(0.f, 1.f, t, 2.f);
+			ReleaseBlend = 0.f;
+			break;
+		}
+
+		case EMeleeAttackPhase::Release:
+		{
+			const float Duration = FMath::Max(MStatic->ReleaseTime, KINDA_SMALL_NUMBER);
+			const float t        = FMath::Clamp(MeleePhaseElapsed / Duration, 0.f, 1.f);
+			// Weapon is fully cocked at release start, sweeps through arc.
+			WindupBlend  = 1.f;
+			// Slight ease-in so the swing accelerates (tip-speed thump feel).
+			ReleaseBlend = FMath::InterpEaseIn(0.f, 1.f, t, 1.6f);
+			break;
+		}
+
+		case EMeleeAttackPhase::Recovery:
+		{
+			const float Duration = FMath::Max(MStatic->RecoveryTime, KINDA_SMALL_NUMBER);
+			const float t        = FMath::Clamp(MeleePhaseElapsed / Duration, 0.f, 1.f);
+			// Start at end-of-release pose, settle back to rest. Soft ease-out.
+			const float Settle   = FMath::InterpEaseOut(1.f, 0.f, t, 2.f);
+			WindupBlend  = Settle;
+			ReleaseBlend = Settle;
+			break;
+		}
+
+		default:
+			break;
+	}
+
+	// Build the pose offset for this (Direction, blends, designer tunables).
+	const TempMeleeAnim::FDirectionPose Pose = TempMeleeAnim::GetPoseForDirection(Direction);
+	const FTransform SwingOffset = TempMeleeAnim::BuildSwingOffset(
+		Pose,
+		MeleeProceduralWindupBackOffset,
+		MeleeProceduralReleaseSweepDegrees,
+		WindupBlend,
+		ReleaseBlend);
+
+	// Apply: Final = SwingOffset (parent-space) * MeleeRestTransform.
+	//
+	// We OVERRIDE the recoil/inertia stack UpdateCamera() wrote this tick — the
+	// swing animation is authoritative while in motion. SwingOffset is authored
+	// in camera-space (parent of WeaponMeshComponent), so left-multiplication
+	// treats it as a parent transform applied to the cached rest pose.
+	//
+	// During Idle/Charging both blends are 0; we LEAVE the mesh transform alone
+	// (UpdateCamera's recoil/inertia/motion stays visible). The very first
+	// post-Recovery tick that lands back in Idle still has Recovery's transform
+	// painted by UpdateCamera; UpdateCamera writes BaseWeaponTransform fresh
+	// every tick, so the recovery pose vanishes naturally on the next frame.
+	//
+	// Interruption safety: if a swing is force-cancelled (e.g. holster mid-
+	// Release pushes Phase straight to Idle), this branch skips writing →
+	// UpdateCamera's already-applied BaseWeaponTransform stands → mesh snaps
+	// cleanly to rest. No partial-pose lingering.
+	//
+	// TODO(MIGRATE): AnimMontage will replace this — UpdateCamera will keep
+	// driving the relative transform between swings, AnimMontage takes over
+	// during swings via the AnimInstance (which is layered after SetRelativeTransform).
+	if (Phase == EMeleeAttackPhase::Charging
+	 || Phase == EMeleeAttackPhase::Windup
+	 || Phase == EMeleeAttackPhase::Release
+	 || Phase == EMeleeAttackPhase::Recovery)
+	{
+		WeaponMeshComponent->SetRelativeTransform(SwingOffset * MeleeRestTransform);
+	}
 }

@@ -14,6 +14,10 @@ FMeleeWeaponStatic FMeleeWeaponStatic::FromProfile(const UFlecsMeleeProfile* Pro
 
 	FMeleeWeaponStatic S;
 
+	// Visuals
+	S.EquippedMesh = Profile->EquippedMesh;
+	S.AttachOffset = Profile->AttachOffset;
+
 	// Geometry
 	S.BladeStartSocket     = Profile->BladeStartSocket;
 	S.BladeTipSocket       = Profile->BladeTipSocket;
@@ -146,6 +150,7 @@ void FMeleeWeaponInstance::ResetAllChargeAndSwingState()
 	LastSweepFrameStamp = 0;
 	LastTipSpeed        = 0.f;
 	bSwingRebounded     = false;
+	bSwingBladeStuck    = false;
 
 	bIsBlocking            = false;
 	BlockStartTimestampSim = 0.f;
@@ -155,52 +160,36 @@ void FMeleeWeaponInstance::ResetAllChargeAndSwingState()
 // FMeleeAttackDirectionBuffer
 // ═══════════════════════════════════════════════════════════════
 
-void FMeleeAttackDirectionBuffer::Push(FVector2f Sample)
+EMeleeSwingDirection FMeleeAttackDirectionBuffer::Resolve() const
 {
-	YawPitchDeltas[WriteIndex] = Sample;
-	WriteIndex = (WriteIndex + 1) % Capacity;
-	if (Count < Capacity) ++Count;
-}
-
-EMeleeSwingDirection FMeleeAttackDirectionBuffer::Resolve(float WindowSeconds) const
-{
-	if (Count == 0)
-	{
-		// Safe default — blueprint does not prescribe the empty-buffer outcome; Horizontal
-		// is the most common swing and matches the plain-struct default on FMeleeChargePayload.
-		return EMeleeSwingDirection::Horizontal;
-	}
-
-	// TODO(Phase 4/5): time-based windowing needs per-sample timestamps. MVP sums a
-	// count-based approximation: assume ~120 Hz input → 16 samples ≈ 130 ms, which
-	// comfortably covers the typical 100 ms swing-intent window. WindowSeconds is
-	// accepted for API stability but currently unused.
-	(void)WindowSeconds;
-
-	FVector2f Sum = FVector2f::ZeroVector;
-	for (int32 i = 0; i < Count; ++i) Sum += YawPitchDeltas[i];
-
-	// Thrust detection: tiny overall delta implies the player held still (or tiny dead-zone
-	// motion). Blueprint defers proper thrust-intent (e.g. forward stick press) to later phases.
-	constexpr float ThrustMagThreshold = 2.0f; // decigrees/samples — tune with playtest
+	const FVector2f Sum = AccumulatedDelta;
 	const float Mag = Sum.Size();
+
+	// Thrust detection: mouse held still (or tiny dead-zone motion) during the whole
+	// charge → forward stab. Threshold is in summed yaw/pitch decidegrees — tune
+	// via playtest. A quick finger-flick produces 20+ easily, a genuine "hold still"
+	// stays well under 3 even on a twitchy hand.
+	constexpr float ThrustMagThreshold = 3.0f;
 	if (Mag < ThrustMagThreshold)
 	{
-		// TODO(Phase 4): detect forward-stick / movement-intent to return Thrust.
-		return EMeleeSwingDirection::Horizontal;
+		return EMeleeSwingDirection::Thrust;
 	}
 
 	// Classify by quadrant of (X=yaw, Y=pitch). atan2 returns radians in (-PI, PI].
+	//   Horizontal  : mostly yaw motion (left or right)
+	//   Vertical    : mostly pitch motion (up or down)
+	//   DiagonalTL  : upper-left drag, produces lower-right slash
+	//   DiagonalTR  : upper-right drag, produces lower-left slash
 	const float Angle = FMath::Atan2(Sum.Y, Sum.X);
 	const float Deg   = FMath::RadiansToDegrees(Angle);
 	const float AbsD  = FMath::Abs(Deg);
 
-	if (AbsD < 22.5f || AbsD > 157.5f)                          return EMeleeSwingDirection::Horizontal;
-	if (AbsD > 67.5f && AbsD < 112.5f)                          return EMeleeSwingDirection::Vertical;
-	// Diagonals by sign of (yaw, pitch). Convention: Sum.X = yaw delta (right +), Sum.Y = pitch delta (up +).
-	// TopLeft   drag: X<0 && Y>0  (upper-left)         — slash swings from TL to BR
-	// TopRight  drag: X>0 && Y>0  (upper-right)        — slash swings from TR to BL
-	// Lower-half drags mirror to the same diagonal categories (symmetric arc).
+	if (AbsD < 22.5f || AbsD > 157.5f) return EMeleeSwingDirection::Horizontal;
+	if (AbsD > 67.5f && AbsD < 112.5f) return EMeleeSwingDirection::Vertical;
+
+	// Diagonals by sign of (yaw, pitch). Convention: Sum.X = yaw delta (right +),
+	// Sum.Y = pitch delta (up +). Lower-half drags mirror to the same diagonal
+	// categories (symmetric arc).
 	const bool bTopHalf = Sum.Y > 0.f;
 	const bool bRight   = Sum.X > 0.f;
 	return (bTopHalf == bRight) ? EMeleeSwingDirection::DiagonalTR

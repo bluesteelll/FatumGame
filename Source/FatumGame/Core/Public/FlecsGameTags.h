@@ -10,7 +10,19 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "NativeGameplayTags.h"
 #include "FlecsGameTags.generated.h"
+
+// ═══════════════════════════════════════════════════════════════
+// ITEM GAMEPLAY TAGS
+// Used by FContainerSlotDefinition::SlotFilter to restrict which
+// items can be placed into named equipment slots. Auto-applied to
+// item entities at spawn time based on their EntityDefinition's
+// profile composition (WeaponProfile → Ranged, MeleeProfile → Melee).
+// ═══════════════════════════════════════════════════════════════
+
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(Tag_Item_Weapon_Ranged);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(Tag_Item_Weapon_Melee);
 
 // ═══════════════════════════════════════════════════════════════
 // ENUMS (must be UENUM for use in UPROPERTY)

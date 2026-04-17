@@ -65,6 +65,21 @@ struct FPendingNiagaraTracer
 	float Duration = 0.06f;
 };
 
+/** Blade trail attach/detach request. Enqueued from game thread (character Tick),
+ *  consumed on game thread by ProcessPendingBladeTrails(). NOT from sim thread —
+ *  AttachParent is a UObject that sim thread must not touch.
+ *  bDetach=true: detach + destroy the trail for WeaponEntityId.
+ *  bDetach=false: spawn and attach a trail Niagara component. */
+struct FPendingBladeTrail
+{
+	uint64 WeaponEntityId = 0;
+	UNiagaraSystem* Effect = nullptr;
+	USceneComponent* AttachParent = nullptr;  // WeaponMeshComponent
+	FName StartSocket = NAME_None;
+	FName TipSocket = NAME_None;
+	bool bDetach = false;
+};
+
 /**
  * Manages Niagara VFX for Flecs entities using Array Data Interface pattern.
  *
@@ -114,6 +129,10 @@ public:
 	/** Release expired tracer pool slots + spawn any newly-enqueued tracers. Game thread only. */
 	void ProcessPendingTracers();
 
+	/** Drain pending blade trail attach/detach requests. Game thread only.
+	 *  Also updates per-frame tip-socket position on active trails. */
+	void ProcessPendingBladeTrails();
+
 	// ═══════════════════════════════════════════════════════════════
 	// MPSC API (sim thread → game thread)
 	// ═══════════════════════════════════════════════════════════════
@@ -129,6 +148,14 @@ public:
 
 	/** Queue a pooled tracer for game-thread spawn. Thread-safe (MPSC). */
 	void EnqueueTracer(const FPendingNiagaraTracer& Tracer);
+
+	/** Queue a blade trail attach request. Game thread only — AttachParent is a UObject.
+	 *  Trail is a parented UNiagaraComponent, NOT a tracer pool item. */
+	void EnqueueBladeTrail(uint64 WeaponEntityId, UNiagaraSystem* Effect,
+		USceneComponent* AttachParent, FName StartSocket, FName TipSocket);
+
+	/** Queue a blade trail detach request. Game thread only. */
+	void DequeueBladeTrailDetach(uint64 WeaponEntityId);
 
 	// ═══════════════════════════════════════════════════════════════
 	// STATIC ACCESSOR
@@ -174,6 +201,7 @@ private:
 	TQueue<FSkeletonKey, EQueueMode::Mpsc> PendingRemovals;
 	TQueue<FPendingDeathEffect, EQueueMode::Mpsc> PendingDeathEffects;
 	TQueue<FPendingNiagaraTracer, EQueueMode::Mpsc> PendingTracers;
+	TQueue<FPendingBladeTrail, EQueueMode::Mpsc> PendingBladeTrails;
 
 	// ═══════════════════════════════════════════════════════════════
 	// TRACER POOL (hitscan weapons)
@@ -196,6 +224,20 @@ private:
 
 	/** Claim a free pool slot (free = ReleaseTimeSeconds == 0.0). Returns nullptr if exhausted. */
 	UNiagaraComponent* AcquireTracerSlot(double NowSeconds);
+
+	// ═══════════════════════════════════════════════════════════════
+	// BLADE TRAIL STATE (melee weapons)
+	// ═══════════════════════════════════════════════════════════════
+
+	struct FActiveBladeTrail
+	{
+		UNiagaraComponent* Component = nullptr;
+		USceneComponent* AttachParent = nullptr;
+		FName TipSocket = NAME_None;
+	};
+
+	/** Active blade trails keyed by weapon entity ID. At most one per weapon. */
+	TMap<uint64, FActiveBladeTrail> ActiveBladeTrails;
 
 	// ═══════════════════════════════════════════════════════════════
 	// INTERNAL

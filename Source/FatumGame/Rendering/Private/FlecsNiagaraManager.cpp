@@ -38,6 +38,16 @@ void UFlecsNiagaraManager::Deinitialize()
 	}
 	TracerHostActor = nullptr;
 
+	// Release blade trail components
+	for (auto& [WeaponId, Active] : ActiveBladeTrails)
+	{
+		if (Active.Component && !Active.Component->IsBeingDestroyed())
+		{
+			Active.Component->DestroyComponent();
+		}
+	}
+	ActiveBladeTrails.Empty();
+
 	EffectGroups.Empty();
 	EntityToEffect.Empty();
 
@@ -225,6 +235,29 @@ void UFlecsNiagaraManager::EnqueueTracer(const FPendingNiagaraTracer& Tracer)
 	PendingTracers.Enqueue(Tracer);
 }
 
+void UFlecsNiagaraManager::EnqueueBladeTrail(uint64 WeaponEntityId, UNiagaraSystem* Effect,
+	USceneComponent* AttachParent, FName StartSocket, FName TipSocket)
+{
+	if (!Effect || !AttachParent) return;
+
+	FPendingBladeTrail Trail;
+	Trail.WeaponEntityId = WeaponEntityId;
+	Trail.Effect = Effect;
+	Trail.AttachParent = AttachParent;
+	Trail.StartSocket = StartSocket;
+	Trail.TipSocket = TipSocket;
+	Trail.bDetach = false;
+	PendingBladeTrails.Enqueue(Trail);
+}
+
+void UFlecsNiagaraManager::DequeueBladeTrailDetach(uint64 WeaponEntityId)
+{
+	FPendingBladeTrail Trail;
+	Trail.WeaponEntityId = WeaponEntityId;
+	Trail.bDetach = true;
+	PendingBladeTrails.Enqueue(Trail);
+}
+
 // ═══════════════════════════════════════════════════════════════
 // TRACER POOL
 // ═══════════════════════════════════════════════════════════════
@@ -321,6 +354,87 @@ void UFlecsNiagaraManager::ProcessPendingTracers()
 				break;
 			}
 		}
+	}
+}
+
+// ═══════════════════════════════════════════════════════════════
+// BLADE TRAILS (melee weapons — parented UNiagaraComponent)
+// ═══════════════════════════════════════════════════════════════
+
+void UFlecsNiagaraManager::ProcessPendingBladeTrails()
+{
+	check(IsInGameThread());
+
+	FPendingBladeTrail Trail;
+	while (PendingBladeTrails.Dequeue(Trail))
+	{
+		if (Trail.bDetach)
+		{
+			// Detach + destroy the active trail for this weapon.
+			FActiveBladeTrail* Active = ActiveBladeTrails.Find(Trail.WeaponEntityId);
+			if (Active && Active->Component)
+			{
+				Active->Component->Deactivate();
+				Active->Component->DetachFromComponent(FDetachmentTransformRules::KeepWorldTransform);
+				Active->Component->DestroyComponent();
+			}
+			ActiveBladeTrails.Remove(Trail.WeaponEntityId);
+
+			UE_LOG(LogFlecsNiagara, Verbose, TEXT("BladeTrail detached: WeaponEntity=%llu"),
+				Trail.WeaponEntityId);
+			continue;
+		}
+
+		// Attach: if one already exists for this weapon, detach the old one first.
+		if (FActiveBladeTrail* Existing = ActiveBladeTrails.Find(Trail.WeaponEntityId))
+		{
+			if (Existing->Component)
+			{
+				Existing->Component->Deactivate();
+				Existing->Component->DetachFromComponent(FDetachmentTransformRules::KeepWorldTransform);
+				Existing->Component->DestroyComponent();
+			}
+			ActiveBladeTrails.Remove(Trail.WeaponEntityId);
+		}
+
+		if (!Trail.AttachParent || !Trail.Effect) continue;
+
+		// Spawn the Niagara component attached to the weapon mesh at the hilt socket.
+		UNiagaraComponent* Comp = NewObject<UNiagaraComponent>(Trail.AttachParent->GetOwner());
+		checkf(Comp, TEXT("BladeTrail: failed to create UNiagaraComponent"));
+
+		Comp->SetAsset(Trail.Effect);
+		Comp->SetAutoActivate(false);
+		Comp->SetAutoDestroy(false);
+		Comp->bAutoManageAttachment = false;
+		Comp->AttachToComponent(Trail.AttachParent,
+			FAttachmentTransformRules::SnapToTargetNotIncludingScale,
+			Trail.StartSocket);
+		Comp->RegisterComponent();
+
+		// Seed the tip position so the first frame has meaningful geometry.
+		const FVector TipPos = Trail.AttachParent->GetSocketLocation(Trail.TipSocket);
+		Comp->SetVectorParameter(TEXT("User.BeamEnd"), TipPos);
+
+		Comp->Activate(true);
+
+		FActiveBladeTrail Active;
+		Active.Component = Comp;
+		Active.AttachParent = Trail.AttachParent;
+		Active.TipSocket = Trail.TipSocket;
+		ActiveBladeTrails.Add(Trail.WeaponEntityId, Active);
+
+		UE_LOG(LogFlecsNiagara, Log, TEXT("BladeTrail attached: WeaponEntity=%llu Effect=%s"),
+			Trail.WeaponEntityId, *Trail.Effect->GetName());
+	}
+
+	// Per-frame update: push tip socket position to each active trail's User.BeamEnd.
+	for (auto& [WeaponId, Active] : ActiveBladeTrails)
+	{
+		if (!Active.Component || !Active.AttachParent) continue;
+
+		const FVector TipPos = Active.AttachParent->GetSocketLocation(Active.TipSocket);
+		Active.Component->SetVectorParameter(TEXT("User.BeamEnd"), TipPos);
 	}
 }
 

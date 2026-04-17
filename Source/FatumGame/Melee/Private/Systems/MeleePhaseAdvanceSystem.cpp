@@ -11,17 +11,22 @@
 // sweep tick (PhaseTimer decrements AFTER this system runs on the following tick).
 
 #include "FlecsArtillerySubsystem.h"
+#include "FlecsCharacter.h"   // AFlecsCharacter::PublishMeleeAttackState
 #include "FlecsGameTags.h"
 #include "FlecsMeleeComponents.h"
+#include "FlecsWeaponComponents.h"   // FEquippedBy for reverse lookup
 
 void UFlecsArtillerySubsystem::SetupMeleePhaseAdvanceSystem()
 {
 	flecs::world& World = *FlecsWorld;
 
-	World.system<FMeleeWeaponInstance, const FMeleeWeaponStatic>("MeleePhaseAdvanceSystem")
+	World.system<FMeleeWeaponInstance, const FMeleeWeaponStatic, const FEquippedBy>("MeleePhaseAdvanceSystem")
 		.with<FTagMeleeAttacking>()
 		.without<FTagDead>()
-		.each([](flecs::entity Entity, FMeleeWeaponInstance& Inst, const FMeleeWeaponStatic& Static)
+		.each([this](flecs::entity Entity,
+			FMeleeWeaponInstance& Inst,
+			const FMeleeWeaponStatic& Static,
+			const FEquippedBy& EquippedBy)
 		{
 			const float DeltaTime = Entity.world().get_info()->delta_time;
 
@@ -35,9 +40,9 @@ void UFlecsArtillerySubsystem::SetupMeleePhaseAdvanceSystem()
 				{
 					Inst.Phase      = EMeleeAttackPhase::Release;
 					Inst.PhaseTimer = Inst.ReleaseDuration;
-					// TODO(Phase 7): NiagaraMgr->EnqueueBladeTrail(...) on Release entry.
-					// TODO(Phase 5+ followup): publish MeleeAttackStatePacked atomic — requires
-					// entity→actor reverse lookup (see MeleeSwingInitSystem for notes).
+					// Blade trail VFX attach is handled on the game thread by
+					// AFlecsCharacter::UpdateMeleeBladeTrail — reads the
+					// MeleeAttackStatePacked atomic to detect Release entry.
 					break;
 				}
 
@@ -52,7 +57,9 @@ void UFlecsArtillerySubsystem::SetupMeleePhaseAdvanceSystem()
 					{
 						Inst.PhaseTimer += (Static.ReboundRecoveryMultiplier - 1.f) * Inst.RecoveryDuration;
 					}
-					// TODO(Phase 7): NiagaraMgr->DequeueBladeTrailDetach(...) on Recovery entry.
+					// Blade trail VFX detach is handled on the game thread by
+					// AFlecsCharacter::UpdateMeleeBladeTrail — detects Phase leaving Release
+					// via MeleeAttackStatePacked atomic.
 					break;
 				}
 
@@ -65,7 +72,6 @@ void UFlecsArtillerySubsystem::SetupMeleePhaseAdvanceSystem()
 					{
 						Entity.remove<FTagMeleeAttacking>();
 					}
-					// TODO(Phase 5+ followup): publish MeleeAttackStatePacked atomic with Idle.
 					break;
 				}
 
@@ -82,5 +88,21 @@ void UFlecsArtillerySubsystem::SetupMeleePhaseAdvanceSystem()
 					}
 					break;
 			}
+
+			// Publish the post-transition phase to the owning character's atomic.
+			// Consumers: UpdateMeleeProceduralAnim (swing pose), UpdateMeleeBladeTrail
+			// (VFX lifecycle), WriteMeleeWeaponBladeSocket (sweep-socket gating).
+			if (FCharacterPhysBridge* Bridge = this->FindCharacterBridge(
+					Entity.world().entity(static_cast<uint64>(EquippedBy.CharacterEntityId))))
+			{
+				if (AFlecsCharacter* Actor = Bridge->CharacterActor)
+				{
+					Actor->PublishMeleeAttackState(Inst.Phase, Inst.ResolvedDirection, Inst.ShapedT);
+				}
+			}
+
+			UE_LOG(LogTemp, Warning,
+				TEXT("[MELEE-DBG] PhaseAdvance: entity=%lld → Phase=%d Timer=%.3f"),
+				static_cast<int64>(Entity.id()), (int32)Inst.Phase, Inst.PhaseTimer);
 		});
 }

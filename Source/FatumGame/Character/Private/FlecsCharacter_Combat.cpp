@@ -5,6 +5,7 @@
 #include "FatumMovementComponent.h"
 #include "FlecsDamageLibrary.h"
 #include "FlecsWeaponLibrary.h"
+#include "FlecsMeleeLibrary.h"
 #include "FlecsSpawnLibrary.h"
 #include "FlecsEntitySpawner.h"
 #include "FlecsEntityDefinition.h"
@@ -339,18 +340,59 @@ TArray<FSkeletonKey> AFlecsCharacter::FireProjectileSpread(int32 Count, float Sp
 void AFlecsCharacter::AttachWeaponVisual(USkeletalMesh* InMesh, const FTransform& AttachOffset)
 {
 	check(IsInGameThread());
+	UE_LOG(LogTemp, Warning, TEXT("[MELEE-DBG] AttachWeaponVisual: InMesh=%s AttachOffset loc=(%s) rot=(%s) scale=(%s)"),
+		InMesh ? *InMesh->GetName() : TEXT("NULL"),
+		*AttachOffset.GetLocation().ToString(),
+		*AttachOffset.GetRotation().Rotator().ToString(),
+		*AttachOffset.GetScale3D().ToString());
+
 	if (!InMesh)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("AttachWeaponVisual: null mesh"));
+		UE_LOG(LogTemp, Warning, TEXT("[MELEE-DBG] AttachWeaponVisual: null mesh → EARLY RETURN (visual NOT attached)"));
 		return;
 	}
+	if (!WeaponMeshComponent)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[MELEE-DBG] AttachWeaponVisual: WeaponMeshComponent is NULL → WILL CHECK() CRASH"));
+	}
 	check(WeaponMeshComponent);
+
+	// Dump pre-attach state
+	const FString PreAttachParent = WeaponMeshComponent->GetAttachParent() ?
+		WeaponMeshComponent->GetAttachParent()->GetName() : TEXT("NONE");
+	const FName PreAttachSocket = WeaponMeshComponent->GetAttachSocketName();
+	UE_LOG(LogTemp, Warning, TEXT("[MELEE-DBG] AttachWeaponVisual: PRE-attach parent='%s' socket='%s' visible=%d worldLoc=(%s)"),
+		*PreAttachParent, *PreAttachSocket.ToString(),
+		WeaponMeshComponent->IsVisible() ? 1 : 0,
+		*WeaponMeshComponent->GetComponentLocation().ToString());
+
 	WeaponMeshComponent->SetSkeletalMesh(InMesh);
 	WeaponMeshComponent->SetRelativeTransform(AttachOffset);
 	BaseWeaponTransform = AttachOffset;  // cache for inertia reset each frame
 	ComputeADSTransform();
 	WeaponMeshComponent->SetVisibility(true);
-	UE_LOG(LogTemp, Log, TEXT("WEAPON VISUAL: Attached '%s'"), *InMesh->GetName());
+
+	// TEMP (Phase 9): invalidate the procedural-anim cached rest transform so the
+	// next Idle observation re-captures from the fresh attach offset. Cheap, no
+	// allocation. TODO(MIGRATE): delete with UpdateMeleeProceduralAnim.
+	bMeleeRestTransformCached = false;
+	MeleePhaseElapsed         = 0.f;
+	MeleePrevPhase            = static_cast<EMeleeAttackPhase>(0); // Idle (avoids include)
+
+	// Dump post-attach state
+	const FBoxSphereBounds Bounds = WeaponMeshComponent->Bounds;
+	UE_LOG(LogTemp, Warning, TEXT("[MELEE-DBG] AttachWeaponVisual: POST-attach visible=%d worldLoc=(%s) boundsOrigin=(%s) boundsExtent=(%s) mesh='%s'"),
+		WeaponMeshComponent->IsVisible() ? 1 : 0,
+		*WeaponMeshComponent->GetComponentLocation().ToString(),
+		*Bounds.Origin.ToString(),
+		*Bounds.BoxExtent.ToString(),
+		*InMesh->GetName());
+
+	// Check sockets on the new mesh (critical for melee sweep)
+	const bool bHasHiltSocket  = WeaponMeshComponent->DoesSocketExist(TEXT("hilt_base"));
+	const bool bHasBladeSocket = WeaponMeshComponent->DoesSocketExist(TEXT("blade_tip"));
+	UE_LOG(LogTemp, Warning, TEXT("[MELEE-DBG] AttachWeaponVisual: sockets hilt_base=%d blade_tip=%d (required for melee sweep)"),
+		bHasHiltSocket ? 1 : 0, bHasBladeSocket ? 1 : 0);
 }
 
 void AFlecsCharacter::DetachWeaponVisual()
@@ -359,6 +401,12 @@ void AFlecsCharacter::DetachWeaponVisual()
 	if (!WeaponMeshComponent) return;
 	WeaponMeshComponent->SetSkeletalMesh(nullptr);
 	WeaponMeshComponent->SetVisibility(false);
+
+	// TEMP (Phase 9): drop cached rest pose — different weapon next equip will
+	// have a different rest transform. TODO(MIGRATE): delete with procedural anim.
+	bMeleeRestTransformCached = false;
+	MeleePhaseElapsed         = 0.f;
+	MeleePrevPhase            = static_cast<EMeleeAttackPhase>(0); // Idle (avoids include)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -369,7 +417,9 @@ void AFlecsCharacter::SpawnWeaponIntoSlot(int32 SlotIndex, UFlecsEntityDefinitio
 	UFlecsEntityDefinition* MagDef, int32 MagCount)
 {
 	check(WeaponDef && WeaponDef->WeaponProfile);
-	checkf(SlotIndex >= 0 && SlotIndex < 2, TEXT("SpawnWeaponIntoSlot: SlotIndex %d out of range"), SlotIndex);
+	// Upper bound is enforced by the weapon-slot container's grid/slot capacity (data-driven
+	// via WeaponInventoryDefinition's ContainerProfile); negative indices remain invalid.
+	checkf(SlotIndex >= 0, TEXT("SpawnWeaponIntoSlot: SlotIndex %d must be non-negative"), SlotIndex);
 
 	UFlecsArtillerySubsystem* FlecsSubsystem = GetWorld()->GetSubsystem<UFlecsArtillerySubsystem>();
 	if (!FlecsSubsystem) return;
@@ -535,6 +585,18 @@ void AFlecsCharacter::StartFiringWeapon()
 {
 	if (ActiveWeaponEntityId == 0) return;
 
+	// ─── MELEE BRANCH ────────────────────────────────────────────────
+	// Melee weapons reuse the Fire (LMB) binding but drive FMeleeWeaponInstance.
+	// bAttackRequested instead of FWeaponInstance.bFireRequested. Skip the ranged-
+	// only aim-update / recoil-retraction gates — they don't apply to swings.
+	if (IsActiveWeaponMelee())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[MELEE-DBG] StartFiringWeapon: melee path → SetMeleeAttackRequested(true) on %lld"),
+			ActiveWeaponEntityId);
+		UFlecsMeleeLibrary::SetMeleeAttackRequested(this, ActiveWeaponEntityId, true);
+		return;
+	}
+
 	// Firing blocks and sprint cancel are handled by SetGameBit(Firing) in StartFire.
 	// IsFireBlocked() is checked there via rule table. Sprint cancel via CanceledOnEntry.
 
@@ -565,6 +627,13 @@ void AFlecsCharacter::StartFiringWeapon()
 void AFlecsCharacter::StopFiringWeapon()
 {
 	if (ActiveWeaponEntityId == 0) return;
+	if (IsActiveWeaponMelee())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[MELEE-DBG] StopFiringWeapon: melee path → SetMeleeAttackRequested(false) on %lld"),
+			ActiveWeaponEntityId);
+		UFlecsMeleeLibrary::SetMeleeAttackRequested(this, ActiveWeaponEntityId, false);
+		return;
+	}
 	UFlecsWeaponLibrary::StopFiring(this, ActiveWeaponEntityId);
 }
 
@@ -580,14 +649,26 @@ void AFlecsCharacter::RequestReload()
 
 void AFlecsCharacter::RequestWeaponSwitch(int32 SlotIndex)
 {
-	checkf(SlotIndex >= -1 && SlotIndex < 2, TEXT("RequestWeaponSwitch: SlotIndex %d out of range"), SlotIndex);
+	UE_LOG(LogTemp, Warning, TEXT("[MELEE-DBG] RequestWeaponSwitch(slot=%d) ActiveSlot=%d"),
+		SlotIndex, ActiveWeaponSlotIndex);
+
+	// -1 = holster; positive index is bound by the weapon-slot container's capacity
+	// (data-driven), validated when reading from FContainerSlotsInstance below.
+	checkf(SlotIndex >= -1, TEXT("RequestWeaponSwitch: SlotIndex %d must be >= -1"), SlotIndex);
 
 	// Same slot as active — ignore
-	if (SlotIndex == ActiveWeaponSlotIndex && SlotIndex >= 0) return;
+	if (SlotIndex == ActiveWeaponSlotIndex && SlotIndex >= 0)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[MELEE-DBG] RequestWeaponSwitch: same as active slot → IGNORED"));
+		return;
+	}
 
 	// Try to enter WeaponSwitching state
 	if (!SetGameBit(ActionBit::WeaponSwitching))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[MELEE-DBG] RequestWeaponSwitch: SetGameBit(WeaponSwitching) FAILED (already switching or blocked) → ABORT"));
 		return;
+	}
 
 	// Sync sprint cancel to sim thread
 	if (!HasBit(GameActionState.load(std::memory_order_relaxed), ActionBit::Sprinting))
@@ -597,7 +678,12 @@ void AFlecsCharacter::RequestWeaponSwitch(int32 SlotIndex)
 	}
 
 	UFlecsArtillerySubsystem* FlecsSubsystem = GetWorld()->GetSubsystem<UFlecsArtillerySubsystem>();
-	if (!FlecsSubsystem) { ClearGameBit(ActionBit::WeaponSwitching); return; }
+	if (!FlecsSubsystem)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[MELEE-DBG] RequestWeaponSwitch: FlecsSubsystem NULL → ABORT"));
+		ClearGameBit(ActionBit::WeaponSwitching);
+		return;
+	}
 
 	// Helper: signal game thread to clear WeaponSwitching (unequip/no-op)
 	auto SignalAbort = [FlecsSubsystem](flecs::entity CharEntity)
@@ -609,19 +695,25 @@ void AFlecsCharacter::RequestWeaponSwitch(int32 SlotIndex)
 	FlecsSubsystem->EnqueueCommand([FlecsSubsystem, Key, SlotIndex, SignalAbort]()
 	{
 		flecs::world* World = FlecsSubsystem->GetFlecsWorld();
-		if (!World) return;
+		if (!World) { UE_LOG(LogTemp, Warning, TEXT("[MELEE-DBG] sim-lambda: FlecsWorld NULL")); return; }
 
 		flecs::entity CharEntity = FlecsSubsystem->GetEntityForBarrageKey(Key);
 		if (!CharEntity.is_valid())
 		{
-			// Can't signal without a valid entity — game thread WeaponSwitching will be stuck.
-			// This only happens if character is already destroyed, so it's a non-issue.
+			UE_LOG(LogTemp, Warning, TEXT("[MELEE-DBG] sim-lambda: CharEntity INVALID (key→entity failed)"));
 			return;
 		}
 
 		FWeaponSlotState* SlotState = CharEntity.try_get_mut<FWeaponSlotState>();
-		if (!SlotState || SlotState->WeaponSlotContainerId == 0)
+		if (!SlotState)
 		{
+			UE_LOG(LogTemp, Warning, TEXT("[MELEE-DBG] sim-lambda: FWeaponSlotState MISSING on character → ABORT"));
+			SignalAbort(CharEntity);
+			return;
+		}
+		if (SlotState->WeaponSlotContainerId == 0)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("[MELEE-DBG] sim-lambda: WeaponSlotContainerId == 0 (WeaponInventory NOT CREATED) → ABORT"));
 			SignalAbort(CharEntity);
 			return;
 		}
@@ -630,6 +722,8 @@ void AFlecsCharacter::RequestWeaponSwitch(int32 SlotIndex)
 			static_cast<flecs::entity_t>(SlotState->WeaponSlotContainerId));
 		if (!Container.is_valid())
 		{
+			UE_LOG(LogTemp, Warning, TEXT("[MELEE-DBG] sim-lambda: Container entity %lld INVALID → ABORT"),
+				SlotState->WeaponSlotContainerId);
 			SignalAbort(CharEntity);
 			return;
 		}
@@ -637,15 +731,19 @@ void AFlecsCharacter::RequestWeaponSwitch(int32 SlotIndex)
 		const FContainerSlotsInstance* Slots = Container.try_get<FContainerSlotsInstance>();
 		if (!Slots)
 		{
+			UE_LOG(LogTemp, Warning, TEXT("[MELEE-DBG] sim-lambda: Container has NO FContainerSlotsInstance (ContainerType != Slot?) → ABORT"));
 			SignalAbort(CharEntity);
 			return;
 		}
 
 		int64 TargetWeaponId = (SlotIndex >= 0) ? Slots->GetItemInSlot(SlotIndex) : 0;
+		UE_LOG(LogTemp, Warning, TEXT("[MELEE-DBG] sim-lambda: slot=%d TargetWeaponId=%lld ActiveSlotIndex=%d Phase=%d"),
+			SlotIndex, TargetWeaponId, SlotState->ActiveSlotIndex, (int32)SlotState->EquipPhase);
 
 		// Empty slot pressed + no active weapon — nothing to do
 		if (TargetWeaponId == 0 && SlotState->ActiveSlotIndex < 0)
 		{
+			UE_LOG(LogTemp, Warning, TEXT("[MELEE-DBG] sim-lambda: target slot EMPTY + no active weapon → ABORT"));
 			SignalAbort(CharEntity);
 			return;
 		}
@@ -653,6 +751,8 @@ void AFlecsCharacter::RequestWeaponSwitch(int32 SlotIndex)
 		// If already switching, interrupt with new target
 		if (SlotState->IsSwitching())
 		{
+			UE_LOG(LogTemp, Warning, TEXT("[MELEE-DBG] sim-lambda: already switching, retarget Pending=%d"),
+				(TargetWeaponId != 0) ? SlotIndex : -1);
 			SlotState->PendingSlotIndex = (TargetWeaponId != 0) ? SlotIndex : -1;
 			return;
 		}
@@ -675,6 +775,8 @@ void AFlecsCharacter::RequestWeaponSwitch(int32 SlotIndex)
 			SlotState->PendingSlotIndex = (TargetWeaponId != 0) ? SlotIndex : -1;
 			SlotState->EquipPhase = EWeaponEquipPhase::Holstering;
 			SlotState->EquipTimer = HolsterTime;
+			UE_LOG(LogTemp, Warning, TEXT("[MELEE-DBG] sim-lambda: START HOLSTER (pending=%d, timer=%.3f)"),
+				SlotState->PendingSlotIndex, HolsterTime);
 		}
 		else
 		{
@@ -688,6 +790,8 @@ void AFlecsCharacter::RequestWeaponSwitch(int32 SlotIndex)
 				SlotState->PendingSlotIndex = SlotIndex;
 				SlotState->EquipPhase = EWeaponEquipPhase::Drawing;
 				SlotState->EquipTimer = DrawTime;
+				UE_LOG(LogTemp, Warning, TEXT("[MELEE-DBG] sim-lambda: UNARMED → DRAW directly (slot=%d, timer=%.3f, weaponId=%lld)"),
+					SlotIndex, DrawTime, TargetWeaponId);
 			}
 		}
 	});
@@ -701,4 +805,10 @@ void AFlecsCharacter::OnWeaponSlot1(const FInputActionValue& Value)
 void AFlecsCharacter::OnWeaponSlot2(const FInputActionValue& Value)
 {
 	RequestWeaponSwitch(1);
+}
+
+void AFlecsCharacter::OnWeaponSlot3(const FInputActionValue& Value)
+{
+	UE_LOG(LogTemp, Warning, TEXT("[MELEE-DBG] OnWeaponSlot3 pressed → RequestWeaponSwitch(2)"));
+	RequestWeaponSwitch(2);
 }

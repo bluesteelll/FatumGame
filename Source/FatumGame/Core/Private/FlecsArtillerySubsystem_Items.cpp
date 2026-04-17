@@ -44,6 +44,7 @@
 #include "FlecsExplosionComponents.h"
 #include "FlecsPenetrationComponents.h"
 #include "FlecsPhysicsProfile.h"
+#include "FlecsGameTags.h"
 
 // ═══════════════════════════════════════════════════════════════
 // ENTITY PREFAB REGISTRY IMPLEMENTATION
@@ -265,6 +266,28 @@ flecs::entity UFlecsArtillerySubsystem::GetOrCreateEntityPrefab(UFlecsEntityDefi
 		Prefab.set<FHealthInstance>(HI);
 	}
 
+	// ─────────────────────────────────────────────────────────
+	// ITEM TAGS — derived from profile composition.
+	// Drives FContainerSlotDefinition::SlotFilter validation in drag-drop.
+	// Lives on the prefab; inherited by every spawned instance via is_a().
+	// Add new mappings here as new gameplay categories appear (armor, grenades, …).
+	// ─────────────────────────────────────────────────────────
+	{
+		FItemTags TagSet;
+		if (EntityDefinition->WeaponProfile)
+		{
+			TagSet.Tags.AddTag(Tag_Item_Weapon_Ranged);
+		}
+		if (EntityDefinition->MeleeProfile)
+		{
+			TagSet.Tags.AddTag(Tag_Item_Weapon_Melee);
+		}
+		if (!TagSet.Tags.IsEmpty())
+		{
+			Prefab.set<FItemTags>(TagSet);
+		}
+	}
+
 	// TODO: Add FLootStatic if needed
 
 	// Store in registry
@@ -339,6 +362,25 @@ flecs::entity UFlecsArtillerySubsystem::GetOrCreateItemPrefab(UFlecsEntityDefini
 
 	// Set static data on prefab - inherited by all instances via is_a()
 	Prefab.set<FItemStaticData>(FItemStaticData::FromProfile(ItemDef, EntityDefinition));
+
+	// Auto-derive item tags from EntityDefinition profile composition. Mirror of the
+	// block in GetOrCreateEntityPrefab — keep both in sync. Drives slot filtering in
+	// UFlecsContainerLibrary::TransferItem (FContainerSlotDefinition::SlotFilter).
+	{
+		FItemTags TagSet;
+		if (EntityDefinition->WeaponProfile)
+		{
+			TagSet.Tags.AddTag(Tag_Item_Weapon_Ranged);
+		}
+		if (EntityDefinition->MeleeProfile)
+		{
+			TagSet.Tags.AddTag(Tag_Item_Weapon_Melee);
+		}
+		if (!TagSet.Tags.IsEmpty())
+		{
+			Prefab.set<FItemTags>(TagSet);
+		}
+	}
 
 	// Store in registry
 	ItemPrefabs.Add(TypeId, Prefab);

@@ -45,6 +45,7 @@ void AFlecsCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 	FatumInput->BindNativeAction(InputConfig, TAG_Input_Reload,       ETriggerEvent::Started,   this, &AFlecsCharacter::OnReload);
 	FatumInput->BindNativeAction(InputConfig, TAG_Input_WeaponSlot1, ETriggerEvent::Started,   this, &AFlecsCharacter::OnWeaponSlot1);
 	FatumInput->BindNativeAction(InputConfig, TAG_Input_WeaponSlot2, ETriggerEvent::Started,   this, &AFlecsCharacter::OnWeaponSlot2);
+	FatumInput->BindNativeAction(InputConfig, TAG_Input_WeaponSlot3, ETriggerEvent::Started,   this, &AFlecsCharacter::OnWeaponSlot3);
 	FatumInput->BindNativeAction(InputConfig, TAG_Input_ADS,         ETriggerEvent::Started,   this, &AFlecsCharacter::OnADSStarted);
 	FatumInput->BindNativeAction(InputConfig, TAG_Input_ADS,       ETriggerEvent::Completed, this, &AFlecsCharacter::OnADSCompleted);
 	FatumInput->BindNativeAction(InputConfig, TAG_Input_Crouch,    ETriggerEvent::Started,   this, &AFlecsCharacter::OnCrouchStarted);
@@ -58,11 +59,9 @@ void AFlecsCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 	FatumInput->BindNativeAction(InputConfig, TAG_Input_TKThrow,   ETriggerEvent::Started,   this, &AFlecsCharacter::OnTelekinesisThrow);
 	FatumInput->BindNativeAction(InputConfig, TAG_Input_TKScroll,  ETriggerEvent::Triggered, this, &AFlecsCharacter::OnTelekinesisScroll);
 
-	// ── Melee (Phase 4) ─────────────────────────────────────────────
-	FatumInput->BindNativeAction(InputConfig, TAG_Input_MeleeAttack, ETriggerEvent::Started,   this, &AFlecsCharacter::Input_MeleeAttackPressed);
-	FatumInput->BindNativeAction(InputConfig, TAG_Input_MeleeAttack, ETriggerEvent::Completed, this, &AFlecsCharacter::Input_MeleeAttackReleased);
-	FatumInput->BindNativeAction(InputConfig, TAG_Input_MeleeBlock,  ETriggerEvent::Started,   this, &AFlecsCharacter::Input_MeleeBlockPressed);
-	FatumInput->BindNativeAction(InputConfig, TAG_Input_MeleeBlock,  ETriggerEvent::Completed, this, &AFlecsCharacter::Input_MeleeBlockReleased);
+	// Melee weapons share Fire (LMB) and ADS (RMB) bindings with ranged weapons —
+	// StartFire/StopFire and OnADSStarted/OnADSCompleted route to UFlecsMeleeLibrary
+	// when the active weapon entity carries FMeleeWeaponInstance. See IsActiveWeaponMelee().
 }
 
 UInputComponent* AFlecsCharacter::CreatePlayerInputComponent()
@@ -146,8 +145,10 @@ void AFlecsCharacter::Look(const FInputActionValue& Value)
 						if (Buf)
 						{
 							// LookAxisVector: X=yaw delta, Y=pitch delta (UE convention).
-							Buf->Push(FVector2f(static_cast<float>(LookAxisVector.X),
-							                    static_cast<float>(LookAxisVector.Y)));
+							// Accumulator is reset by MeleeChargeSystem on charge start —
+							// stale motion between swings doesn't leak into the next one.
+							Buf->Accumulate(FVector2f(static_cast<float>(LookAxisVector.X),
+							                          static_cast<float>(LookAxisVector.Y)));
 						}
 					}
 				}
@@ -406,37 +407,7 @@ void AFlecsCharacter::OnDestroyItem(const FInputActionValue& Value)
 	}
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// MELEE INPUT (Phase 4)
-// ═══════════════════════════════════════════════════════════════════════════
-// Routes through UFlecsMeleeLibrary → CommandQueue → sim-thread writes on
-// FMeleeWeaponInstance. Uses ActiveWeaponEntityId — sim-thread try_get_mut is
-// a silent no-op when the equipped weapon isn't melee (ranged weapons don't
-// carry FMeleeWeaponInstance), so no type-check is required game-side.
-//
-// Edge-trigger & charge accumulation live in MeleeChargeSystem; these handlers
-// only mutate the "requested" flag on the weapon instance.
-
-void AFlecsCharacter::Input_MeleeAttackPressed(const FInputActionValue& /*Value*/)
-{
-	if (ActiveWeaponEntityId == 0) return;
-	UFlecsMeleeLibrary::SetMeleeAttackRequested(this, ActiveWeaponEntityId, true);
-}
-
-void AFlecsCharacter::Input_MeleeAttackReleased(const FInputActionValue& /*Value*/)
-{
-	if (ActiveWeaponEntityId == 0) return;
-	UFlecsMeleeLibrary::SetMeleeAttackRequested(this, ActiveWeaponEntityId, false);
-}
-
-void AFlecsCharacter::Input_MeleeBlockPressed(const FInputActionValue& /*Value*/)
-{
-	if (ActiveWeaponEntityId == 0) return;
-	UFlecsMeleeLibrary::SetMeleeBlockRequested(this, ActiveWeaponEntityId, true);
-}
-
-void AFlecsCharacter::Input_MeleeBlockReleased(const FInputActionValue& /*Value*/)
-{
-	if (ActiveWeaponEntityId == 0) return;
-	UFlecsMeleeLibrary::SetMeleeBlockRequested(this, ActiveWeaponEntityId, false);
-}
+// Melee Fire/Block routing now lives in StartFire/StopFire/OnADSStarted/OnADSCompleted
+// (FlecsCharacter_Combat.cpp) — checks IsActiveWeaponMelee() and dispatches to either
+// UFlecsMeleeLibrary or the ranged path. The standalone V/B handlers from Phase 4 were
+// removed when slot-based input replaced parallel equip.

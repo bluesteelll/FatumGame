@@ -210,9 +210,47 @@ public:
 	/** Detach weapon visual. Game thread only. */
 	void DetachWeaponVisual();
 
+	// ─────────────────────────────────────────────────────────
+	// TEMP: PROCEDURAL MELEE WEAPON-MESH ANIMATION (Phase 9)
+	// Visualises the swing on the WeaponMeshComponent so the player sees the attack
+	// AND so the blade sockets sweep through meaningful positions for sim-side
+	// MeleeSweepSystem hit detection.
+	//
+	// TODO(MIGRATE): Replace this whole block with a UAnimMontage played on
+	// WeaponMeshComponent->GetAnimInstance(). AnimMontage notify states would
+	// consume Phase transitions + Montage_SetPlayRate would handle SwingSpeedMul.
+	// When that lands: delete these UPROPERTYs, delete UpdateMeleeProceduralAnim,
+	// delete the cached rest transform + phase elapsed accumulator, and remove the
+	// Tick call. No other code depends on this path.
+	// ─────────────────────────────────────────────────────────
+
+	/** TEMP: master enable for the procedural melee-swing animation. Disable to
+	 *  fall back to a static weapon mesh (useful for AnimMontage A/B testing). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Melee|TEMP|Animation")
+	bool bMeleeProceduralAnimEnabled = true;
+
+	/** TEMP: how far back (cm, camera-space −X) to pull the weapon at full windup. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Melee|TEMP|Animation",
+		meta = (ClampMin = "0", ClampMax = "100"))
+	float MeleeProceduralWindupBackOffset = 30.f;
+
+	/** TEMP: total release-arc sweep magnitude (degrees). Pose end-rotation is
+	 *  obtained by adding this to the windup yaw/pitch on the swing axis. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Melee|TEMP|Animation",
+		meta = (ClampMin = "0", ClampMax = "360"))
+	float MeleeProceduralReleaseSweepDegrees = 180.f;
+
 	// ═══════════════════════════════════════════════════════════════
 	// WEAPON SLOTS
-	// 2 dedicated weapon slots. Weapons must be in a slot to fire.
+	// N dedicated weapon slots (configured by WeaponInventoryDefinition's
+	// ContainerProfile). Per-slot acceptance is data-driven via
+	// FContainerSlotDefinition::SlotFilter (FGameplayTag) — items carry
+	// FItemTags auto-populated from their EntityDefinition profiles
+	// (WeaponProfile → Tag.Item.Weapon.Ranged, MeleeProfile →
+	// Tag.Item.Weapon.Melee). Drag-drop validation in
+	// UFlecsContainerLibrary::TransferItem enforces the rule. The active
+	// slot is switched via OnWeaponSlot1/2/3 — number-key handlers route to
+	// RequestWeaponSwitch.
 	// ═══════════════════════════════════════════════════════════════
 
 	/** Weapon definition for starting loadout slot 0 */
@@ -530,18 +568,6 @@ protected:
 	/** Telekinesis scroll (hold distance) */
 	void OnTelekinesisScroll(const FInputActionValue& Value);
 
-	// ─────────────────────────────────────────────────────────
-	// MELEE INPUT (Phase 4)
-	// Routes through UFlecsMeleeLibrary → CommandQueue → sim-thread writes on
-	// FMeleeWeaponInstance. Uses ActiveWeaponEntityId — only has effect when the
-	// equipped weapon is a melee weapon (non-melee entities lack FMeleeWeaponInstance
-	// so the sim-thread writer is a no-op).
-	// ─────────────────────────────────────────────────────────
-	void Input_MeleeAttackPressed(const FInputActionValue& Value);
-	void Input_MeleeAttackReleased(const FInputActionValue& Value);
-	void Input_MeleeBlockPressed(const FInputActionValue& Value);
-	void Input_MeleeBlockReleased(const FInputActionValue& Value);
-
 	/** Called by UFatumMovementComponent::OnPostureChanged delegate */
 	void HandlePostureChanged(ECharacterPosture NewPosture);
 
@@ -738,8 +764,27 @@ private:
 	/** Weapon slot 2 pressed */
 	void OnWeaponSlot2(const FInputActionValue& Value);
 
+	/** Weapon slot 3 pressed (melee slot by convention — see WeaponInventoryDefinition's
+	 *  ContainerProfile::Slots[].SlotFilter for the data-driven slot acceptance rules) */
+	void OnWeaponSlot3(const FInputActionValue& Value);
+
 	/** Request weapon slot switch (game thread). -1 = holster. */
 	void RequestWeaponSwitch(int32 SlotIndex);
+
+	/** True if ActiveWeaponEntityId points at an entity with FMeleeWeaponInstance.
+	 *  Game-thread only. Used by Fire (LMB) and ADS (RMB) handlers to route input
+	 *  between ranged (UFlecsWeaponLibrary) and melee (UFlecsMeleeLibrary).
+	 *  Value cached by ProcessPendingWeaponEquip from FPendingWeaponEquip.bIsMelee. */
+	FORCEINLINE bool IsActiveWeaponMelee() const
+	{
+		return bActiveWeaponIsMelee && ActiveWeaponEntityId != 0;
+	}
+
+private:
+	/** Cached mirror of the last PendingWeaponEquip.bIsMelee flag. Written only by
+	 *  ProcessPendingWeaponEquip on the game thread. Reset to false on holster/unequip. */
+	bool bActiveWeaponIsMelee = false;
+public:
 
 	/** Spawn weapon into a specific weapon slot (sim thread command). */
 	void SpawnWeaponIntoSlot(int32 SlotIndex, UFlecsEntityDefinition* WeaponDef,
@@ -817,6 +862,43 @@ private:
 	 *  per-weapon triple buffer. No-op when no melee weapon equipped or when the current
 	 *  phase does not need samples (Idle/Charging/Recovery). */
 	void WriteMeleeWeaponBladeSocket(float DeltaTime);
+
+	/** Game thread: manage blade trail VFX attach/detach based on melee attack phase.
+	 *  Enqueues to UFlecsNiagaraManager. Runs AFTER WriteMeleeWeaponBladeSocket so phase
+	 *  reads and socket writes are current. */
+	void UpdateMeleeBladeTrail();
+
+	/** True while a blade trail VFX is active on this character's melee weapon. */
+	bool bMeleeTrailActive = false;
+
+	// ─────────────────────────────────────────────────────────
+	// TEMP: PROCEDURAL MELEE ANIM STATE (Phase 9)
+	// Mirrors the public TODO(MIGRATE) block above — same lifetime + delete
+	// criteria. Game-thread only; never read by sim systems. Sim consumes the
+	// MeleeAttackStatePacked atomic; this code consumes the same atomic and
+	// drives WeaponMeshComponent's relative transform. One-way coupling.
+	// ─────────────────────────────────────────────────────────
+
+	/** TEMP: WeaponMeshComponent->GetRelativeTransform() captured the first time we
+	 *  observe Phase==Idle on a melee weapon. Re-captured on each new equip via the
+	 *  bMeleeRestTransformCached reset performed in ProcessPendingWeaponEquip /
+	 *  AttachWeaponVisual paths (see .cpp). */
+	FTransform MeleeRestTransform = FTransform::Identity;
+	bool       bMeleeRestTransformCached = false;
+
+	/** TEMP: game-thread accumulator for time-in-current-phase. Used to drive
+	 *  procedural pose blending without reading sim-only PhaseTimer. Reset on
+	 *  every observed phase transition. Drift vs. sim-thread PhaseTimer is
+	 *  cosmetic-only and self-corrects on the next transition. */
+	float                MeleePhaseElapsed = 0.f;
+	/** EMeleeAttackPhase is forward-declared (line 18) — initialise via underlying-type
+	 *  cast so we do not have to pull FlecsMeleeComponents.h into this header. Idle == 0. */
+	EMeleeAttackPhase    MeleePrevPhase    = static_cast<EMeleeAttackPhase>(0);
+
+	/** TEMP: drive procedural weapon-mesh swing pose from MeleeAttackStatePacked.
+	 *  See public TODO(MIGRATE) block for migration plan. */
+	void UpdateMeleeProceduralAnim(float DeltaTime);
+
 	void TickPostureAndResnap(float DeltaTime);
 	void UpdateCamera();
 	void ProcessPendingWeaponEquip();

@@ -594,7 +594,7 @@ enum class EWeaponEquipPhase : uint8
  *  Tracks which weapon slot is active and manages equip transitions. */
 struct FWeaponSlotState
 {
-	/** Currently active weapon slot (-1 = no weapon, 0 = slot 1, 1 = slot 2) */
+	/** Currently active weapon slot (-1 = no weapon, 0 = slot 1, 1 = slot 2, ...) */
 	int32 ActiveSlotIndex = -1;
 
 	/** Slot being switched to during transition (-1 = unequip only) */

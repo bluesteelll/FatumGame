@@ -16,6 +16,7 @@
 class UFlecsMeleeProfile;
 class UCurveFloat;
 class UNiagaraSystem;
+class USkeletalMesh;
 
 // ═══════════════════════════════════════════════════════════════
 // ENUMS
@@ -95,6 +96,19 @@ USTRUCT()
 struct FMeleeWeaponStatic
 {
 	GENERATED_BODY()
+
+	// ─────────────────────────────────────────────────────────
+	// VISUALS
+	// ─────────────────────────────────────────────────────────
+
+	/** Skeletal mesh applied to WeaponMeshComponent on equip. Must carry the
+	 *  BladeStartSocket / BladeTipSocket sockets below. */
+	UPROPERTY()
+	TObjectPtr<USkeletalMesh> EquippedMesh = nullptr;
+
+	/** Local transform applied to the weapon mesh on equip (relative to its
+	 *  attach parent — typically the FollowCamera). Mirrors FWeaponStatic::AttachOffset. */
+	FTransform AttachOffset;
 
 	// ─────────────────────────────────────────────────────────
 	// GEOMETRY
@@ -299,6 +313,12 @@ struct FMeleeWeaponInstance
 	float   LastTipSpeed        = 0.f;
 	/** One-shot flag: true after the first metal/armor Slashing rebound this swing. */
 	bool    bSwingRebounded     = false;
+	/** Persistent across sim ticks: set when the sweep's first non-penetrating contact
+	 *  lands (Mordhau-style energy-cleave stop). MeleeSweepSystem short-circuits on
+	 *  subsequent ticks until MeleeSwingInitSystem clears it for the next swing.
+	 *  Without this, each sim tick created a fresh local "stuck" flag that reset every
+	 *  frame, letting the blade pick up new targets across the Release phase. */
+	bool    bSwingBladeStuck    = false;
 
 	// ─────────────────────────────────────────────────────────
 	// BLOCK STATE
@@ -339,32 +359,30 @@ using FBladeSocketTripleBuffer = TTripleBuffer<FMeleeWeaponInstance::FBladeSocke
 // PER-CHARACTER COMPONENTS
 // ═══════════════════════════════════════════════════════════════
 
-/** Ring buffer of recent mouse-look deltas, fed by MeleeInputResolveSystem
- *  and consumed by MeleeSwingInitSystem to resolve swing direction. */
+/** Charge-scoped mouse-look delta integrator.
+ *  - Game thread (FlecsCharacter::Look) calls Accumulate() on every mouse-look event.
+ *  - Sim thread (MeleeChargeSystem) calls Reset() at the start of each Charging phase
+ *    so only motion DURING the hold contributes.
+ *  - Sim thread (MeleeSwingInitSystem) calls Resolve() at release to classify direction.
+ *  Race: Accumulate (game) vs Reset/Resolve (sim) on a FVector2f — tolerated per the
+ *  Phase 4 single-producer / single-consumer contract (stale sample at most). */
 USTRUCT()
 struct FMeleeAttackDirectionBuffer
 {
 	GENERATED_BODY()
 
-	static constexpr int32 Capacity = 16;
+	/** Sum of (yawDelta, pitchDelta) samples accumulated since last Reset(). */
+	FVector2f AccumulatedDelta = FVector2f::ZeroVector;
 
-	FVector2f YawPitchDeltas[Capacity];
-	int32     WriteIndex = 0;
-	int32     Count      = 0;
+	/** Add one (yawDelta, pitchDelta) sample to the accumulator. Safe to call
+	 *  outside Charging — stale data is wiped by the next Reset() at charge start. */
+	void Accumulate(FVector2f Sample) { AccumulatedDelta += Sample; }
 
-	FMeleeAttackDirectionBuffer()
-	{
-		for (int32 i = 0; i < Capacity; ++i) YawPitchDeltas[i] = FVector2f::ZeroVector;
-	}
+	/** Zero the accumulator. Called by MeleeChargeSystem on charge start. */
+	void Reset() { AccumulatedDelta = FVector2f::ZeroVector; }
 
-	/** Insert one (yawDelta, pitchDelta) sample. Ring — oldest evicted when full. */
-	void Push(FVector2f Sample);
-
-	/** Classify accumulated motion into a swing direction.
-	 *  WindowSeconds is an approximation: MVP sums the last-N entries (N derived from
-	 *  expected input rate). Proper wall-clock windowing needs per-sample timestamps —
-	 *  flagged as TODO in the .cpp; blueprint §A.1 does not prescribe either approach. */
-	EMeleeSwingDirection Resolve(float WindowSeconds) const;
+	/** Classify the accumulated motion into a swing direction. */
+	EMeleeSwingDirection Resolve() const;
 };
 
 /** Sim-side blade socket snapshot. Read by MeleeSweepSystem every tick.

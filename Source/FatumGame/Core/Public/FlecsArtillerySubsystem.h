@@ -55,6 +55,14 @@ struct FCharacterPhysBridge
 
 	// ── Weapon equip signal (sim→game, owned by AFlecsCharacter) ──
 	FPendingWeaponEquip* PendingWeaponEquipPtr = nullptr;
+
+	// ── Reverse lookup: Flecs entity → actor (for sim-thread atomic publishes) ──
+	// Raw pointer — AFlecsCharacter registers/unregisters itself via
+	// RegisterCharacterBridge / UnregisterCharacterBridge, covering the full lifetime.
+	// Accessed on sim thread strictly to call atomic write methods like
+	// PublishMeleeAttackState(). Never dereferenced for UObject state — only calls
+	// lock-free functions that manipulate std::atomic fields.
+	AFlecsCharacter* CharacterActor = nullptr;
 };
 
 /**
@@ -593,9 +601,12 @@ private:
 	}
 
 public:
-	/** Signal game thread with weapon equip/unequip data via PendingWeaponEquip atomics. Sim thread only. */
+	/** Signal game thread with weapon equip/unequip data via PendingWeaponEquip atomics. Sim thread only.
+	 *  @param bIsMelee true when the equipped weapon carries FMeleeWeaponInstance — tells game
+	 *                  thread to route LMB/RMB to UFlecsMeleeLibrary instead of UFlecsWeaponLibrary. */
 	void EnqueueWeaponEquipSignal(flecs::entity CharEntity, int64 WeaponId, int32 SlotIndex,
-		USkeletalMesh* Mesh, class UFlecsWeaponProfile* Profile, const FTransform& AttachOffset)
+		USkeletalMesh* Mesh, class UFlecsWeaponProfile* Profile, const FTransform& AttachOffset,
+		bool bIsMelee = false)
 	{
 		FCharacterPhysBridge* Bridge = FindCharacterBridge(CharEntity);
 		if (!Bridge || !Bridge->PendingWeaponEquipPtr) return;
@@ -604,6 +615,7 @@ public:
 		PEQ.Mesh = Mesh;
 		PEQ.AttachOffset = AttachOffset;
 		PEQ.WeaponProfile = Profile;
+		PEQ.bIsMelee.store(bIsMelee, std::memory_order_release);
 		PEQ.SlotIndex.store(SlotIndex, std::memory_order_release);
 		PEQ.WeaponId.store(WeaponId, std::memory_order_release);
 		PEQ.bPending.store(true, std::memory_order_release);

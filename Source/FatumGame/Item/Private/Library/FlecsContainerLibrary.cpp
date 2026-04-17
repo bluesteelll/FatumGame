@@ -4,6 +4,8 @@
 #include "FlecsItemComponents.h"
 #include "FlecsGameTags.h"
 #include "FlecsEntityDefinition.h"
+#include "FlecsEntityComponents.h"
+#include "FlecsContainerProfile.h"
 #include "FlecsItemDefinition.h"
 #include "FlecsMagazineProfile.h"
 #include "FlecsAmmoTypeDefinition.h"
@@ -740,6 +742,39 @@ bool UFlecsContainerLibrary::TransferItem(
 			NotifyContainerUI(SourceContainerId);
 			NotifyContainerUI(DestContainerId);
 			return;
+		}
+
+		// Per-slot tag filter validation (Slot-type containers only).
+		// Designer sets FContainerSlotDefinition::SlotFilter on the ContainerProfile;
+		// item must carry that tag in its FItemTags (auto-populated at prefab creation
+		// from the EntityDefinition's profile composition). Empty filter = accept any.
+		// Grid-type containers skip this — TODO: add per-cell filter support if needed.
+		if (DstStatic->Type == EContainerType::Slot)
+		{
+			const FEntityDefinitionRef* DstDefRef = DstEntity.try_get<FEntityDefinitionRef>();
+			const UFlecsEntityDefinition* DstDef = DstDefRef ? DstDefRef->Definition : nullptr;
+			const UFlecsContainerProfile* DstProfile = DstDef ? DstDef->ContainerProfile : nullptr;
+			if (DstProfile)
+			{
+				// DestGridPosition.X is the slot id for slot containers (matches
+				// the convention used below in the placement branch).
+				const int32 TargetSlotId = DestGridPosition.X;
+				const FContainerSlotDefinition* SlotDef = DstProfile->FindSlot(TargetSlotId);
+				if (SlotDef && SlotDef->SlotFilter.IsValid())
+				{
+					const FItemTags* ItemTagSet = ItemEntity.try_get<FItemTags>();
+					const bool bMatches = ItemTagSet && ItemTagSet->Tags.HasTag(SlotDef->SlotFilter);
+					if (!bMatches)
+					{
+						UE_LOG(LogFlecsContainer, Warning,
+							TEXT("TransferItem: Item %lld rejected from slot %d in container %lld — required tag '%s' not present"),
+							ItemEntityId, TargetSlotId, DestContainerId, *SlotDef->SlotFilter.ToString());
+						NotifyContainerUI(SourceContainerId);
+						NotifyContainerUI(DestContainerId);
+						return;
+					}
+				}
+			}
 		}
 
 		// Track if we need to unequip after successful transfer

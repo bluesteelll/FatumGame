@@ -48,6 +48,18 @@ struct FItemStaticData
 	static FItemStaticData FromProfile(UFlecsItemDefinition* ItemDef, UFlecsEntityDefinition* EntityDef = nullptr);
 };
 
+/**
+ * Per-entity gameplay-tag container used to drive data-driven slot/inventory
+ * filtering (FContainerSlotDefinition::SlotFilter). Auto-populated at item spawn
+ * time from the EntityDefinition's profile composition (e.g. WeaponProfile →
+ * Tag.Item.Weapon.Ranged, MeleeProfile → Tag.Item.Weapon.Melee). Future profiles
+ * (armor, grenades, …) extend this same map without touching validation code.
+ */
+struct FItemTags
+{
+	FGameplayTagContainer Tags;
+};
+
 // ═══════════════════════════════════════════════════════════════
 // CONTAINER STATIC
 // ═══════════════════════════════════════════════════════════════

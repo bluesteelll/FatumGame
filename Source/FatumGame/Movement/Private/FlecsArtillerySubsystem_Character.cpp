@@ -47,6 +47,7 @@ void UFlecsArtillerySubsystem::RegisterCharacterBridge(AFlecsCharacter* Characte
 	Bridge.StateAtomics = Character->StateAtomics;
 	Bridge.RopeVisualAtomics = Character->RopeVisualAtomics;
 	Bridge.PendingWeaponEquipPtr = &Character->PendingWeaponEquip;
+	Bridge.CharacterActor = Character;  // sim-thread reverse lookup for atomic publishes
 
 	// Resolve Flecs entity for this character (bidirectional binding already set)
 	Bridge.Entity = GetEntityForBarrageKey(Character->CharacterKey);
