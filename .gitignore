@@ -33,6 +33,10 @@ Saved/
 DerivedDataCache/
 **/DerivedDataCache/
 
+# Clangd LSP index cache (binary symbol index, rebuilt locally per machine)
+.cache/
+**/.cache/
+
 # ───────────────────────────────────────────────────────────────────────────────
 # PROJECT FILES (auto-generated)
 # ───────────────────────────────────────────────────────────────────────────────

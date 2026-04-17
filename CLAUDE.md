@@ -47,8 +47,9 @@ Domain-based vertical folder layout under `Source/FatumGame/`:
 ```
 Core/           — Simulation core (FlecsArtillerySubsystem, FSimulationWorker, FLateSyncBridge, FlecsGameTags)
   Components/   — FlecsHealthComponents, FlecsEntityComponents, FlecsInteractionComponents
-Definitions/    — ALL Data Assets & Profiles (30 files)
+Definitions/    — ALL Data Assets & Profiles (30+ files, inc. FlecsMeleeProfile)
 Weapon/         — Components/ (Weapon, Projectile, Explosion, Penetration), Systems/ (DamageCollision, Penetration, WeaponSystems, Explosion), Library/ (Damage, Weapon, BulletHit, Hitscan)
+Melee/          — Components/ (FlecsMeleeComponents), Systems/ (MeleeCharge, MeleeSwingInit, MeleePhaseAdvance, MeleeSweep, BlockAbsorb), Library/ (FlecsMeleeLibrary)
 Movement/       — Components/ (Movement), Character systems, FlecsCharacterTypes
 Character/      — FlecsCharacter + all _*.cpp, FatumMovementComponent, FPostureStateMachine
 Abilities/      — Components/ (AbilityTypes, States, Resources), Lifecycle, TickFunctions, CapsuleHelper
@@ -77,9 +78,10 @@ Utils/          — FTimeDilationStack, ConeImpulse, ExplosionUtility, LedgeDete
 | `FlecsExplosionComponents.h` | FExplosionStatic, FExplosionContactData, FTagDetonate |
 | `FlecsPenetrationComponents.h` | EPenetrationMaterialCategory, GMaterialTable, FSurfaceIntegrity, FPenetrationStatic, FPenetrationInstance, FPenetrationMaterial |
 | `FlecsDoorComponents.h` | FDoorStatic, FDoorInstance |
+| `FlecsMeleeComponents.h` | EMeleeSwingDirection, EMeleeAttackPhase, EMeleeDamageDelivery, EBlockTimingQuality, FMeleeChargePayload, FSwingPenState, FMeleeWeaponStatic, FMeleeWeaponInstance, FMeleeAttackDirectionBuffer, FBladeSocketSync, FPendingBlockAbsorb, FTagMeleeWeapon/Attacking/Charging/Blocking, FBoneRef, FResolvedHitTarget |
 | **Plugin:** `FlecsBarrageComponents.h` | FBarrageBody, FISMRender, FCollisionPair, FTagCollision*, FTagCollisionPenetration |
 
-**Profiles:** PhysicsProfile, RenderProfile, HealthProfile, DamageProfile, ProjectileProfile (+distance falloff), ContainerProfile, ItemDefinition, WeaponProfile (dual FireDelivery: Projectile/Hitscan; +Charge fields), InteractionProfile, QuickLoadProfile, ExplosionProfile
+**Profiles:** PhysicsProfile, RenderProfile, HealthProfile, DamageProfile, ProjectileProfile (+distance falloff), ContainerProfile, ItemDefinition, WeaponProfile (dual FireDelivery: Projectile/Hitscan; +Charge fields), InteractionProfile, QuickLoadProfile, ExplosionProfile, MeleeProfile (Reach, CapsuleRadius, phase timings, charge curves, block absorb, rebound, EquippedMesh+AttachOffset)
 
 ---
 
@@ -140,6 +142,7 @@ PenetrationSystem → DamageCollisionSystem → BounceCollisionSystem → Pickup
 ExplosionSystem
 ConstraintBreakSystem → FragmentationSystem → PendingFragmentationSystem
 WeaponEquipSystem → WeaponChargeSystem → WeaponTickSystem → WeaponReloadSystem → WeaponFireSystem
+MeleeChargeSystem → MeleeSwingInitSystem → MeleePhaseAdvanceSystem → MeleeSweepSystem → BlockAbsorbSystem
 DoorSystems → StealthUpdateSystem → VitalsSystems
 DeathCheckSystem → DeadEntityCleanupSystem → CollisionPairCleanupSystem (LAST)
 ```
@@ -700,6 +703,157 @@ If `LatchedPayload.bValid && mag empty at fire time` → latch is consumed with 
 - `Source/FatumGame/Item/Private/Library/FlecsContainerLibrary.cpp` — mirror clear on inventory-drag unequip
 - `Source/FatumGame/Core/Private/FlecsArtillerySubsystem_Systems.cpp` — registers `FTagChargingWeapon`
 - `Source/FatumGame/Weapon/Private/Systems/FlecsArtillerySubsystem_WeaponSystems.cpp` — `SetupWeaponChargeSystem()` between Equip and Tick
+
+---
+
+## Melee Combat System
+
+First-person melee (swords/hammers) inspired by **Mordhau** (hold-to-charge windup, directional slashes, energy-cleave) + **Dark Messiah** (physical impulse, environmental kills via shared penetration pipeline). 1P single-player only.
+
+### UX Flow
+
+```text
+Press LMB   → Charging phase (weapon visually cocks back proportional to ShapedT)
+              FMeleeAttackDirectionBuffer accumulates mouse deltas (reset on press)
+              Direction buffer integrates yaw/pitch until release
+Release LMB → direction resolved (one of 5) → stamina check → promote Pending→Latched
+              Phase jumps DIRECTLY to Release (Windup skipped by design — Charging WAS the windup)
+              Release phase sweeps blade capsule → hits apply damage/impulse via ApplyBulletHit
+              First non-penetrating contact → bSwingBladeStuck=true, rest of swing short-circuits
+Recovery    → cooldown before Idle; extended on Slashing-vs-metal rebound
+```
+
+### Directional Swing System (Mordhau-style)
+
+Direction is **integrated mouse motion during Charging**, not ring-buffer sampling. On release, `FMeleeAttackDirectionBuffer::Resolve()` classifies accumulated (yaw, pitch) sum:
+
+| Category | Condition | Result |
+|---|---|---|
+| `Thrust` | magnitude < 3.0 decidegrees | forward stab (default when user held still) |
+| `Horizontal` | `\|angle\| < 22.5°` or `> 157.5°` | yaw-dominant → slash L↔R |
+| `Vertical` | `67.5° < \|angle\| < 112.5°` | pitch-dominant → overhead chop |
+| `DiagonalTR` | `Sum.X × Sum.Y > 0` (same sign) | upper-right↔lower-left symmetric diagonal |
+| `DiagonalTL` | `Sum.X × Sum.Y < 0` (mixed sign) | upper-left↔lower-right symmetric diagonal |
+
+Diagonals are **symmetric on axis** (drag FROM upper-right ≡ FROM lower-left for the TR arc). Mordhau uses the same convention — it's about which axis the slash travels along, not where it starts.
+
+### State Machine (`EMeleeAttackPhase`)
+
+```text
+Idle → Charging (press LMB, bEnableCharge=true)
+        ↓ (charge accumulator grows, ShapedT updated + published every tick)
+Charging → Release (release LMB AND Accum ≥ MinChargeTime)
+Charging → Idle    (release LMB AND Accum < MinChargeTime — no swing, no stamina)
+Release  → Recovery (zero-crossing of PhaseTimer, end of strike window)
+Recovery → Idle    (zero-crossing; Recovery is extended 1.0-4.0× on rebound)
+```
+
+**Windup phase is NOT entered by the charge path** — skipped for Mordhau-style "hold = windup". The enum value remains for future AnimMontage pre-strike timing hooks.
+
+### Energy-Cleave Penetration
+
+Shares `UFlecsBulletHitLibrary::ApplyBulletHit` with ranged weapons. Per-swing state:
+- `FSwingPenState::RemainingBudget` — decreases per penetrated hit (thickness × resistance / cosAngle)
+- `FMeleeWeaponInstance::bSwingBladeStuck` — **persistent across sim ticks**, set on first `bPenetrated=false`
+- `MeleeSweepSystem::Gate 2` — early-return when stuck, preserving sweep history for Recovery cleanup
+
+First non-penetrating hit (budget exhausted / impenetrable material / ricochet) → blade stuck for rest of swing. Reset by `MeleeSwingInitSystem` on next swing start. Soft cleave through multiple penetrable targets is supported when each target has `FPenetrationMaterial` with resistance < 900.
+
+### Block System (continuous quality — N-C1)
+
+RMB hold enables block. `FMeleeWeaponInstance::bIsBlocking` tracked per weapon; `FTagMeleeBlocking` lives on the CHARACTER entity (not weapon). When a swing hits a blocking character:
+
+- **DirectionalQuality** = `((defenderForward · hitVec) + 1) / 2` — continuous [0,1], no cone gate
+- **TimingQuality** = `Perfect` if within `PerfectBlockWindowSeconds` of block start, else `Normal`
+- **AbsorbFraction** = `lerp(MinBlockAbsorb, MaxBlockAbsorb, DirQuality)`
+- **StaminaCost** = `BaseBlockStaminaCost × (1 - DirQuality × DirectionalDiscountFactor) × (Perfect ? PerfectTimingStaminaMultiplier : 1)`
+- **Multi-attacker** via `FPendingBlockAbsorb::AddAbsorb`: `MaxAbsorb = max`, `TotalStamina = sum`, `AnyPerfect → Perfect`
+
+### Blade Socket Pipeline (Triple Buffer)
+
+Game-thread `WriteMeleeWeaponBladeSocket` writes `(Start, Tip, FrameStamp)` per tick to `FMeleeWeaponInstance::BladeBuffer` (raw `TTripleBuffer*`, allocated on melee-equip, freed by `on_remove` hook). Sim-thread `MeleeSweepSystem` calls `BladeBuffer->SwapAndRead()` → substep slerp from previous to current position → Jolt capsule sweep via `CastCapsuleAllHits`.
+
+**Critical**: `Write()` alone does NOT mark dirty — must use `WriteAndSwap()`. `Read()` alone does NOT swap — must use `SwapAndRead()`. Using either raw call leaves reader stuck on initial default slot (FrameStamp=0 forever).
+
+### Sim → Actor Reverse Lookup
+
+`MeleeSwingInitSystem` and `MeleePhaseAdvanceSystem` publish Phase transitions to the actor's atomic (`AFlecsCharacter::MeleeAttackStatePacked`) for game-thread consumption by `UpdateMeleeProceduralAnim`, `UpdateMeleeBladeTrail`, `WriteMeleeWeaponBladeSocket`.
+
+Reverse lookup via `FCharacterPhysBridge::CharacterActor` (raw `AFlecsCharacter*`, set in `RegisterCharacterBridge`, covers full lifetime). Sim thread calls `Actor->PublishMeleeAttackState(Phase, Direction, ShapedT)` — only touches std::atomic, never UObject state.
+
+### Input Routing
+
+LMB (Fire action) and RMB (ADS action) share bindings with ranged weapons. `AFlecsCharacter::IsActiveWeaponMelee()` returns cached `bActiveWeaponIsMelee` (set by `ProcessPendingWeaponEquip` from `FPendingWeaponEquip::bIsMelee` atomic).
+
+- LMB + melee → `StartFiringWeapon`/`StopFiringWeapon` dispatch to `UFlecsMeleeLibrary::SetMeleeAttackRequested` (not ranged fire)
+- RMB + melee → `OnADSStarted`/`OnADSCompleted` dispatch to `UFlecsMeleeLibrary::SetMeleeBlockRequested` (not scope ADS)
+- Slot 3 (`IA_WeaponSlot3`) is the conventional melee slot via `ContainerProfile.Slots[2].SlotFilter = Item.Weapon.Melee`
+
+### Impulse Normalization
+
+`MeleeSweepSystem` pre-divides `Ctx.ImpulseStrength` by `Static.BaseDamage` so that after `ApplyBulletHit`'s intentional `× FinalDamage` multiplier, the final impulse approximates `BaseImpulse` at a base hit. Formula:
+```
+Final_Impulse ≈ BaseImpulse × ImpulseMul × (TipSpeed/ReferenceTipSpeed) × (FinalDamage/BaseDamage)
+```
+Designer reads `BaseImpulse` in profile as "target impulse for baseline hit with zero charge / no crit / tip at reference speed" — predictable scaling.
+
+### Ownership Contracts
+
+- **`PendingPayload`** — owned by `MeleeChargeSystem` (emit on release valid, clear on cancel)
+- **`LatchedPayload`** — owned by `MeleeSwingInitSystem` (Pending→Latched promote at init, cleared on Recovery→Idle by PhaseAdvance)
+- **`FSwingPenState`** — lives on `FMeleeWeaponInstance`, pointers passed into `ApplyBulletHit` per-hit
+- **`bSwingBladeStuck`** — set by `MeleeSweepSystem` on non-penetrating contact, cleared by `MeleeSwingInitSystem`
+- **`BladeBuffer`** — raw `TTripleBuffer*`. Allocated in `WeaponEquipSystem` melee branch, freed by Flecs `on_remove<FMeleeWeaponInstance>` hook. Unequip paths only `remove<FMeleeWeaponInstance>()` — never `delete BladeBuffer` manually.
+
+### Procedural Animation (Phase 9 TEMP)
+
+`UpdateMeleeProceduralAnim` drives `WeaponMeshComponent->SetRelativeTransform` from published Phase + ShapedT + Direction. Per-direction `TempMeleeAnim::FDirectionPose` specifies:
+- Windup rotation (pitch/yaw/roll degrees)
+- Sweep signs (yaw/pitch/roll) multiplied by `MeleeProceduralReleaseSweepDegrees`
+- `WindupOffsetMul` + `ReleaseOffsetMul` (camera-local 3D vector) scaled by `MeleeProceduralWindupBackOffset` → visible arc trajectory distinct per direction
+
+Marked `TODO(MIGRATE)` — replace with AnimMontage on `WeaponMeshComponent->GetAnimInstance()` in the future, driven by atomic Phase transitions + Notify states for hit-frame sync.
+
+### Configuration (UFlecsMeleeProfile)
+
+| Field | Default | Description |
+|---|---|---|
+| `EquippedMesh` | — | `USkeletalMesh` attached to `WeaponMeshComponent` on equip (must carry blade sockets) |
+| `AttachOffset` | Identity | Camera-local transform — CRITICAL: Identity places mesh at camera origin (invisible in 1P) |
+| `BladeStartSocket` / `BladeTipSocket` | `hilt_base`/`blade_tip` | Socket or bone names for capsule endpoints |
+| `Reach` | 120 | Blade length (cm) |
+| `CapsuleRadius` | 4 | Sweep capsule radius |
+| `SweepSubstepsPerTick` | 3 | [1, 8] substeps for slerp coverage on fast swings |
+| `WindupTime` / `ReleaseTime` / `RecoveryTime` | 0.20 / 0.18 / 0.40 | Phase durations (s) |
+| `BaseDamage` / `BaseImpulse` | 40 / 500 | Reference values at base swing |
+| `DeliveryType` | Slashing | Slashing / Blunt / Piercing (affects rebound rule) |
+| `ReferenceTipSpeed` / `TipSpeedMulMin/Max` | 1200 / 0.4 / 1.4 | Tip-speed damage scaling bounds |
+| `MeleePen` (inline) | budget=20 | Reuses `FPenetrationStatic` for energy cleave |
+| `bEnableCharge` | true | Master charge toggle |
+| `MinChargeTime` / `MaxChargeTime` | 0.15 / 0.90 | Charge windup bounds (s) |
+| `bAutoFireAtMaxCharge` / `bAutoRestartCharge` | false / false | Auto-emit at full charge; auto-restart cycling |
+| `ChargeCurve` | nullptr | `UCurveFloat` remapping raw t → shaped t (null = linear) |
+| `DamageMaxMultiplier` / `ImpulseMaxMultiplier` / `PenetrationMaxMultiplier` / `SwingSpeedMaxMultiplier` / `StaminaCostMaxMultiplier` | 1.8 / 1.8 / 1.5 / 1.15 / 2.0 | At full charge |
+| `StaminaCostPerSwing` / `BaseBlockStaminaCost` / `StaminaCostPerBlockSecond` | 15 / 20 / 5 | Stamina costs |
+| `bCanBlock` / `MinBlockAbsorb` / `MaxBlockAbsorb` / `DirectionalDiscountFactor` / `PerfectBlockWindowSeconds` / `PerfectTimingStaminaMultiplier` | true / 0.10 / 0.95 / 0.50 / 0.15 / 0.5 | Block tuning |
+| `ReboundRecoveryMultiplier` | 1.0 | Recovery-duration scalar on Slashing-vs-metal rebound (1.0=no extension) |
+| `TrailEffect` / `ImpactEffectOverride` | nullptr | Niagara VFX |
+
+### Key Files
+
+- `Source/FatumGame/Melee/Public/Components/FlecsMeleeComponents.h` — all components/tags/structs
+- `Source/FatumGame/Melee/Private/Components/FlecsMeleeComponents.cpp` — `FromProfile`, `Resolve()`, `AddAbsorb`
+- `Source/FatumGame/Melee/Public/Library/FlecsMeleeLibrary.h` — `SetMeleeAttackRequested`, `SetMeleeBlockRequested`
+- `Source/FatumGame/Melee/Private/Systems/MeleeChargeSystem.cpp` — 7-step state machine, direction-buffer reset on press
+- `Source/FatumGame/Melee/Private/Systems/MeleeSwingInitSystem.cpp` — direction resolve, stamina check, Pending→Latched promote, Phase=Release, PublishMeleeAttackState
+- `Source/FatumGame/Melee/Private/Systems/MeleePhaseAdvanceSystem.cpp` — zero-crossing Phase transitions, PublishMeleeAttackState at each
+- `Source/FatumGame/Melee/Private/Systems/MeleeSweepSystem.cpp` — capsule sweep, energy-cleave gate, impulse normalization
+- `Source/FatumGame/Melee/Private/Systems/BlockAbsorbSystem.cpp` — consume stamina from `FPendingBlockAbsorb`, optional hit-stop trigger
+- `Source/FatumGame/Definitions/Public/FlecsMeleeProfile.h` — designer-tunable config
+- `Source/FatumGame/Character/Private/FlecsCharacter_Combat.cpp` — `StartFiringWeapon`/`StopFiringWeapon` melee branch
+- `Source/FatumGame/Character/Private/FlecsCharacter_ADS.cpp` — `OnADSStarted`/`OnADSCompleted` melee branch
+- `Source/FatumGame/Movement/Public/FlecsCharacterTypes.h` — `FPendingWeaponEquip::bIsMelee`
+- `Source/FatumGame/Core/Public/FlecsArtillerySubsystem.h` — `FCharacterPhysBridge::CharacterActor`, `EnqueueWeaponEquipSignal(..., bIsMelee)`
 
 ---
 
