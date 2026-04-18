@@ -145,8 +145,10 @@ struct FATUMGAME_API FSlotLayoutDef
 	UPROPERTY(EditAnywhere, Category = "Slot")
 	FName SlotName;
 
-	/** Container profile describing capacity/layout/filter for this slot's backing container entity. */
-	UPROPERTY(EditAnywhere, Category = "Slot")
+	/** Container profile describing capacity/layout/filter for this slot's backing container entity.
+	 *  Instanced — can be either a shared DA reference OR created inline via "+ Add" in the editor
+	 *  (no need to author a dedicated UFlecsContainerProfile DA per slot). */
+	UPROPERTY(EditAnywhere, Instanced, Category = "Slot")
 	TObjectPtr<UFlecsContainerProfile> ContainerProfile;
 
 	/** If true, player cannot drag items directly in/out (Phase 3 will enforce via FlecsContainerLibrary). */
