@@ -23,6 +23,11 @@
 #include "FlecsStealthComponents.h"
 #include "FlecsVitalsComponents.h"
 #include "FlecsPenetrationComponents.h"
+#include "FlecsCraftingComponents.h"
+#include "FlecsCraftingStationProfile.h"
+#include "FlecsCraftingUISubsystem.h"
+#include "FlecsCraftingLog.h"
+#include "Async/Async.h"
 #include "BarrageDispatch.h"
 #include "BarrageConstraintSystem.h"
 #include "FBarragePrimitive.h"
@@ -710,6 +715,119 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 				// List uses ContainerInstance.CurrentCount, no extra component needed
 				break;
 			}
+		}
+
+		// ─────────────────────────────────────────────────────────
+		// CRAFTING STATION (per-instance slot containers + UI shared state)
+		// Prefab side (FCraftingStationStatic + FTagCraftingStation) is set by
+		// GetOrCreateEntityPrefab (Step 13b). Here we spawn one pure container
+		// entity per FSlotLayoutDef, tag it with FCraftingSlotBackRef so the
+		// FContainedIn observer can reach the station in O(1), and register the
+		// UI shared state via AsyncTask on the game thread.
+		// ─────────────────────────────────────────────────────────
+		if (Data.EntityDefinition && Data.EntityDefinition->CraftingStationProfile)
+		{
+			const UFlecsCraftingStationProfile* Profile = Data.EntityDefinition->CraftingStationProfile;
+			const int64 StationEntityId = static_cast<int64>(Entity.id());
+
+			FCraftingSlots SlotsComp;
+			FFuelSlot FuelSlotComp;
+			int32 SlotIdx = 0;
+
+			for (const FSlotLayoutDef& SlotDef : Profile->SlotLayout)
+			{
+				checkf(SlotIdx < kMaxCraftingSlots,
+					TEXT("SpawnEntity: station '%s' SlotLayout exceeds kMaxCraftingSlots (%d)"),
+					*Profile->GetName(), kMaxCraftingSlots);
+				checkf(SlotDef.ContainerProfile,
+					TEXT("SpawnEntity: station '%s' slot %d (role=%u) has null ContainerProfile"),
+					*Profile->GetName(), SlotIdx, static_cast<uint32>(SlotDef.Role));
+
+				// Pure container entity — no physics, no render, no prefab.
+				flecs::entity SlotEntity = FlecsWorld->entity();
+
+				FContainerStatic SlotStatic = FContainerStatic::FromProfile(SlotDef.ContainerProfile);
+				FContainerInstance SlotInst;
+				SlotInst.CurrentWeight = 0.f;
+				SlotInst.CurrentCount = 0;
+				SlotInst.OwnerEntityId = StationEntityId;
+
+				SlotEntity.set<FContainerStatic>(SlotStatic);
+				SlotEntity.set<FContainerInstance>(SlotInst);
+				SlotEntity.add<FTagContainer>();
+
+				// Type-specific instance components (mirror the main container branch above).
+				switch (SlotStatic.Type)
+				{
+				case EContainerType::Grid:
+					{
+						FContainerGridInstance GridInst;
+						GridInst.Initialize(SlotStatic.GridWidth, SlotStatic.GridHeight);
+						SlotEntity.set<FContainerGridInstance>(GridInst);
+					}
+					break;
+				case EContainerType::Slot:
+					{
+						FContainerSlotsInstance SlotsInst;
+						SlotEntity.set<FContainerSlotsInstance>(SlotsInst);
+					}
+					break;
+				case EContainerType::List:
+					break;
+				}
+
+				// Back-reference so FContainedIn observer can fast-gate to the station.
+				FCraftingSlotBackRef BackRef;
+				BackRef.StationEntityId = StationEntityId;
+				BackRef.SlotIndex = static_cast<uint16>(SlotIdx);
+				BackRef.Role = static_cast<uint8>(SlotDef.Role);
+				SlotEntity.set<FCraftingSlotBackRef>(BackRef);
+
+				const int64 SlotEntityId = static_cast<int64>(SlotEntity.id());
+				SlotsComp.SlotEntityIds[SlotIdx] = SlotEntityId;
+
+				const uint8 RoleIdx = static_cast<uint8>(SlotDef.Role);
+				if (RoleIdx < static_cast<uint8>(ESlotRole::MAX))
+				{
+					++SlotsComp.SlotRoleCounts[RoleIdx];
+				}
+
+				if (SlotDef.Role == ESlotRole::Fuel)
+				{
+					FuelSlotComp.FuelSlotEntityId = SlotEntityId;
+				}
+
+				++SlotIdx;
+			}
+
+			Entity.set<FCraftingSlots>(SlotsComp);
+
+			// Fuel slot denormalization — only set when the station actually has a Fuel slot
+			// (FromProfile's checkf already enforces <= 1 Fuel slot).
+			if (FuelSlotComp.FuelSlotEntityId != 0)
+			{
+				Entity.set<FFuelSlot>(FuelSlotComp);
+			}
+
+			FCraftingStationInstance StationInst;
+			StationInst.bSnapshotDirty = true;  // Initial snapshot published on first flush tick.
+			Entity.set<FCraftingStationInstance>(StationInst);
+
+			// Register shared state with the UI subsystem (game thread only).
+			// Key = FSkeletonKey wrapping the Flecs entity id — matches the lookup key used by
+			// CraftingSnapshotFlushSystem when publishing.
+			const FSkeletonKey StationKey(static_cast<uint64>(StationEntityId));
+			AsyncTask(ENamedThreads::GameThread, [StationKey]()
+			{
+				if (UFlecsCraftingUISubsystem* UISub = UFlecsCraftingUISubsystem::SelfPtr)
+				{
+					UISub->CreateSharedState(StationKey);
+				}
+			});
+
+			UE_LOG(LogCrafting, Log,
+				TEXT("[SpawnEntity] Crafting station spawned: profile=%s entity=%llu slots=%d fuelSlot=%lld"),
+				*Profile->GetName(), Entity.id(), SlotIdx, FuelSlotComp.FuelSlotEntityId);
 		}
 
 		// ─────────────────────────────────────────────────────────

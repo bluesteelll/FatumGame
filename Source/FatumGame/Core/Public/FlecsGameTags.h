@@ -25,6 +25,29 @@ UE_DECLARE_GAMEPLAY_TAG_EXTERN(Tag_Item_Weapon_Ranged);
 UE_DECLARE_GAMEPLAY_TAG_EXTERN(Tag_Item_Weapon_Melee);
 
 // ═══════════════════════════════════════════════════════════════
+// CRAFTING STATION GAMEPLAY TAGS
+// Matched against UFlecsCraftingStationProfile::StationTag (copied to
+// FCraftingStationStatic::StationTag). Used by recipe gating —
+// UFlecsCraftingRecipeDef can filter by station tag.
+// ═══════════════════════════════════════════════════════════════
+
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(Tag_Station_Smelter);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(Tag_Station_Press);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(Tag_Station_Forge);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(Tag_Station_Alchemy);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(Tag_Station_Generic);
+
+// ═══════════════════════════════════════════════════════════════
+// FUEL ITEM GAMEPLAY TAGS
+// Applied to fuel-item entity definitions for SlotFilter gating on
+// crafting station Fuel slots.
+// ═══════════════════════════════════════════════════════════════
+
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(Tag_Item_Fuel_Coal);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(Tag_Item_Fuel_ElectricCell);
+UE_DECLARE_GAMEPLAY_TAG_EXTERN(Tag_Item_Fuel_Mana);
+
+// ═══════════════════════════════════════════════════════════════
 // ENUMS (must be UENUM for use in UPROPERTY)
 // ═══════════════════════════════════════════════════════════════
 

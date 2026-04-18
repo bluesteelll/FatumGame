@@ -32,6 +32,7 @@ class UFlecsAmmoTypeDefinition;
 class UFlecsQuickLoadProfile;
 class UFlecsExplosionProfile;
 class UFlecsMeleeProfile;
+class UFlecsCraftingStationProfile;
 
 /**
  * Unified entity definition - a preset combining multiple profiles.
@@ -185,6 +186,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Instanced, Category = "Profiles")
 	TObjectPtr<UFlecsTemperatureZoneProfile> TemperatureZoneProfile;
 
+	/** Crafting station — turns this entity into a crafting station (slots + fuel + recipe matching) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Instanced, Category = "Profiles")
+	TObjectPtr<UFlecsCraftingStationProfile> CraftingStationProfile;
+
 	// ═══════════════════════════════════════════════════════════════
 	// DEFAULT TAGS
 	// ═══════════════════════════════════════════════════════════════
@@ -248,7 +253,8 @@ public:
 			|| NoiseZoneProfile != nullptr
 			|| VitalsProfile != nullptr
 			|| TemperatureZoneProfile != nullptr
-			|| QuickLoadProfile != nullptr;
+			|| QuickLoadProfile != nullptr
+			|| CraftingStationProfile != nullptr;
 	}
 
 	/** Check if this will create a world entity (physics or render) */
@@ -301,6 +307,9 @@ public:
 
 	/** Check if this is a temperature zone */
 	bool IsTemperatureZone() const { return TemperatureZoneProfile != nullptr; }
+
+	/** Check if this is a crafting station */
+	bool IsCraftingStation() const { return CraftingStationProfile != nullptr; }
 
 	virtual FPrimaryAssetId GetPrimaryAssetId() const override
 	{

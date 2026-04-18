@@ -45,6 +45,9 @@
 #include "FlecsPenetrationComponents.h"
 #include "FlecsPhysicsProfile.h"
 #include "FlecsGameTags.h"
+#include "FlecsCraftingStationProfile.h"
+#include "Components/FlecsCraftingComponents.h"
+#include "FlecsCraftingLog.h"
 
 // ═══════════════════════════════════════════════════════════════
 // ENTITY PREFAB REGISTRY IMPLEMENTATION
@@ -243,6 +246,20 @@ flecs::entity UFlecsArtillerySubsystem::GetOrCreateEntityPrefab(UFlecsEntityDefi
 	{
 		Prefab.set<FTemperatureZoneStatic>(FTemperatureZoneStatic::FromProfile(EntityDefinition->TemperatureZoneProfile));
 		Prefab.add<FTagTemperatureZone>();
+	}
+
+	if (EntityDefinition->CraftingStationProfile)
+	{
+		const UFlecsCraftingStationProfile* Profile = EntityDefinition->CraftingStationProfile;
+
+		FCraftingStationStatic Static = FCraftingStationStatic::FromProfile(Profile);
+		Prefab.set<FCraftingStationStatic>(Static);
+		Prefab.add<FTagCraftingStation>();
+
+		// NOTE: slot container entities + FCraftingSlotBackRef are created per-INSTANCE in
+		// FlecsEntitySpawner::SpawnEntity (Step 13c), not on the prefab — slots are instance state.
+
+		UE_LOG(LogCrafting, Log, TEXT("[GetOrCreateEntityPrefab] Crafting station prefab set: %s"), *Profile->GetName());
 	}
 
 	if (UFlecsPhysicsProfile* PhysProf = EntityDefinition->PhysicsProfile)

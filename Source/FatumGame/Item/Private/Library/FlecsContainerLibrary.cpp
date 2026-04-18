@@ -16,6 +16,7 @@
 #include "FlecsMeleeComponents.h"
 #include "FlecsCaliberRegistry.h"
 #include "FatumGameSettings.h"
+#include "Library/FlecsCraftingRuntime.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogFlecsContainer, Log, All);
 
@@ -482,6 +483,7 @@ bool UFlecsContainerLibrary::RemoveItemFromContainer(
 		UE_LOG(LogFlecsContainer, Log, TEXT("RemoveItemFromContainer: Removed item %lld from container %lld"),
 			ItemEntityId, ContainerEntityId);
 		ItemEntity.destruct();
+		FlecsCraftingRuntime::MarkStationDirtyByContainer(*FlecsWorld, ContainerEntityId, 0);
 		NotifyContainerUI(ContainerEntityId);
 		MarkOwnerEquipmentDirty(ContainerEntityId, FlecsWorld);
 	});
@@ -546,6 +548,7 @@ int32 UFlecsContainerLibrary::RemoveAllItemsFromContainer(
 
 		UE_LOG(LogFlecsContainer, Log, TEXT("RemoveAllItemsFromContainer: Removed %d items from container %lld"),
 			ItemsToRemove.Num(), ContainerEntityId);
+		FlecsCraftingRuntime::MarkStationDirtyByContainer(*FlecsWorld, ContainerEntityId, 0);
 		NotifyContainerUI(ContainerEntityId);
 		MarkOwnerEquipmentDirty(ContainerEntityId, FlecsWorld);
 	});
@@ -832,6 +835,7 @@ bool UFlecsContainerLibrary::TransferItem(
 
 				UE_LOG(LogFlecsContainer, Log, TEXT("TransferItem: Item %lld fully stacked into dest %lld"),
 					ItemEntityId, DestContainerId);
+				FlecsCraftingRuntime::MarkStationDirtyByContainer(*FlecsWorld, SourceContainerId, DestContainerId);
 				NotifyContainerUI(SourceContainerId);
 				NotifyContainerUI(DestContainerId);
 				return;
@@ -917,6 +921,8 @@ bool UFlecsContainerLibrary::TransferItem(
 		ContainedIn->ContainerEntityId = DestContainerId;
 		ContainedIn->GridPosition = NewGridPos;
 		ContainedIn->SlotIndex = NewSlotIndex;
+
+		FlecsCraftingRuntime::MarkStationDirtyByContainer(*FlecsWorld, SourceContainerId, DestContainerId);
 
 		// Unequip weapon AFTER successful transfer (not before — avoids unequip on failed placement)
 		if (bNeedsUnequip)

@@ -4,6 +4,7 @@
 #include "FlecsCraftingRuntime.h"
 #include "FlecsCraftingComponents.h"
 #include "FlecsCraftingLog.h"
+#include "FlecsCraftingUISubsystem.h"
 #include "FlecsArtillerySubsystem.h"
 #include "FlecsLibraryHelpers.h"
 #include "FlecsItemComponents.h"
@@ -79,14 +80,15 @@ void UFlecsCraftingLibrary::RequestStationDestroy(UObject* WorldContextObject, F
 		StationE.destruct();
 
 		// Step 4 — release the snapshot shared state on game thread.
-		// UFlecsCraftingUISubsystem lives in Phase 1 Step 9 (not yet implemented); the
-		// task body here is a TODO anchor. Blueprint §Step 15 pseudocode:
-		//     AsyncTask(ENamedThreads::GameThread, [StationKey]() {
-		//         if (auto* UISub = UFlecsCraftingUISubsystem::SelfPtr) {
-		//             UISub->DestroySharedState(StationKey);
-		//         }
-		//     });
-		// Once the subsystem exists, uncomment the block above and #include its header.
+		// Symmetric to FlecsEntitySpawner::SpawnEntity Step 13c's CreateSharedState AsyncTask.
+		AsyncTask(ENamedThreads::GameThread, [StationKey]()
+		{
+			if (UFlecsCraftingUISubsystem* UISub = UFlecsCraftingUISubsystem::SelfPtr)
+			{
+				UISub->DestroySharedState(StationKey);
+			}
+		});
+
 		UE_LOG(LogCrafting, Log, TEXT("Station destroyed (key=0x%llX)"),
 			static_cast<unsigned long long>(StationKey.Obj));
 	});

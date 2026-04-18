@@ -376,6 +376,11 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Flecs|Interaction")
 	bool HasInteractionTarget() const { return Interact.CurrentTarget.IsValid(); }
 
+	/** Get the BarrageKey of the current crafting-station hover target (Invalid if none).
+	 *  Populated in parallel to the primary interaction target, independent of FTagInteractable. */
+	UFUNCTION(BlueprintPure, Category = "Crafting")
+	FSkeletonKey GetCraftingHoverTarget() const { return Interact.CraftingHoverTarget; }
+
 	/** Get prompt text for current interaction target */
 	UFUNCTION(BlueprintPure, Category = "Flecs|Interaction")
 	FText GetInteractionPrompt() const;

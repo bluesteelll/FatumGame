@@ -23,6 +23,11 @@ struct FCharacterInteractionState
 	EInteractionType CachedType = EInteractionType::Instant;
 	float CachedHoldDuration = 0.f;
 
+	// Crafting station hover (parallel to CurrentTarget — UI-only, no interaction dispatch).
+	// Written in PerformInteractionTrace when a FTagCraftingStation entity is hit;
+	// cleared to Invalid() otherwise. Read via AFlecsCharacter::GetCraftingHoverTarget.
+	FSkeletonKey CraftingHoverTarget;
+
 	// Focus camera transition
 	FTransform SavedCameraTransform = FTransform::Identity;
 	float SavedCameraFOV = 90.f;

@@ -8,6 +8,7 @@
 #include "FlecsEntityComponents.h"
 #include "FlecsInteractionComponents.h"
 #include "FlecsGameTags.h"
+#include "FlecsCraftingComponents.h"
 #include "FlecsInteractionLibrary.h"
 #include "FlecsMessageSubsystem.h"
 #include "FlecsUIMessages.h"
@@ -717,6 +718,7 @@ void AFlecsCharacter::PerformInteractionTrace()
 	}
 
 	FSkeletonKey NewTarget;
+	FSkeletonKey NewCraftingHover;
 
 	if (HitResult->bBlockingHit)
 	{
@@ -727,6 +729,13 @@ void AFlecsCharacter::PerformInteractionTrace()
 		{
 			FSkeletonKey HitKey = Prim->KeyOutOfBarrage;
 			flecs::entity HitEntity = FlecsSubsystem->GetEntityForBarrageKey(HitKey);
+
+			// Crafting station hover — parallel to FTagInteractable detection.
+			// Runs independently so stations without InteractionProfile still publish hover state.
+			if (HitEntity.is_valid() && !HitEntity.has<FTagDead>() && HitEntity.has<FTagCraftingStation>())
+			{
+				NewCraftingHover = HitKey;
+			}
 
 			if (HitEntity.is_valid() && HitEntity.has<FTagInteractable>() && !HitEntity.has<FTagDead>())
 			{
@@ -841,6 +850,10 @@ void AFlecsCharacter::PerformInteractionTrace()
 			MsgSub->BroadcastMessage(TAG_UI_Interaction, InterMsg);
 		}
 	}
+
+	// Crafting hover target — independent of FTagInteractable detection.
+	// Silent write-through (no broadcast/event); widgets poll via GetCraftingHoverTarget.
+	Interact.CraftingHoverTarget = NewCraftingHover;
 }
 
 FText AFlecsCharacter::GetInteractionPrompt() const
