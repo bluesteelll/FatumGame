@@ -75,12 +75,20 @@ void UFlecsArtillerySubsystem::SetupCraftingSystems()
 					// Triple-buffer publish: write current buffer, swap-publish.
 					Shared->SnapshotBuffer.Write(MoveTemp(Snapshot));
 					Shared->SnapshotBuffer.SwapWriteBuffers();
-					Shared->SimVersion.fetch_add(1, std::memory_order_release);
+					const uint32 NewVer = Shared->SimVersion.fetch_add(1, std::memory_order_release) + 1;
+
+					UE_LOG(LogCrafting, Log, TEXT("[FlushSystem] Published snapshot station=%llu key=0x%llX ver=%u"),
+						(unsigned long long)StationE.id(),
+						(unsigned long long)StationKey.Obj,
+						NewVer);
 				}
 				// else: subsystem hasn't registered this station yet (first-tick ordering).
 				// bSnapshotDirty stays true → next tick retries. Self-healing.
 				else
 				{
+					UE_LOG(LogCrafting, Warning, TEXT("[FlushSystem] station=%llu key=0x%llX dirty but NO shared state (AsyncTask not yet ran?) — will retry next tick"),
+						(unsigned long long)StationE.id(),
+						(unsigned long long)StationKey.Obj);
 					return; // keep dirty flag so we republish next tick
 				}
 			}

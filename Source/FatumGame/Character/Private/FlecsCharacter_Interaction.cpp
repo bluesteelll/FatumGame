@@ -732,9 +732,11 @@ void AFlecsCharacter::PerformInteractionTrace()
 
 			// Crafting station hover — parallel to FTagInteractable detection.
 			// Runs independently so stations without InteractionProfile still publish hover state.
+			// IMPORTANT: use Flecs entity id (not BarrageKey) — this matches the key used by
+			// FlecsEntitySpawner::CreateSharedState and CraftingSnapshotFlushSystem's publish key.
 			if (HitEntity.is_valid() && !HitEntity.has<FTagDead>() && HitEntity.has<FTagCraftingStation>())
 			{
-				NewCraftingHover = HitKey;
+				NewCraftingHover = FSkeletonKey(static_cast<uint64>(HitEntity.id()));
 			}
 
 			if (HitEntity.is_valid() && HitEntity.has<FTagInteractable>() && !HitEntity.has<FTagDead>())

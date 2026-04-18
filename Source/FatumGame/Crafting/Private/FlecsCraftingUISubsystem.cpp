@@ -48,8 +48,8 @@ void UFlecsCraftingUISubsystem::CreateSharedState(FSkeletonKey StationKey)
 
 	StationSharedStates.Add(StationKey, MakeUnique<FCraftingStationSharedState>());
 
-	UE_LOG(LogCrafting, Verbose, TEXT("CraftingUISubsystem: CreateSharedState key=0x%llX"),
-		static_cast<unsigned long long>(StationKey.Obj));
+	UE_LOG(LogCrafting, Log, TEXT("CraftingUISubsystem: CreateSharedState key=0x%llX (total=%d)"),
+		static_cast<unsigned long long>(StationKey.Obj), StationSharedStates.Num());
 }
 
 void UFlecsCraftingUISubsystem::DestroySharedState(FSkeletonKey StationKey)
