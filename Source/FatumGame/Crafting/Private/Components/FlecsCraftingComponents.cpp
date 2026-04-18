@@ -11,12 +11,24 @@
 
 FCraftingStationStatic FCraftingStationStatic::FromProfile(const UFlecsCraftingStationProfile* P)
 {
-	checkf(P, TEXT("FCraftingStationStatic::FromProfile called with null profile"));
-	checkf(P->SlotLayout.Num() >= 1,
-		TEXT("Station '%s' has empty SlotLayout"), *P->StationName.ToString());
-	checkf(P->SlotLayout.Num() <= kMaxCraftingSlots,
+	// Non-fatal validation — content-author can be mid-edit with incomplete profile.
+	// Soft-validate with ensureMsgf so the editor doesn't crash; the returned static
+	// may be partial but won't kill the session.
+	if (!ensureMsgf(P, TEXT("FCraftingStationStatic::FromProfile called with null profile")))
+	{
+		return FCraftingStationStatic{};
+	}
+	if (!ensureMsgf(P->SlotLayout.Num() >= 1,
+		TEXT("Station '%s' has empty SlotLayout"), *P->StationName.ToString()))
+	{
+		return FCraftingStationStatic{};
+	}
+	if (!ensureMsgf(P->SlotLayout.Num() <= kMaxCraftingSlots,
 		TEXT("Station '%s' SlotLayout count %d exceeds kMaxCraftingSlots (%d)"),
-		*P->StationName.ToString(), P->SlotLayout.Num(), kMaxCraftingSlots);
+		*P->StationName.ToString(), P->SlotLayout.Num(), kMaxCraftingSlots))
+	{
+		return FCraftingStationStatic{};
+	}
 
 	int32 MaterialInputCount = 0;
 	int32 FuelCount = 0;
@@ -31,13 +43,13 @@ FCraftingStationStatic FCraftingStationStatic::FromProfile(const UFlecsCraftingS
 		default:                                              break;
 		}
 	}
-	checkf(MaterialInputCount >= 1,
+	ensureMsgf(MaterialInputCount >= 1,
 		TEXT("Station '%s' requires >= 1 MaterialInput slot (found %d)"),
 		*P->StationName.ToString(), MaterialInputCount);
-	checkf(FuelCount <= 1,
+	ensureMsgf(FuelCount <= 1,
 		TEXT("Station '%s' allows at most 1 Fuel slot (found %d)"),
 		*P->StationName.ToString(), FuelCount);
-	checkf(OutputCount >= 1,
+	ensureMsgf(OutputCount >= 1,
 		TEXT("Station '%s' requires >= 1 Output slot (found %d)"),
 		*P->StationName.ToString(), OutputCount);
 
@@ -49,7 +61,7 @@ FCraftingStationStatic FCraftingStationStatic::FromProfile(const UFlecsCraftingS
 	}
 	const bool bHasFuelSlot = (FuelCount == 1);
 	const bool bHasFuelMask = (FuelMask != 0);
-	checkf(bHasFuelSlot == bHasFuelMask,
+	ensureMsgf(bHasFuelSlot == bHasFuelMask,
 		TEXT("Station '%s': SupportedFuelTypes non-empty iff Fuel slot present (slotCount=%d, mask=0x%04x)"),
 		*P->StationName.ToString(), FuelCount, FuelMask);
 
