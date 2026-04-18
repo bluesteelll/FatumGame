@@ -1,0 +1,155 @@
+// Crafting domain enums + POD types + constants.
+// Referenced by components, profiles, registry, runtime, and library.
+
+#pragma once
+
+#include "CoreMinimal.h"
+#include "FlecsCraftingTypes.generated.h"
+
+class UFlecsEntityDefinition;
+class UFlecsContainerProfile;
+
+// ═══════════════════════════════════════════════════════════════
+// CONSTANTS
+// ═══════════════════════════════════════════════════════════════
+
+/** Maximum slots on a crafting station (MN1 — bumped from 16 to 24 per Phase 5 Press projection). */
+static constexpr int32 kMaxCraftingSlots = 24;
+
+// ═══════════════════════════════════════════════════════════════
+// ENUMS
+// ═══════════════════════════════════════════════════════════════
+
+/** Fuel type classification — bitmask-compatible (non-None values are powers of two). */
+UENUM(BlueprintType)
+enum class EFuelType : uint8
+{
+	None          = 0   UMETA(DisplayName = "None"),
+	Coal          = 1   UMETA(DisplayName = "Coal"),
+	ElectricCell  = 2   UMETA(DisplayName = "Electric Cell"),
+	Mana          = 4   UMETA(DisplayName = "Mana"),
+};
+
+static_assert(static_cast<uint8>(EFuelType::Coal)         == 1, "EFuelType::Coal must be 1");
+static_assert(static_cast<uint8>(EFuelType::ElectricCell) == 2, "EFuelType::ElectricCell must be 2");
+static_assert(static_cast<uint8>(EFuelType::Mana)         == 4, "EFuelType::Mana must be 4");
+
+/** Crafting station type classification — bitmask-compatible (non-None values are powers of two). */
+UENUM(BlueprintType)
+enum class ECraftingStationType : uint8
+{
+	None     = 0   UMETA(DisplayName = "None"),
+	Generic  = 1   UMETA(DisplayName = "Generic"),
+	Smelter  = 2   UMETA(DisplayName = "Smelter"),
+	Press    = 4   UMETA(DisplayName = "Press"),
+	Forge    = 8   UMETA(DisplayName = "Forge"),
+	Alchemy  = 16  UMETA(DisplayName = "Alchemy"),
+};
+
+/** Slot role within a crafting station's fixed layout. */
+UENUM(BlueprintType)
+enum class ESlotRole : uint8
+{
+	MaterialInput  UMETA(DisplayName = "Material Input"),
+	Fuel           UMETA(DisplayName = "Fuel"),
+	Output         UMETA(DisplayName = "Output"),
+	Die            UMETA(DisplayName = "Die"),
+	Tool           UMETA(DisplayName = "Tool"),
+	Internal       UMETA(DisplayName = "Internal"),
+	MAX            UMETA(Hidden),
+};
+
+/** Recipe match diagnostic published via snapshot for UI hints. */
+UENUM(BlueprintType)
+enum class ECraftingMatchDiagnostic : uint8
+{
+	None                 UMETA(DisplayName = "None"),
+	NoMatch              UMETA(DisplayName = "No Match"),
+	PartialIngredients   UMETA(DisplayName = "Partial Ingredients"),
+	WrongStation         UMETA(DisplayName = "Wrong Station"),
+	WrongFuel            UMETA(DisplayName = "Wrong Fuel"),
+	InsufficientFuel     UMETA(DisplayName = "Insufficient Fuel"),
+	MultipleMatches      UMETA(DisplayName = "Multiple Matches"),
+};
+
+// ═══════════════════════════════════════════════════════════════
+// RECIPE INPUT / OUTPUT
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Single ingredient requirement on a recipe.
+ *
+ * Two fields: soft for editor/asset persistence, hard for runtime after pre-resolution
+ * (MJ4 — registry calls LoadSynchronous at GameInstance::Initialize on the game thread;
+ *  sim thread reads only ResolvedDefinition and never touches the soft pointer).
+ */
+USTRUCT(BlueprintType)
+struct FATUMGAME_API FCraftingIngredient
+{
+	GENERATED_BODY()
+
+	/** Soft reference — editor-authored. Registry resolves to a hard ref at Initialize(). */
+	UPROPERTY(EditAnywhere, Category = "Ingredient")
+	TSoftObjectPtr<UFlecsEntityDefinition> IngredientDefinition;
+
+	/** Hard reference — filled by UFlecsCraftingRecipeRegistry::PreResolveAllIngredients. Runtime-only. */
+	UPROPERTY(Transient)
+	TObjectPtr<UFlecsEntityDefinition> ResolvedDefinition;
+
+	/** How many of this ingredient are required per craft. */
+	UPROPERTY(EditAnywhere, Category = "Ingredient", meta = (ClampMin = "1"))
+	int32 Count = 1;
+};
+
+/**
+ * Single output produced by a recipe.
+ */
+USTRUCT(BlueprintType)
+struct FATUMGAME_API FCraftingOutput
+{
+	GENERATED_BODY()
+
+	/** Soft reference — editor-authored. Registry resolves to a hard ref at Initialize(). */
+	UPROPERTY(EditAnywhere, Category = "Output")
+	TSoftObjectPtr<UFlecsEntityDefinition> OutputDefinition;
+
+	/** Hard reference — filled by UFlecsCraftingRecipeRegistry::PreResolveAllIngredients. Runtime-only. */
+	UPROPERTY(Transient)
+	TObjectPtr<UFlecsEntityDefinition> ResolvedDefinition;
+
+	/** How many units are produced per craft. */
+	UPROPERTY(EditAnywhere, Category = "Output", meta = (ClampMin = "1"))
+	int32 Count = 1;
+};
+
+// ═══════════════════════════════════════════════════════════════
+// SLOT LAYOUT DEFINITION
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * One slot definition within a station profile's fixed layout.
+ * Stored on UFlecsCraftingStationProfile::SlotLayout — a UDataAsset TArray, safe
+ * from archetype migration (MN3 — FCraftingStationStatic stores only the profile
+ * pointer; systems dereference Profile->SlotLayout on demand).
+ */
+USTRUCT(BlueprintType)
+struct FATUMGAME_API FSlotLayoutDef
+{
+	GENERATED_BODY()
+
+	/** Role classification for matching and UI labelling. */
+	UPROPERTY(EditAnywhere, Category = "Slot")
+	ESlotRole Role = ESlotRole::MaterialInput;
+
+	/** Editor/debug label. */
+	UPROPERTY(EditAnywhere, Category = "Slot")
+	FName SlotName;
+
+	/** Container profile describing capacity/layout/filter for this slot's backing container entity. */
+	UPROPERTY(EditAnywhere, Category = "Slot")
+	TObjectPtr<UFlecsContainerProfile> ContainerProfile;
+
+	/** If true, player cannot drag items directly in/out (Phase 3 will enforce via FlecsContainerLibrary). */
+	UPROPERTY(EditAnywhere, Category = "Slot")
+	bool bReadOnlyFromPlayer = false;
+};

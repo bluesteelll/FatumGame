@@ -48,7 +48,10 @@ public class FatumGame : ModuleRules
 				"FatumGame/Stealth/Public/Components",
 				"FatumGame/Vitals/Public",
 				"FatumGame/Vitals/Public/Components",
-				"FatumGame/Vitals/Public/Library"
+				"FatumGame/Vitals/Public/Library",
+				"FatumGame/Crafting/Public",
+				"FatumGame/Crafting/Public/Components",
+				"FatumGame/Crafting/Public/Library"
 			}
 		);
 
@@ -95,7 +98,10 @@ public class FatumGame : ModuleRules
 				"FatumGame/Vitals/Private",
 				"FatumGame/Vitals/Private/Components",
 				"FatumGame/Vitals/Private/Library",
-				"FatumGame/Vitals/Private/Systems"
+				"FatumGame/Vitals/Private/Systems",
+				"FatumGame/Crafting/Private",
+				"FatumGame/Crafting/Private/Components",
+				"FatumGame/Crafting/Private/Library"
 			}
 		);
 

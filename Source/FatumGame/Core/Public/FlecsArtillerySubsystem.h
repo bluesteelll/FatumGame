@@ -489,6 +489,9 @@ private:
 	/** Vitals systems: equipment cache, drain, modifier recalc, HP drain. */
 	void SetupVitalsSystems();
 
+	/** Crafting systems: snapshot flush (Phase 1 framework). */
+	void SetupCraftingSystems();
+
 	/** Explosion system: processes FTagDetonate → ApplyExplosion → FTagDead */
 	void SetupExplosionSystems();
 

@@ -50,6 +50,7 @@
 #include "FlecsExplosionComponents.h"
 #include "FlecsPenetrationComponents.h"
 #include "FlecsMeleeComponents.h"
+#include "FlecsCraftingComponents.h"
 
 // ═══════════════════════════════════════════════════════════════
 // COMPONENT REGISTRATION
@@ -271,6 +272,19 @@ void UFlecsArtillerySubsystem::RegisterFlecsComponents()
 	World.component<FTagMeleeAttacking>();
 	World.component<FTagMeleeCharging>();
 	World.component<FTagMeleeBlocking>();
+
+	// ─────────────────────────────────────────────────────────
+	// CRAFTING (Phase 1 — station data model + snapshot pipeline)
+	// ─────────────────────────────────────────────────────────
+	World.component<FCraftingStationStatic>();
+	World.component<FCraftingStationInstance>();
+	World.component<FCraftingSlots>();
+	World.component<FFuelSlot>();
+	World.component<FCraftingSlotBackRef>();
+	World.component<FCraftingFuelItemData>();
+	World.component<FTagCraftingStation>();
+	World.component<FTagCraftingStationDestroying>();
+	World.component<FTagCraftingFuel>();
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -480,6 +494,35 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 			}
 		});
 
+	// ─────────────────────────────────────────────────────────
+	// CRAFTING SLOT MUTATION OBSERVER (Phase 1 Step 10)
+	// Fires on every FContainedIn set<>() — which is ONLY 4 sites project-wide
+	// (PickupWorldItem, AddItemToContainer, Combat:549/571 magazine/weapon attach).
+	// The other 3 mutation sites (TransferItem/RemoveItem/RemoveAllItems) use
+	// get_mut + destruct and do NOT fire OnSet — they call FlecsCraftingRuntime::
+	// MarkStationDirtyByContainer via library hooks in FlecsContainerLibrary.cpp.
+	// Observer body MUST be pure (no mutations, no world.each) — just flip dirty flag.
+	// Flush system rebuilds snapshot once-per-tick-per-dirty-station.
+	// ─────────────────────────────────────────────────────────
+	World.observer<FContainedIn>("CraftingSlotMutation_OnSet")
+		.event(flecs::OnSet)
+		.each([](flecs::entity Item, const FContainedIn& CI)
+		{
+			flecs::world ItemWorld = Item.world();
+			flecs::entity Container = ItemWorld.entity(static_cast<flecs::entity_t>(CI.ContainerEntityId));
+			if (!Container.is_valid()) return;
+
+			// One-component early exit for 99%+ of mutations (non-crafting containers).
+			const FCraftingSlotBackRef* BackRef = Container.try_get<FCraftingSlotBackRef>();
+			if (!BackRef) return;
+
+			flecs::entity Station = ItemWorld.entity(static_cast<flecs::entity_t>(BackRef->StationEntityId));
+			if (!Station.is_valid() || Station.has<FTagCraftingStationDestroying>()) return;
+
+			FCraftingStationInstance* Inst = Station.try_get_mut<FCraftingStationInstance>();
+			if (Inst) Inst->bSnapshotDirty = true;
+		});
+
 	// ═══════════════════════════════════════════════════════════════
 	// GAMEPLAY SYSTEMS (lifecycle)
 	// ═══════════════════════════════════════════════════════════════
@@ -654,6 +697,7 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 	SetupDoorSystems();          // TriggerUnlock, DoorTick
 	SetupStealthSystems();       // StealthUpdateSystem
 	SetupVitalsSystems();        // EquipmentModifier, VitalDrain, VitalModifierRecalc, VitalHPDrain
+	SetupCraftingSystems();      // CraftingSnapshotFlushSystem (Phase 1)
 
 	// ═══════════════════════════════════════════════════════════════
 	// CLEANUP SYSTEMS
