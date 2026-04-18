@@ -736,12 +736,21 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 
 			for (const FSlotLayoutDef& SlotDef : Profile->SlotLayout)
 			{
-				checkf(SlotIdx < kMaxCraftingSlots,
+				if (!ensureMsgf(SlotIdx < kMaxCraftingSlots,
 					TEXT("SpawnEntity: station '%s' SlotLayout exceeds kMaxCraftingSlots (%d)"),
-					*Profile->GetName(), kMaxCraftingSlots);
-				checkf(SlotDef.ContainerProfile,
-					TEXT("SpawnEntity: station '%s' slot %d (role=%u) has null ContainerProfile"),
-					*Profile->GetName(), SlotIdx, static_cast<uint32>(SlotDef.Role));
+					*Profile->GetName(), kMaxCraftingSlots))
+				{
+					break;
+				}
+				// Skip slots missing ContainerProfile (authoring-in-progress) — log + continue.
+				if (!SlotDef.ContainerProfile)
+				{
+					UE_LOG(LogCrafting, Warning,
+						TEXT("SpawnEntity: station '%s' slot %d (role=%u) has null ContainerProfile — skipping (SlotLayout index will still advance)"),
+						*Profile->GetName(), SlotIdx, static_cast<uint32>(SlotDef.Role));
+					++SlotIdx;
+					continue;
+				}
 
 				// Pure container entity — no physics, no render, no prefab.
 				flecs::entity SlotEntity = FlecsWorld->entity();
