@@ -101,7 +101,8 @@ public class FatumGame : ModuleRules
 				"FatumGame/Vitals/Private/Systems",
 				"FatumGame/Crafting/Private",
 				"FatumGame/Crafting/Private/Components",
-				"FatumGame/Crafting/Private/Library"
+				"FatumGame/Crafting/Private/Library",
+				"FatumGame/Crafting/Private/Systems"
 			}
 		);
 

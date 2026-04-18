@@ -8,6 +8,10 @@
 #include "FlecsEntityComponents.h"
 #include "FlecsEntityDefinition.h"
 #include "FlecsInteractionProfile.h"
+#include "FlecsCraftingUISubsystem.h"
+#include "Library/FlecsCraftingLibrary.h"
+#include "FlecsCharacter.h"
+#include <atomic>
 
 // ═══════════════════════════════════════════════════════════════
 // LIFECYCLE
@@ -155,4 +159,114 @@ FText UFlecsHUDWidget::ResolveInteractionPrompt(FSkeletonKey TargetKey) const
 	}
 
 	return NSLOCTEXT("Interaction", "Default", "Press E");
+}
+
+// ═══════════════════════════════════════════════════════════════
+// CRAFTING HOVER POLL (Phase 1 — per-tick from NativeTick)
+// ═══════════════════════════════════════════════════════════════
+
+void UFlecsHUDWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
+{
+	Super::NativeTick(MyGeometry, InDeltaTime);
+
+	// Poll owning pawn for current hover target.
+	FSkeletonKey NewTarget = FSkeletonKey::Invalid();
+	if (APawn* Pawn = GetOwningPlayerPawn())
+	{
+		if (AFlecsCharacter* FatumChar = Cast<AFlecsCharacter>(Pawn))
+		{
+			NewTarget = FatumChar->GetCraftingHoverTarget();
+		}
+	}
+
+	// Target changed → rebind shared-state pointer + fire BP event.
+	if (NewTarget.Obj != CachedCraftingHoverKey.Obj)
+	{
+		CachedCraftingHoverKey = NewTarget;
+		CachedCraftingShared = nullptr;
+		LastSeenCraftingSimVersion = 0;
+
+		if (NewTarget.IsValid())
+		{
+			if (UFlecsCraftingUISubsystem* UISub = UFlecsCraftingUISubsystem::SelfPtr)
+			{
+				CachedCraftingShared = UISub->FindSharedState(NewTarget);
+			}
+			OnCraftingHoverChanged(true);
+		}
+		else
+		{
+			OnCraftingHoverChanged(false);
+		}
+	}
+
+	// If bound, lazy rebind (subsystem may register after first target set — AsyncTask ordering).
+	if (CachedCraftingHoverKey.IsValid() && !CachedCraftingShared)
+	{
+		if (UFlecsCraftingUISubsystem* UISub = UFlecsCraftingUISubsystem::SelfPtr)
+		{
+			CachedCraftingShared = UISub->FindSharedState(CachedCraftingHoverKey);
+		}
+	}
+
+	// Check for new snapshot publish.
+	if (CachedCraftingShared)
+	{
+		const uint32 CurSimVer = CachedCraftingShared->SimVersion.load(std::memory_order_acquire);
+		if (CurSimVer != LastSeenCraftingSimVersion)
+		{
+			if (CachedCraftingShared->SnapshotBuffer.IsDirty())
+			{
+				CachedCraftingShared->SnapshotBuffer.SwapReadBuffers();
+			}
+			const FCraftingStationSnapshot& Snapshot = CachedCraftingShared->SnapshotBuffer.Read();
+			LastSeenCraftingSimVersion = CurSimVer;
+			OnCraftingStationUpdated(Snapshot);
+		}
+	}
+}
+
+FText UFlecsHUDWidget::FormatCraftingSnapshot(const FCraftingStationSnapshot& Snapshot)
+{
+	const FText DiagnosticText = UFlecsCraftingLibrary::GetDiagnosticText(
+		static_cast<ECraftingMatchDiagnostic>(Snapshot.Diagnostic));
+
+	const FString RecipeLine = Snapshot.MatchedRecipeName.IsNone()
+		? TEXT("No recipe")
+		: Snapshot.MatchedRecipeName.ToString();
+
+	FString FuelLine;
+	if (Snapshot.ActiveFuelType == 0 && Snapshot.FuelChargeSecondsRemaining <= 0.f)
+	{
+		FuelLine = TEXT("Fuel: empty");
+	}
+	else
+	{
+		FuelLine = FString::Printf(TEXT("Fuel: type=%u, %.1fs"),
+			Snapshot.ActiveFuelType,
+			Snapshot.FuelChargeSecondsRemaining);
+	}
+
+	// Slot list — short form.
+	FString SlotsBlock;
+	for (const FCraftingStationSlotSnapshot& Slot : Snapshot.Slots)
+	{
+		SlotsBlock += FString::Printf(TEXT("  [%s] %d items\n"),
+			*Slot.SlotName.ToString(),
+			Slot.ItemCount);
+	}
+	if (SlotsBlock.IsEmpty())
+	{
+		SlotsBlock = TEXT("  (no slots)\n");
+	}
+
+	const FString FormattedStr = FString::Printf(
+		TEXT("%s\nRecipe: %s\n%s\nDiag: %s\nSlots:\n%s"),
+		*Snapshot.StationName.ToString(),
+		*RecipeLine,
+		*FuelLine,
+		*DiagnosticText.ToString(),
+		*SlotsBlock);
+
+	return FText::FromString(FormattedStr);
 }

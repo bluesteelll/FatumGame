@@ -10,7 +10,10 @@
 #include "FlecsMessageSubsystem.h"
 #include "FlecsUIMessages.h"
 #include "SkeletonTypes.h"
+#include "Library/FlecsCraftingSnapshot.h"
 #include "FlecsHUDWidget.generated.h"
+
+struct FCraftingStationSharedState;
 
 UCLASS(Abstract, Blueprintable)
 class FATUMGAME_API UFlecsHUDWidget : public UUserWidget
@@ -71,9 +74,29 @@ public:
 	UFUNCTION(BlueprintImplementableEvent, Category = "HUD")
 	void OnVitalsUpdated(float Hunger, float Thirst, float Warmth);
 
+	// ═══════════════════════════════════════════════════════════════
+	// CRAFTING STATION HOVER (Phase 1 — polled from character each tick)
+	// ═══════════════════════════════════════════════════════════════
+
+	/** Fired when player starts/stops hovering a crafting station.
+	 *  bHasTarget=false → station lost; widget should hide crafting panel. */
+	UFUNCTION(BlueprintImplementableEvent, Category = "HUD|Crafting")
+	void OnCraftingHoverChanged(bool bHasTarget);
+
+	/** Fired whenever sim thread publishes a new snapshot for the currently hovered station.
+	 *  Bind this to a TextBlock.SetText (use FormatCraftingSnapshot for a pre-made string). */
+	UFUNCTION(BlueprintImplementableEvent, Category = "HUD|Crafting")
+	void OnCraftingStationUpdated(const FCraftingStationSnapshot& Snapshot);
+
+	/** Convenience: pre-formatted multi-line debug string for the given snapshot.
+	 *  BP-callable so you can wire OnCraftingStationUpdated → FormatCraftingSnapshot → SetText. */
+	UFUNCTION(BlueprintPure, Category = "HUD|Crafting")
+	static FText FormatCraftingSnapshot(const FCraftingStationSnapshot& Snapshot);
+
 protected:
 	virtual void NativeConstruct() override;
 	virtual void NativeDestruct() override;
+	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
 
 private:
 	// ═══════════════════════════════════════════════════════════════
@@ -107,6 +130,11 @@ private:
 	FMessageListenerHandle InteractionHandle;
 	FMessageListenerHandle HoldProgressHandle;
 	FMessageListenerHandle InteractionStateHandle;
+
+	/** Crafting hover polling state (game thread only). */
+	FSkeletonKey CachedCraftingHoverKey = FSkeletonKey::Invalid();
+	FCraftingStationSharedState* CachedCraftingShared = nullptr;
+	uint32 LastSeenCraftingSimVersion = 0;
 
 	/** Allow AFlecsCharacter to read CachedPlayerEntityId for one-time init check. */
 	friend class AFlecsCharacter;
