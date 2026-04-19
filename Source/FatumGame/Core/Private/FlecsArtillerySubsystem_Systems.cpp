@@ -708,6 +708,7 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 	SetupDoorSystems();          // TriggerUnlock, DoorTick
 	SetupStealthSystems();       // StealthUpdateSystem
 	SetupVitalsSystems();        // EquipmentModifier, VitalDrain, VitalModifierRecalc, VitalHPDrain
+	SetupMultiblockSystems();    // MultiblockDetectionSystem (Phase 2) — must run BEFORE crafting flush so first-tick bond publishes same tick
 	SetupCraftingSystems();      // CraftingSnapshotFlushSystem (Phase 1)
 
 	// ═══════════════════════════════════════════════════════════════
