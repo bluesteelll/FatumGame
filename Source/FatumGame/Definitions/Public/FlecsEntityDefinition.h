@@ -33,6 +33,7 @@ class UFlecsQuickLoadProfile;
 class UFlecsExplosionProfile;
 class UFlecsMeleeProfile;
 class UFlecsCraftingStationProfile;
+class UFlecsMultiblockBlueprint;
 
 /**
  * Unified entity definition - a preset combining multiple profiles.
@@ -189,6 +190,27 @@ public:
 	/** Crafting station — turns this entity into a crafting station (slots + fuel + recipe matching) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Instanced, Category = "Profiles")
 	TObjectPtr<UFlecsCraftingStationProfile> CraftingStationProfile;
+
+	// ═══════════════════════════════════════════════════════════════
+	// MULTIBLOCK (Phase 2 — assembly detection + bond)
+	// ═══════════════════════════════════════════════════════════════
+
+	/** Blueprint this entity participates in. Reference from BOTH the anchor
+	 *  EntityDefinition AND every child EntityDefinition — detection matches
+	 *  only candidates whose Blueprint pointer equals the anchor's. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Multiblock")
+	TObjectPtr<UFlecsMultiblockBlueprint> MultiblockBlueprint;
+
+	/** Semantic role this part fulfills ("Chamber", "Firebox", "Chimney", ...).
+	 *  Must match the corresponding FMultiblockChildPartSpec::PartRole in the
+	 *  blueprint. For anchors this can be empty (anchor is the root, not a slot). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Multiblock")
+	FName MultiblockPartRole;
+
+	/** True iff this entity is the anchor of MultiblockBlueprint. Prefab attachment
+	 *  ensureMsgf's that this flag matches MultiblockBlueprint->AnchorPartDefinition. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Multiblock")
+	bool bMultiblockIsAnchor = false;
 
 	// ═══════════════════════════════════════════════════════════════
 	// DEFAULT TAGS

@@ -51,6 +51,7 @@
 #include "FlecsPenetrationComponents.h"
 #include "FlecsMeleeComponents.h"
 #include "FlecsCraftingComponents.h"
+#include "Components/FlecsMultiblockComponents.h"
 
 // ═══════════════════════════════════════════════════════════════
 // COMPONENT REGISTRATION
@@ -285,6 +286,16 @@ void UFlecsArtillerySubsystem::RegisterFlecsComponents()
 	World.component<FTagCraftingStation>();
 	World.component<FTagCraftingStationDestroying>();
 	World.component<FTagCraftingFuel>();
+
+	// ─────────────────────────────────────────────────────────
+	// MULTIBLOCK (Phase 2 — assembly detection + bond)
+	// ─────────────────────────────────────────────────────────
+	World.component<FMultiblockPartStatic>();
+	World.component<FMultiblockChildren>();
+	World.component<FMultiblockChildOf>();
+	World.component<FTagMultiblockPart>();
+	World.component<FTagMultiblockAnchor>();
+	World.component<FTagMultiblockBonded>();
 }
 
 // ═══════════════════════════════════════════════════════════════

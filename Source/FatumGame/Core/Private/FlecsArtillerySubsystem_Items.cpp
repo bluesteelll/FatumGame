@@ -47,6 +47,8 @@
 #include "FlecsGameTags.h"
 #include "FlecsCraftingStationProfile.h"
 #include "Components/FlecsCraftingComponents.h"
+#include "Components/FlecsMultiblockComponents.h"
+#include "FlecsMultiblockBlueprint.h"
 #include "FlecsCraftingLog.h"
 
 // ═══════════════════════════════════════════════════════════════
@@ -260,6 +262,48 @@ flecs::entity UFlecsArtillerySubsystem::GetOrCreateEntityPrefab(UFlecsEntityDefi
 		// FlecsEntitySpawner::SpawnEntity (Step 13c), not on the prefab — slots are instance state.
 
 		UE_LOG(LogCrafting, Log, TEXT("[GetOrCreateEntityPrefab] Crafting station prefab set: %s"), *Profile->GetName());
+	}
+
+	// ─────────────────────────────────────────────────────────
+	// MULTIBLOCK PART (Phase 2)
+	// Attach FMultiblockPartStatic + tags to the prefab so every spawned
+	// instance inherits "this type participates in multiblock assembly".
+	// Anchor/child distinction lives in the tag FTagMultiblockAnchor only
+	// (v3 PATCH 3 / critique M1 — single source of truth).
+	// ─────────────────────────────────────────────────────────
+	if (EntityDefinition->MultiblockBlueprint)
+	{
+		const UFlecsMultiblockBlueprint* BP = EntityDefinition->MultiblockBlueprint;
+
+		FMultiblockPartStatic PS;
+		PS.Blueprint = BP;
+		PS.PartRole = EntityDefinition->MultiblockPartRole;
+		Prefab.set<FMultiblockPartStatic>(PS);
+		Prefab.add<FTagMultiblockPart>();
+
+		if (EntityDefinition->bMultiblockIsAnchor)
+		{
+			Prefab.add<FTagMultiblockAnchor>();
+		}
+
+		// Consistency check — the authored bool must agree with the blueprint's
+		// AnchorPartDefinition pointer. Soft ensure (not check) so authoring
+		// mid-flight doesn't crash the editor.
+		ensureMsgf(EntityDefinition->bMultiblockIsAnchor ==
+		           (BP->AnchorPartDefinition == EntityDefinition),
+			TEXT("[GetOrCreateEntityPrefab] bMultiblockIsAnchor=%d on '%s' mismatches "
+			     "blueprint '%s' AnchorPartDefinition='%s'"),
+			EntityDefinition->bMultiblockIsAnchor ? 1 : 0,
+			*EntityDefinition->GetName(),
+			*BP->BlueprintId.ToString(),
+			BP->AnchorPartDefinition ? *BP->AnchorPartDefinition->GetName() : TEXT("<null>"));
+
+		UE_LOG(LogCrafting, Log,
+			TEXT("[GetOrCreateEntityPrefab] Multiblock part prefab set: def=%s blueprint=%s anchor=%d role=%s"),
+			*EntityDefinition->GetName(),
+			*BP->BlueprintId.ToString(),
+			EntityDefinition->bMultiblockIsAnchor ? 1 : 0,
+			*EntityDefinition->MultiblockPartRole.ToString());
 	}
 
 	if (UFlecsPhysicsProfile* PhysProf = EntityDefinition->PhysicsProfile)

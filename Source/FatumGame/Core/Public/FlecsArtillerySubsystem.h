@@ -21,6 +21,7 @@ class UFlecsRenderManager;
 class UFlecsNiagaraManager;
 class UFlecsEntityDefinition;
 class UFlecsItemDefinition;
+class UFlecsMultiblockBlueprint;
 class UNiagaraSystem;
 struct BarrageContactEvent;
 struct FItemStaticData;
@@ -492,6 +493,17 @@ private:
 	/** Crafting systems: snapshot flush (Phase 1 framework). */
 	void SetupCraftingSystems();
 
+	/** Multiblock detection + bond (Phase 2). Must register BEFORE SetupCraftingSystems
+	 *  so first-tick bonds publish their initial snapshot in the same sim tick. */
+	void SetupMultiblockSystems();
+
+	/** Bond an anchor + its matched children into a single crafting-station assembly.
+	 *  Strips pickup/item tags, freezes bodies to Static, writes FMultiblockChildren /
+	 *  FMultiblockChildOf roster links, then delegates station setup to
+	 *  FlecsMultiblockRuntime::SetupStationInstance. Sim thread only. */
+	void BondMultiblock(flecs::entity Anchor, const class UFlecsMultiblockBlueprint* Blueprint,
+		const TArray<int64, TInlineAllocator<15>>& ChildEntityIds);
+
 	/** Explosion system: processes FTagDetonate → ApplyExplosion → FTagDead */
 	void SetupExplosionSystems();
 
@@ -502,6 +514,10 @@ private:
 
 	/** Ambient light level for stealth (sim thread only, written via EnqueueCommand). */
 	float AmbientLightLevel = 0.1f;
+
+	/** Multiblock detection throttle — decremented every sim tick, scan runs on zero.
+	 *  Sim thread only. Reset to 0 in OnWorldBeginPlay so the first scan fires on tick 1. */
+	int32 CraftingMultiblockTickCountdown = 0;
 
 	/** Subscribe to Barrage collision events. */
 	void SubscribeToBarrageEvents();

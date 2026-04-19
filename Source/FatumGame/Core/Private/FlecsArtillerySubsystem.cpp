@@ -112,6 +112,9 @@ void UFlecsArtillerySubsystem::OnWorldBeginPlay(UWorld& InWorld)
 	DebrisPool = new FDebrisPool();
 	DebrisPool->Initialize(CachedBarrageDispatch);
 
+	// Multiblock detection throttle — first scan runs on first sim tick after setup.
+	CraftingMultiblockTickCountdown = 0;
+
 	SetupFlecsSystems();
 	SubscribeToBarrageEvents();
 
