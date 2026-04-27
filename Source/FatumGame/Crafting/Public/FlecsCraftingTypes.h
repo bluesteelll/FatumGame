@@ -72,6 +72,26 @@ enum class ECraftingMatchDiagnostic : uint8
 	MultipleMatches      UMETA(DisplayName = "Multiple Matches"),
 };
 
+/**
+ * Smelter (and forthcoming Press / Forge) process state.
+ * Lives on FSmelterInstance::Phase. Published per-tick into
+ * FCraftingStationSharedState::ProcessPhasePacked atomic + FCraftingStationSnapshot::ProcessPhase.
+ *
+ * Cancelled and Completing are one-tick TRANSIENT phases — the SmelterProcessSystem
+ * sets them, the same-tick CraftingSnapshotFlushSystem observes/publishes them, then
+ * the next tick the system body transitions back to Idle. UI can therefore detect
+ * "completion" / "cancellation" events by polling the published phase.
+ */
+UENUM(BlueprintType)
+enum class EProcessPhase : uint8
+{
+	Idle       = 0  UMETA(DisplayName = "Idle"),
+	Processing = 1  UMETA(DisplayName = "Processing"),
+	Stalled    = 2  UMETA(DisplayName = "Stalled"),
+	Completing = 3  UMETA(DisplayName = "Completing"),
+	Cancelled  = 4  UMETA(DisplayName = "Cancelled"),
+};
+
 // ═══════════════════════════════════════════════════════════════
 // RECIPE INPUT / OUTPUT
 // ═══════════════════════════════════════════════════════════════

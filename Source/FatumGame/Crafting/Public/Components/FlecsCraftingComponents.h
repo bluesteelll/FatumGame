@@ -20,11 +20,15 @@
 
 #include "CoreMinimal.h"
 #include "GameplayTagContainer.h"
+#include "Containers/Array.h"
+#include "Containers/ContainerAllocationPolicies.h"
+#include "UObject/ObjectPtr.h"
 #include "FlecsCraftingTypes.h"
 
 class UFlecsCraftingStationProfile;
 class UFlecsCraftingRecipeDef;
 class UFlecsFuelProfile;
+class UFlecsEntityDefinition;
 
 // ═══════════════════════════════════════════════════════════════
 // STATION STATIC (prefab-level)
@@ -157,6 +161,75 @@ struct FCraftingFuelItemData
 	float       ChargeSecondsPerUnit = 0.f;
 
 	static FCraftingFuelItemData FromProfile(const UFlecsFuelProfile* P);
+};
+
+// ═══════════════════════════════════════════════════════════════
+// SMELTER (Phase 3) — process state + ingredient ledger + per-slot lock.
+// All three are plain C++ structs, NOT USTRUCT. They live exclusively on the
+// sim thread and are never marshalled across the thread boundary, so they
+// follow the same convention as FCraftingStationStatic / FWeaponStatic.
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * One row in FSmelterInstance::ConsumedLedger — captures a single ingredient that was
+ * physically removed from a MaterialInput slot at Smelter Start. Used on Cancel to refund
+ * the exact items back to their source slots (or floor-drop on overflow).
+ *
+ * Definition rooting: TObjectPtr<UFlecsEntityDefinition> is rooted via
+ *   UFlecsCraftingRecipeRegistry::AllRecipes (UPROPERTY)
+ *     → recipe.Ingredients[].ResolvedDefinition (TObjectPtr UPROPERTY)
+ * chain — refactoring the registry must preserve the UPROPERTY anchor or the ledger
+ * starts dangling. Phase 3 invariant: ledger lifetime <= MatchedRecipe lifetime,
+ * which equals registry lifetime (game session).
+ */
+struct FConsumedIngredient
+{
+	TObjectPtr<UFlecsEntityDefinition>  Definition;          //  8 B
+	int32                               Count            = 0; //  4 B
+	uint8                               SourceSlotIndex  = 0; //  1 B
+	// 3 B padding → 16 B total
+};
+static_assert(sizeof(FConsumedIngredient) == 16, "FConsumedIngredient unexpected size");
+
+/**
+ * Per-station Smelter state. Attached to Smelter station entities by
+ * FlecsMultiblockRuntime::SetupStationInstance when Profile->StationType == Smelter.
+ *
+ * Owned EXCLUSIVELY by the sim thread. SmelterProcessSystem reads/writes Phase /
+ * ProgressSeconds / DurationCached / ConsumedLedger; BP API command lambdas
+ * (RequestSmelterStart / RequestSmelterCancel) flip bStartRequested / bCancelRequested
+ * — both lambdas execute on the sim thread via EnqueueCommand. Game thread NEVER
+ * touches this struct directly; it observes phase via FCraftingStationSharedState
+ * atomic publish or the snapshot triple buffer.
+ *
+ * Inline allocator size 8 covers >99% of recipes (Phase 5 Press is the only foreseen
+ * 8+ ingredient recipe; heap fallback handles the rare case correctly).
+ */
+struct FSmelterInstance
+{
+	EProcessPhase                                    Phase            = EProcessPhase::Idle;
+	float                                            ProgressSeconds  = 0.f;
+	float                                            DurationCached   = 0.f;   // copied from MatchedRecipe at Start
+	TArray<FConsumedIngredient, TInlineAllocator<8>> ConsumedLedger;           // ingredient commit/refund snapshot
+	bool                                             bStartRequested  = false; // set by BP API, drained by system
+	bool                                             bCancelRequested = false; // set by BP API, drained by system
+};
+
+/**
+ * Per-slot-container lock. Added to a slot CONTAINER entity (NOT the station) when
+ * the owning station enters Processing/Stalled, removed when it returns to Idle.
+ *
+ * FlecsContainerLibrary's player-facing entry points (AddItemToContainer,
+ * RemoveItemFromContainer, RemoveAllItemsFromContainer, TransferItem, PickupItem,
+ * PickupWorldItem, PlaceExistingEntityInContainer) check this and reject the
+ * mutation with a Warning when present. The sim-internal *FromStation siblings
+ * (FlecsCraftingRuntime::AddItemToContainerFromStation /
+ * RemoveItemFromContainerFromStation) bypass the check by design — the lock is
+ * the player-vs-station discriminator.
+ */
+struct FCraftingSlotLockedByStation
+{
+	int64 OwningStationEntityId = 0;  // 0 = unlocked (defensive — typically the component is removed instead)
 };
 
 // ═══════════════════════════════════════════════════════════════

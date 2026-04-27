@@ -70,6 +70,16 @@ EDataValidationResult UFlecsCraftingRecipeDef::IsDataValid(FDataValidationContex
 		Result = EDataValidationResult::Invalid;
 	}
 
+	// Phase 3 invariant: a single-charge Smelter must be able to finish on the fuel
+	// it commits at Start. Mid-process refuels are out of Phase 3 scope.
+	if (FuelChargeSecondsRequired > DurationSeconds)
+	{
+		Context.AddError(FText::FromString(FString::Printf(
+			TEXT("FuelChargeSecondsRequired (%.2f) > DurationSeconds (%.2f) — recipe cannot complete on a single fuel commit."),
+			FuelChargeSecondsRequired, DurationSeconds)));
+		Result = EDataValidationResult::Invalid;
+	}
+
 	return Result;
 }
 #endif // WITH_EDITOR

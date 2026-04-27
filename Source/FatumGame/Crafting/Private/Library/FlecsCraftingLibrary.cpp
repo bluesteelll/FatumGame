@@ -2,7 +2,7 @@
 
 #include "FlecsCraftingLibrary.h"
 #include "FlecsCraftingRuntime.h"
-#include "FlecsCraftingComponents.h"
+#include "Components/FlecsCraftingComponents.h"
 #include "FlecsCraftingLog.h"
 #include "FlecsCraftingUISubsystem.h"
 #include "FlecsArtillerySubsystem.h"
@@ -91,6 +91,98 @@ void UFlecsCraftingLibrary::RequestStationDestroy(UObject* WorldContextObject, F
 
 		UE_LOG(LogCrafting, Log, TEXT("Station destroyed (key=0x%llX)"),
 			static_cast<unsigned long long>(StationKey.Obj));
+	});
+}
+
+// ═══════════════════════════════════════════════════════════════
+// SMELTER (Phase 3)
+// ═══════════════════════════════════════════════════════════════
+
+void UFlecsCraftingLibrary::RequestSmelterStart(UObject* WorldContextObject, FSkeletonKey StationKey)
+{
+	UFlecsArtillerySubsystem* Subsystem = FlecsLibrary::GetSubsystem(WorldContextObject);
+	if (!Subsystem || !StationKey.IsValid())
+	{
+		UE_LOG(LogCrafting, Verbose, TEXT("RequestSmelterStart: invalid station key"));
+		return;
+	}
+
+	Subsystem->EnqueueCommand([Subsystem, StationKey]()
+	{
+		flecs::entity StationE = FlecsLibrary::GetEntityForKey(Subsystem, StationKey);
+		if (!StationE.is_valid() || !StationE.is_alive())
+		{
+			UE_LOG(LogCrafting, Verbose,
+				TEXT("RequestSmelterStart: station entity not alive (key=0x%llX)"),
+				(unsigned long long)StationKey.Obj);
+			return;
+		}
+		if (!StationE.has<FTagCraftingStation>())
+		{
+			UE_LOG(LogCrafting, Warning,
+				TEXT("RequestSmelterStart: entity %llu is not a crafting station"),
+				(unsigned long long)StationE.id());
+			return;
+		}
+
+		FSmelterInstance* SmInst = StationE.try_get_mut<FSmelterInstance>();
+		if (!SmInst)
+		{
+			UE_LOG(LogCrafting, Warning,
+				TEXT("RequestSmelterStart: entity %llu has no FSmelterInstance — not a smelter"),
+				(unsigned long long)StationE.id());
+			return;
+		}
+
+		SmInst->bStartRequested = true;
+		UE_LOG(LogCrafting, Log,
+			TEXT("RequestSmelterStart: queued for station entity=%llu (Phase=%u)"),
+			(unsigned long long)StationE.id(),
+			static_cast<uint32>(SmInst->Phase));
+	});
+}
+
+void UFlecsCraftingLibrary::RequestSmelterCancel(UObject* WorldContextObject, FSkeletonKey StationKey)
+{
+	UFlecsArtillerySubsystem* Subsystem = FlecsLibrary::GetSubsystem(WorldContextObject);
+	if (!Subsystem || !StationKey.IsValid())
+	{
+		UE_LOG(LogCrafting, Verbose, TEXT("RequestSmelterCancel: invalid station key"));
+		return;
+	}
+
+	Subsystem->EnqueueCommand([Subsystem, StationKey]()
+	{
+		flecs::entity StationE = FlecsLibrary::GetEntityForKey(Subsystem, StationKey);
+		if (!StationE.is_valid() || !StationE.is_alive())
+		{
+			UE_LOG(LogCrafting, Verbose,
+				TEXT("RequestSmelterCancel: station entity not alive (key=0x%llX)"),
+				(unsigned long long)StationKey.Obj);
+			return;
+		}
+		if (!StationE.has<FTagCraftingStation>())
+		{
+			UE_LOG(LogCrafting, Warning,
+				TEXT("RequestSmelterCancel: entity %llu is not a crafting station"),
+				(unsigned long long)StationE.id());
+			return;
+		}
+
+		FSmelterInstance* SmInst = StationE.try_get_mut<FSmelterInstance>();
+		if (!SmInst)
+		{
+			UE_LOG(LogCrafting, Warning,
+				TEXT("RequestSmelterCancel: entity %llu has no FSmelterInstance — not a smelter"),
+				(unsigned long long)StationE.id());
+			return;
+		}
+
+		SmInst->bCancelRequested = true;
+		UE_LOG(LogCrafting, Log,
+			TEXT("RequestSmelterCancel: queued for station entity=%llu (Phase=%u)"),
+			(unsigned long long)StationE.id(),
+			static_cast<uint32>(SmInst->Phase));
 	});
 }
 

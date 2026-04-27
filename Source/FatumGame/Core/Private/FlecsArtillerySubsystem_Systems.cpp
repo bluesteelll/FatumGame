@@ -288,6 +288,15 @@ void UFlecsArtillerySubsystem::RegisterFlecsComponents()
 	World.component<FTagCraftingFuel>();
 
 	// ─────────────────────────────────────────────────────────
+	// CRAFTING (Phase 3 — Smelter process system + slot lock)
+	// FConsumedIngredient is NOT registered — it lives inline inside
+	// FSmelterInstance::ConsumedLedger and is never a Flecs component
+	// (mirrors the FChargeShotPayload precedent).
+	// ─────────────────────────────────────────────────────────
+	World.component<FSmelterInstance>();
+	World.component<FCraftingSlotLockedByStation>();
+
+	// ─────────────────────────────────────────────────────────
 	// MULTIBLOCK (Phase 2 — assembly detection + bond)
 	// ─────────────────────────────────────────────────────────
 	World.component<FMultiblockPartStatic>();

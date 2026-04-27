@@ -10,12 +10,22 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Containers/Array.h"
+#include "Containers/ContainerAllocationPolicies.h"
 #include "FlecsCraftingTypes.h"
 #include "FlecsCraftingSnapshot.h"
+#include "Components/FlecsCraftingComponents.h"
 
 namespace flecs { struct world; struct entity; }
 class UFlecsCraftingRecipeDef;
 class UFlecsCraftingRecipeRegistry;
+class UFlecsCraftingStationProfile;
+class UFlecsEntityDefinition;
+struct FCraftingStationStatic;
+struct FCraftingStationInstance;
+struct FCraftingSlots;
+struct FSmelterInstance;
+struct FConsumedIngredient;
 
 namespace FlecsCraftingRuntime
 {
@@ -106,4 +116,124 @@ namespace FlecsCraftingRuntime
 	 * Sim-thread only.
 	 */
 	FATUMGAME_API void BuildSnapshot(flecs::entity StationE, FCraftingStationSnapshot& OutSnapshot);
+
+	// ═══════════════════════════════════════════════════════════════
+	// SMELTER (Phase 3)
+	// All sim-thread only. Mutating helpers early-exit when the station carries
+	// FTagCraftingStationDestroying (consistent with Phase 1 helpers).
+	// ═══════════════════════════════════════════════════════════════
+
+	/** Bitmask describing which ESlotRole(s) participate in a station-process lock. */
+	enum class ESlotRoleLockMask : uint8
+	{
+		MaterialInputOnly      = 1,
+		MaterialInputAndFuel   = 2,
+		All                    = 3,
+	};
+
+	/**
+	 * Walk MaterialInput slots and build a one-shot ledger of (Definition, Count, SourceSlotIndex)
+	 * tuples that fully satisfy Recipe->Ingredients. Multiple slots may contribute to a single
+	 * ingredient (collected in slot-iteration order). Returns false when ANY ingredient cannot
+	 * be fully satisfied (no partial mutation; caller bails the Start).
+	 *
+	 * Sim-thread only. Pure read — does not mutate slots / items.
+	 */
+	FATUMGAME_API bool BuildIngredientLedger(
+		flecs::entity                                       Station,
+		const FCraftingStationStatic&                       Static,
+		const FCraftingSlots&                               Slots,
+		const UFlecsCraftingRecipeDef*                      Recipe,
+		TArray<FConsumedIngredient, TInlineAllocator<8>>&   OutLedger);
+
+	/**
+	 * Inspect the FuelSlot contents and sum projected charge seconds (Count × ChargeSecondsPerUnit)
+	 * across items of the requested fuel type. Returns 0 when the slot is empty / mismatched.
+	 *
+	 * Sim-thread only. Pure read.
+	 */
+	FATUMGAME_API float ProbeFuelSlotProjectedCharge(flecs::entity Station, EFuelType RequiredType);
+
+	/**
+	 * Add FCraftingSlotLockedByStation { OwningStationEntityId } to each slot container whose
+	 * role is included in the mask. Idempotent (re-adding overwrites). Sim-thread only.
+	 */
+	FATUMGAME_API void LockStationSlots(
+		flecs::entity Station, const FCraftingSlots& Slots, ESlotRoleLockMask Mask);
+
+	/** Symmetric — removes the lock component on each matching slot. Idempotent. Sim-thread only. */
+	FATUMGAME_API void UnlockStationSlots(
+		flecs::entity Station, const FCraftingSlots& Slots, ESlotRoleLockMask Mask);
+
+	/**
+	 * Spawn an item entity at the station's Barrage body position + Z lift via game-thread
+	 * AsyncTask (UFlecsEntityLibrary::SpawnEntity is NOT sim-thread-safe — it touches Barrage
+	 * + ISM on the game thread). Result item appears with one-tick latency (next game tick).
+	 *
+	 * Sim-thread only.
+	 */
+	FATUMGAME_API void DropOverflowToFloor(
+		flecs::entity Station, UFlecsEntityDefinition* ItemDef, int32 Count);
+
+	/**
+	 * Sim-thread: scan a container for items matching ItemDef->ItemDefinition->ItemTypeId,
+	 * decrement counts (largest stack first); destruct items at Count<=0; update container
+	 * counters and dirty the station's snapshot. BYPASSES the station lock.
+	 *
+	 * @return true iff EXACTLY Count items were removed. On false return, partial removal
+	 *         may have occurred — caller is responsible for rollback decisions.
+	 */
+	FATUMGAME_API bool RemoveExactCountFromContainerFromStation(
+		flecs::entity Station,
+		int64 ContainerEntityId,
+		UFlecsEntityDefinition* ItemDef,
+		int32 Count);
+
+	// ── Smelter state-machine entry points (called from SmelterProcessSystem). ──
+
+	/** Idle → (Processing OR rejected). Validates recipe + ingredients + fuel projection,
+	 *  builds ledger, removes items, locks slots. */
+	FATUMGAME_API void TrySmelterStart(
+		flecs::entity Station,
+		const FCraftingStationStatic& Static,
+		FCraftingStationInstance& Inst,
+		FSmelterInstance& SmInst,
+		const FCraftingSlots& Slots);
+
+	/** Processing per-tick: spend fuel, advance progress, transition to Stalled / Completing. */
+	FATUMGAME_API void SmelterTickProcessing(
+		flecs::entity Station,
+		const FCraftingStationStatic& Static,
+		FCraftingStationInstance& Inst,
+		FSmelterInstance& SmInst,
+		float DT);
+
+	/** Stalled per-tick: try to consume a fuel item; resume Processing on success. */
+	FATUMGAME_API void SmelterTickStalled(
+		flecs::entity Station,
+		FCraftingStationInstance& Inst,
+		FSmelterInstance& SmInst);
+
+	/** Cancel branch — refund ledger items, reset progress; reservoir UNCHANGED. Phase=Cancelled. */
+	FATUMGAME_API void SmelterCancel(
+		flecs::entity Station,
+		const FCraftingStationStatic& Static,
+		FCraftingStationInstance& Inst,
+		FSmelterInstance& SmInst,
+		const FCraftingSlots& Slots);
+
+	/** Cancelled → Idle. Removes lock, dirty snapshot. */
+	FATUMGAME_API void SmelterFinalizeCancel(
+		flecs::entity Station,
+		FCraftingStationInstance& Inst,
+		FSmelterInstance& SmInst,
+		const FCraftingSlots& Slots);
+
+	/** Completing → Idle. Emits outputs (slot or floor drop), clears ledger, removes lock. */
+	FATUMGAME_API void SmelterComplete(
+		flecs::entity Station,
+		const FCraftingStationStatic& Static,
+		FCraftingStationInstance& Inst,
+		FSmelterInstance& SmInst,
+		const FCraftingSlots& Slots);
 }

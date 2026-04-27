@@ -267,6 +267,20 @@ bool UFlecsCraftingRecipeRegistry::TryResolveRecipe(UFlecsCraftingRecipeDef* Def
 		Out.ResolvedDefinition = Resolved;
 	}
 
+	// Phase 3 invariant — Smelter (and future single-charge stations) cannot complete
+	// if FuelChargeRequired exceeds DurationSeconds. The recipe physically can't finish
+	// on a single fuel charge under the simple "spend = min(DT, reservoir)" model;
+	// mid-process refuels are out of Phase 3 scope. Drop the recipe with Error log.
+	if (Def->FuelChargeSecondsRequired > Def->DurationSeconds)
+	{
+		UE_LOG(LogCrafting, Error,
+			TEXT("Recipe '%s' invariant violated: FuelChargeSecondsRequired=%.2f > DurationSeconds=%.2f — drop"),
+			*Def->GetName(),
+			Def->FuelChargeSecondsRequired,
+			Def->DurationSeconds);
+		return false;
+	}
+
 	return true;
 }
 

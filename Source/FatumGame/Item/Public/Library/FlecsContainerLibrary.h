@@ -79,6 +79,32 @@ public:
 		int64 EntityId,
 		int64 ContainerEntityId);
 
+	// ═══════════════════════════════════════════════════════════════
+	// SMELTER (Phase 3) — sim-thread internal helpers.
+	// These BYPASS the FCraftingSlotLockedByStation check that the BP-facing
+	// entry points enforce. Reachable ONLY from C++ — never UFUNCTION'd —
+	// so player code (BP / inventory drag) cannot route around the lock.
+	// Caller is expected to be SmelterProcessSystem / FlecsCraftingRuntime.
+	// ═══════════════════════════════════════════════════════════════
+
+	/** Sim-thread direct add. Bypasses lock. Behaves like AddItemToContainer's lambda body
+	 *  but synchronous — caller is already on the sim thread.
+	 *  @return number of items actually added (may be < Count when capacity / weight cap hits). */
+	static int32 AddItemToContainerFromStation(
+		class UFlecsArtillerySubsystem* Subsystem,
+		int64 ContainerEntityId,
+		class UFlecsEntityDefinition* EntityDefinition,
+		int32 Count,
+		bool bAutoStack);
+
+	/** Sim-thread direct remove. Bypasses lock. Removes a specific item entity from the
+	 *  given container; destructs it. Mirrors the body of RemoveItemFromContainer's lambda.
+	 *  @return true on success. */
+	static bool RemoveItemFromContainerFromStation(
+		class UFlecsArtillerySubsystem* Subsystem,
+		int64 ContainerEntityId,
+		int64 ItemEntityId);
+
 	UFUNCTION(BlueprintCallable, Category = "Flecs|Container", meta = (WorldContext = "WorldContextObject"))
 	static FSkeletonKey DropItem(
 		UObject* WorldContextObject,

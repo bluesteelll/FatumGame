@@ -132,6 +132,19 @@ void FlecsMultiblockRuntime::SetupStationInstance(
 	StationInst.bSnapshotDirty = true;  // Initial snapshot published on first flush tick.
 	Anchor.set<FCraftingStationInstance>(StationInst);
 
+	// Phase 3 — Smelter-specific instance state. Only attached when the station is a Smelter.
+	// (Press / Forge will branch off here in later phases.) Default-constructed = Idle, all zeros.
+	if (Profile->StationType == ECraftingStationType::Smelter)
+	{
+		FSmelterInstance Sm;
+		Anchor.set<FSmelterInstance>(Sm);
+
+		UE_LOG(LogCrafting, Log,
+			TEXT("[SetupStationInstance] Smelter instance attached to station '%s' entity=%llu"),
+			*Profile->StationName.ToString(),
+			(unsigned long long)Anchor.id());
+	}
+
 	// Register shared state with the UI subsystem (game thread only).
 	// Key = FSkeletonKey wrapping the Flecs entity id — matches the lookup key used by
 	// CraftingSnapshotFlushSystem when publishing.

@@ -22,6 +22,10 @@ void UFlecsArtillerySubsystem::SetupCraftingSystems()
 {
 	flecs::world& World = *FlecsWorld;
 
+	// Phase 3 — register Smelter system FIRST so per-tick phase changes are observed
+	// by the same-tick CraftingSnapshotFlushSystem registered below.
+	SetupSmelterSystems();
+
 	// Cache the recipe registry once — GameInstanceSubsystem, lives for the game session.
 	UGameInstance* GameInstance = GetWorld() ? GetWorld()->GetGameInstance() : nullptr;
 	UFlecsCraftingRecipeRegistry* Registry = GameInstance

@@ -493,6 +493,10 @@ private:
 	/** Crafting systems: snapshot flush (Phase 1 framework). */
 	void SetupCraftingSystems();
 
+	/** Smelter process system (Phase 3 — first concrete crafting station).
+	 *  Must register BEFORE the snapshot flush so per-tick phase changes publish same tick. */
+	void SetupSmelterSystems();
+
 	/** Multiblock detection + bond (Phase 2). Must register BEFORE SetupCraftingSystems
 	 *  so first-tick bonds publish their initial snapshot in the same sim tick. */
 	void SetupMultiblockSystems();

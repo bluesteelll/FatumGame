@@ -43,6 +43,20 @@ struct FCraftingStationSharedState
 
 	/** Game thread only: last seen version (no atomic needed). */
 	uint32 GameSeenVersion = 0;
+
+	/**
+	 * Sim → Game (Phase 3): fast channel for the Smelter / Press / Forge process phase.
+	 * Sim writes EVERY tick from SmelterProcessSystem (release ordering); game thread
+	 * reads any time (acquire ordering). Init = 0 = EProcessPhase::Idle.
+	 *
+	 * Why a separate atomic instead of relying on SnapshotBuffer:
+	 *  - Snapshot publish is THROTTLED (only on bSnapshotDirty ticks); cosmetic UI
+	 *    that wants "is processing right now?" should NOT pay the snapshot rebuild.
+	 *  - One byte atomic load is < 1 ns; widget Tick can poll it freely.
+	 *  - Snapshot.ProcessPhase is the SAME data, eventually consistent within one tick;
+	 *    use it for fields that must be coherent with Slots / ProgressSeconds.
+	 */
+	alignas(64) std::atomic<uint8> ProcessPhasePacked{0};
 };
 
 // ═══════════════════════════════════════════════════════════════

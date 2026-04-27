@@ -44,6 +44,25 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Flecs|Crafting", meta = (WorldContext = "WorldContextObject"))
 	static void RequestStationDestroy(UObject* WorldContextObject, FSkeletonKey StationKey);
 
+	/**
+	 * Phase 3 — request a Smelter station to begin processing its currently-matched recipe.
+	 * Idempotent: setting bStartRequested twice in one tick has no extra effect.
+	 *
+	 * Marshals to sim thread via EnqueueCommand. The actual gating (recipe match, ingredient
+	 * count, fuel projection) happens in SmelterProcessSystem — this entry point only flips
+	 * the FSmelterInstance::bStartRequested flag for the next tick to observe.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Flecs|Crafting", meta = (WorldContext = "WorldContextObject"))
+	static void RequestSmelterStart(UObject* WorldContextObject, FSkeletonKey StationKey);
+
+	/**
+	 * Phase 3 — request a Smelter station to cancel any in-flight process.
+	 * Cancel from Idle is a silent no-op. Cancel from Processing/Stalled refunds the
+	 * ledger items to MaterialInput slots (or floor on overflow). Reservoir is NOT refunded.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Flecs|Crafting", meta = (WorldContext = "WorldContextObject"))
+	static void RequestSmelterCancel(UObject* WorldContextObject, FSkeletonKey StationKey);
+
 	// ═══════════════════════════════════════════════════════════════
 	// UI HELPERS (static — no world dependency)
 	// ═══════════════════════════════════════════════════════════════

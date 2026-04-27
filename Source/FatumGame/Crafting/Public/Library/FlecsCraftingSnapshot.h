@@ -70,6 +70,18 @@ struct FATUMGAME_API FCraftingStationSnapshot
 	UPROPERTY(BlueprintReadOnly, Category = "Crafting")
 	float FuelChargeSecondsRemaining = 0.f;
 
+	/** EProcessPhase narrowed to uint8 — Smelter (or future Press / Forge) state. 0 = Idle. */
+	UPROPERTY(BlueprintReadOnly, Category = "Crafting")
+	uint8 ProcessPhase = 0;
+
+	/** Wall-clock seconds elapsed in the current process. 0 when not processing. */
+	UPROPERTY(BlueprintReadOnly, Category = "Crafting")
+	float ProgressSeconds = 0.f;
+
+	/** Cached duration (copied from MatchedRecipe->DurationSeconds at Start). 0 when not processing. */
+	UPROPERTY(BlueprintReadOnly, Category = "Crafting")
+	float DurationSecondsCached = 0.f;
+
 	/** One row per configured slot (inline allocator — snapshot holds up to 8 inline). */
 	TArray<FCraftingStationSlotSnapshot, TInlineAllocator<8>> Slots;
 

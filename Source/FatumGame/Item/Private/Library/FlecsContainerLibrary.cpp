@@ -17,6 +17,7 @@
 #include "FlecsCaliberRegistry.h"
 #include "FatumGameSettings.h"
 #include "Library/FlecsCraftingRuntime.h"
+#include "Components/FlecsCraftingComponents.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogFlecsContainer, Log, All);
 
@@ -58,6 +59,37 @@ static flecs::entity ResolveContainerEntity(UFlecsArtillerySubsystem* Sub, int64
 	return E;
 }
 
+/**
+ * Phase 3 lock-check helper. Returns true when the container is currently held by a
+ * crafting station that is in Processing/Stalled. Resolves the owning station's
+ * StationName for the rejection log.
+ *
+ * Sim-thread only. Cheap — one try_get + one entity lookup on the rare locked case.
+ */
+static bool IsContainerLocked(flecs::world* World, int64 ContainerId, FString& OutStationName)
+{
+	OutStationName.Reset();
+	if (!World || ContainerId == 0) return false;
+
+	flecs::entity E = World->entity(static_cast<flecs::entity_t>(ContainerId));
+	if (!E.is_valid() || !E.is_alive()) return false;
+
+	const FCraftingSlotLockedByStation* Lock = E.try_get<FCraftingSlotLockedByStation>();
+	if (!Lock || Lock->OwningStationEntityId == 0) return false;
+
+	flecs::entity Station = World->entity(static_cast<flecs::entity_t>(Lock->OwningStationEntityId));
+	if (Station.is_alive())
+	{
+		const FCraftingStationStatic* Stat = Station.try_get<FCraftingStationStatic>();
+		if (Stat) OutStationName = Stat->StationName.ToString();
+	}
+	if (OutStationName.IsEmpty())
+	{
+		OutStationName = FString::Printf(TEXT("station_id=%lld"), Lock->OwningStationEntityId);
+	}
+	return true;
+}
+
 // ═══════════════════════════════════════════════════════════════
 // ITEM OPERATIONS
 // ═══════════════════════════════════════════════════════════════
@@ -87,13 +119,19 @@ void UFlecsContainerLibrary::SetItemDespawnTimer(UObject* WorldContextObject, FS
 // ═══════════════════════════════════════════════════════════════
 
 /** Core container-add logic. MUST be called on simulation thread only.
- *  Returns number of items actually added (0 = container full). */
+ *  Returns number of items actually added (0 = container full).
+ *
+ *  Phase 3 — gates on FCraftingSlotLockedByStation when bRespectStationLock=true.
+ *  Player-initiated paths (AddItemToContainer, PickupItem, PickupWorldItem) pass
+ *  bRespectStationLock=true; sim-internal Smelter paths (AddItemToContainerFromStation)
+ *  pass false. Default is true for safety. */
 static int32 AddItemToContainerDirect(
 	UFlecsArtillerySubsystem* Subsystem,
 	int64 ContainerEntityId,
 	UFlecsEntityDefinition* EntityDefinition,
 	int32 Count,
-	bool bAutoStack)
+	bool bAutoStack,
+	bool bRespectStationLock = true)
 {
 	flecs::world* FlecsWorld = Subsystem->GetFlecsWorld();
 	if (!FlecsWorld) return 0;
@@ -103,6 +141,19 @@ static int32 AddItemToContainerDirect(
 	{
 		UE_LOG(LogFlecsContainer, Warning, TEXT("AddItemToContainerDirect: Container %lld not found or not a container"), ContainerEntityId);
 		return 0;
+	}
+
+	if (bRespectStationLock)
+	{
+		FString StationName;
+		if (IsContainerLocked(FlecsWorld, ContainerEntityId, StationName))
+		{
+			UE_LOG(LogFlecsContainer, Warning,
+				TEXT("AddItemToContainerDirect: Player mutation rejected — container %lld locked by station '%s' (processing in progress)"),
+				ContainerEntityId, *StationName);
+			NotifyContainerUI(ContainerEntityId);
+			return 0;
+		}
 	}
 
 	flecs::entity ItemPrefab = Subsystem->GetOrCreateItemPrefab(EntityDefinition);
@@ -320,6 +371,18 @@ bool UFlecsContainerLibrary::PlaceExistingEntityInContainer(
 	flecs::world* FlecsWorld = Subsystem->GetFlecsWorld();
 	if (!FlecsWorld) return false;
 
+	{
+		FString LockingStationName;
+		if (IsContainerLocked(FlecsWorld, ContainerEntityId, LockingStationName))
+		{
+			UE_LOG(LogFlecsContainer, Warning,
+				TEXT("PlaceExistingEntityInContainer: Player placement rejected — container %lld locked by station '%s' (processing in progress)"),
+				ContainerEntityId, *LockingStationName);
+			NotifyContainerUI(ContainerEntityId);
+			return false;
+		}
+	}
+
 	flecs::entity Entity = FlecsWorld->entity(static_cast<flecs::entity_t>(EntityId));
 	if (!Entity.is_valid() || !Entity.is_alive()) return false;
 
@@ -447,6 +510,16 @@ bool UFlecsContainerLibrary::RemoveItemFromContainer(
 		flecs::entity ContainerEntity = ResolveContainerEntity(Subsystem, ContainerEntityId);
 		if (!ContainerEntity.is_valid()) return;
 
+		FString LockingStationName;
+		if (IsContainerLocked(FlecsWorld, ContainerEntityId, LockingStationName))
+		{
+			UE_LOG(LogFlecsContainer, Warning,
+				TEXT("RemoveItemFromContainer: Player mutation rejected — container %lld locked by station '%s' (processing in progress)"),
+				ContainerEntityId, *LockingStationName);
+			NotifyContainerUI(ContainerEntityId);
+			return;
+		}
+
 		flecs::entity ItemEntity = FlecsWorld->entity(static_cast<flecs::entity_t>(ItemEntityId));
 		if (!ItemEntity.is_alive())
 		{
@@ -513,6 +586,16 @@ int32 UFlecsContainerLibrary::RemoveAllItemsFromContainer(
 		if (!ContainerEntity.is_valid())
 		{
 			UE_LOG(LogFlecsContainer, Warning, TEXT("RemoveAllItemsFromContainer: Container %lld not found"), ContainerEntityId);
+			return;
+		}
+
+		FString LockingStationName;
+		if (IsContainerLocked(FlecsWorld, ContainerEntityId, LockingStationName))
+		{
+			UE_LOG(LogFlecsContainer, Warning,
+				TEXT("RemoveAllItemsFromContainer: Player mutation rejected — container %lld locked by station '%s' (processing in progress)"),
+				ContainerEntityId, *LockingStationName);
+			NotifyContainerUI(ContainerEntityId);
 			return;
 		}
 
@@ -586,6 +669,18 @@ bool UFlecsContainerLibrary::PickupWorldItem(
 
 	flecs::world* FlecsWorld = Subsystem->GetFlecsWorld();
 	if (!FlecsWorld) return false;
+
+	{
+		FString LockingStationName;
+		if (IsContainerLocked(FlecsWorld, ContainerEntityId, LockingStationName))
+		{
+			UE_LOG(LogFlecsContainer, Warning,
+				TEXT("PickupWorldItem: Player pickup rejected — container %lld locked by station '%s' (processing in progress)"),
+				ContainerEntityId, *LockingStationName);
+			NotifyContainerUI(ContainerEntityId);
+			return false;
+		}
+	}
 
 	flecs::entity WorldItem = FlecsWorld->entity(static_cast<flecs::entity_t>(WorldItemEntityId));
 	if (!WorldItem.is_alive() || !WorldItem.has<FTagItem>())
@@ -698,6 +793,29 @@ bool UFlecsContainerLibrary::TransferItem(
 		{
 			UE_LOG(LogFlecsContainer, Warning, TEXT("TransferItem: Source or dest container not found"));
 			return;
+		}
+
+		// Phase 3 — reject when EITHER side is locked by an active station process.
+		{
+			FString LockingStationName;
+			if (IsContainerLocked(FlecsWorld, SourceContainerId, LockingStationName))
+			{
+				UE_LOG(LogFlecsContainer, Warning,
+					TEXT("TransferItem: Player mutation rejected — source container %lld locked by station '%s' (processing in progress)"),
+					SourceContainerId, *LockingStationName);
+				NotifyContainerUI(SourceContainerId);
+				NotifyContainerUI(DestContainerId);
+				return;
+			}
+			if (IsContainerLocked(FlecsWorld, DestContainerId, LockingStationName))
+			{
+				UE_LOG(LogFlecsContainer, Warning,
+					TEXT("TransferItem: Player mutation rejected — dest container %lld locked by station '%s' (processing in progress)"),
+					DestContainerId, *LockingStationName);
+				NotifyContainerUI(SourceContainerId);
+				NotifyContainerUI(DestContainerId);
+				return;
+			}
 		}
 
 		// Validate item
@@ -995,6 +1113,88 @@ bool UFlecsContainerLibrary::TransferItem(
 		NotifyContainerUI(SourceContainerId);
 		NotifyContainerUI(DestContainerId);
 	});
+
+	return true;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// SMELTER (Phase 3) — sim-thread bypass siblings.
+// These do EXACTLY what the BP-facing entry points do, except they skip the
+// IsContainerLocked rejection. Lifetime contract: must be called only on the
+// sim thread (already inside the StepWorld pass / SmelterProcessSystem).
+// ═══════════════════════════════════════════════════════════════
+
+int32 UFlecsContainerLibrary::AddItemToContainerFromStation(
+	UFlecsArtillerySubsystem* Subsystem,
+	int64 ContainerEntityId,
+	UFlecsEntityDefinition* EntityDefinition,
+	int32 Count,
+	bool bAutoStack)
+{
+	if (!Subsystem || ContainerEntityId == 0 || !EntityDefinition || Count <= 0) return 0;
+
+	// Forward to the direct path with the lock check disabled.
+	return AddItemToContainerDirect(Subsystem, ContainerEntityId, EntityDefinition, Count,
+		bAutoStack, /*bRespectStationLock=*/false);
+}
+
+bool UFlecsContainerLibrary::RemoveItemFromContainerFromStation(
+	UFlecsArtillerySubsystem* Subsystem,
+	int64 ContainerEntityId,
+	int64 ItemEntityId)
+{
+	if (!Subsystem || ContainerEntityId == 0 || ItemEntityId == 0) return false;
+
+	flecs::world* FlecsWorld = Subsystem->GetFlecsWorld();
+	if (!FlecsWorld) return false;
+
+	flecs::entity ContainerEntity = ResolveContainerEntity(Subsystem, ContainerEntityId);
+	if (!ContainerEntity.is_valid()) return false;
+
+	flecs::entity ItemEntity = FlecsWorld->entity(static_cast<flecs::entity_t>(ItemEntityId));
+	if (!ItemEntity.is_alive())
+	{
+		UE_LOG(LogFlecsContainer, Warning,
+			TEXT("RemoveItemFromContainerFromStation: Item entity %lld not found"), ItemEntityId);
+		return false;
+	}
+
+	const FContainedIn* ContainedIn = ItemEntity.try_get<FContainedIn>();
+	if (!ContainedIn || ContainedIn->ContainerEntityId != ContainerEntityId)
+	{
+		UE_LOG(LogFlecsContainer, Warning,
+			TEXT("RemoveItemFromContainerFromStation: Item %lld not in container %lld"),
+			ItemEntityId, ContainerEntityId);
+		return false;
+	}
+
+	const FContainerStatic* ContainerStatic = ContainerEntity.try_get<FContainerStatic>();
+	FContainerInstance* ContainerInstance = ContainerEntity.try_get_mut<FContainerInstance>();
+
+	if (ContainerStatic && ContainerStatic->Type == EContainerType::Grid && ContainedIn->IsInGrid())
+	{
+		if (FContainerGridInstance* GridInstance = ContainerEntity.try_get_mut<FContainerGridInstance>())
+		{
+			const FItemStaticData* ItemStatic = ItemEntity.try_get<FItemStaticData>();
+			const FIntPoint ItemSize = ItemStatic ? ItemStatic->GridSize : FIntPoint(1, 1);
+			GridInstance->Free(ContainedIn->GridPosition, ItemSize, ContainerStatic->GridWidth);
+		}
+	}
+
+	// Weight bookkeeping mirrors the BP path (which omits weight in RemoveItemFromContainer
+	// — preserved here to avoid behavioural drift; revisit if Phase 1 fixes it upstream).
+	if (ContainerInstance)
+	{
+		ContainerInstance->CurrentCount = FMath::Max(0, ContainerInstance->CurrentCount - 1);
+	}
+
+	UE_LOG(LogFlecsContainer, Log,
+		TEXT("RemoveItemFromContainerFromStation: Removed item %lld from container %lld"),
+		ItemEntityId, ContainerEntityId);
+	ItemEntity.destruct();
+	FlecsCraftingRuntime::MarkStationDirtyByContainer(*FlecsWorld, ContainerEntityId, 0);
+	NotifyContainerUI(ContainerEntityId);
+	MarkOwnerEquipmentDirty(ContainerEntityId, FlecsWorld);
 
 	return true;
 }
