@@ -225,7 +225,14 @@ void FlecsMultiblockRuntime::SetupStationInstance(
 			Anchor.set<FMultiblockExtensions>(Ext);
 		}
 		// Compute initial effective layout (also installs FStationEffectiveLayout).
-		// May transition to Disabled if any required functional is missing.
+		// MEDIUM #3 — INVARIANT: at this point the bond pipeline (BondMultiblock) has
+		// fully populated FMultiblockChildren with ALL required children alive — caller
+		// is responsible. If any required child died between bond and this call (e.g.
+		// physics body destruct mid-step), RecomputeEffectiveLayout will GC stale ids,
+		// flag MissingBitmask, and this freshly-spawned station will go straight to
+		// Disabled. That's actually CORRECT — designer shouldn't see a "fully-bonded"
+		// station that's missing parts. Document so future maintainers don't add a
+		// "force Idle on first setup" hack here.
 		FlecsMultiblockRuntime::RecomputeEffectiveLayout(Anchor);
 	}
 }
@@ -435,9 +442,22 @@ void EnsurePortSlot(
 
 namespace
 {
-	/** File-local — map a PartRole FName to a bit position 0..15. Collisions
-	 *  tolerated because the bitmask is for UI hint colour only ("missing X parts"),
-	 *  not gameplay correctness. */
+	/** File-local — map a PartRole FName to a bit position 0..15. The 4-bit hash
+	 *  (0xF mask) GUARANTEES collisions when distinct roles hash to the same nibble:
+	 *  with N=16 buckets, two random roles collide with probability 1/16 (~6%). The
+	 *  resulting bitmask is therefore NOT a precise "this exact role is missing"
+	 *  signal — it's a fuzzy "some part hashing to bit K is missing" hint.
+	 *
+	 *  CALLER CONTRACT: this function is for the per-station MissingRequiredRolesBitmask
+	 *  field, consumed ONLY by the UI hint-colour pipeline ("show red when bitmask
+	 *  non-zero"). Gameplay correctness — gating recipes, locking slots, transitioning
+	 *  Disabled — uses RoleBit-AGNOSTIC `MissingBitmask != 0` checks elsewhere. The
+	 *  individual bit positions are an indicator, not an identifier.
+	 *
+	 *  MEDIUM #2: if Phase 5+ wants per-role missing-part labels, replace this with a
+	 *  TMap<FName, uint8> assigning unique bit indices per blueprint, or store the
+	 *  full FName list. Either change requires snapshot-format coordination with UI.
+	 */
 	uint16 HashRoleToBitIndex(FName Role)
 	{
 		return static_cast<uint16>(GetTypeHash(Role) & 0xF);
@@ -613,6 +633,14 @@ void RecomputeEffectiveLayout(flecs::entity StationE)
 						*Static->StationName.ToString());
 					Sm->ConsumedLedger.Reset();
 					Sm->Phase = EProcessPhase::Cancelled;
+
+					// HIGH #3 — INVARIANT: lock release is a pre-condition for any Phase != Idle
+					// exit. SmelterCancel handles this for the Processing/Stalled branch above
+					// (releases MaterialInputAndFuel). For the Completing branch we must explicitly
+					// release ALL locks before TransitionStationToDisabled. We don't rely on
+					// TransitionStationToDisabled's defensive UnlockStationSlots(All) call —
+					// future refactor may remove it, leaving orphaned locks here.
+					FlecsCraftingRuntime::UnlockStationSlots(StationE, *Slots, FlecsCraftingRuntime::ESlotRoleLockMask::All);
 				}
 				else
 				{
@@ -625,6 +653,26 @@ void RecomputeEffectiveLayout(flecs::entity StationE)
 		{
 			FlecsCraftingRuntime::TransitionStationToIdle(StationE);
 		}
+	}
+	else if (MissingBitmask != 0
+		 && Static->StationType != ECraftingStationType::Generic
+		 && Static->StationType != ECraftingStationType::None)
+	{
+		// HIGH #5 — Forward-compat hot-fix path. Phase 4 only wires Disabled-transition for
+		// FSmelterInstance. Future Press / Forge / Alchemy types must wire equivalent
+		// `*Instance::Phase` storage and a transition branch above. This ensureMsgf forces
+		// any future maintainer to notice when a non-Generic station is left in a "missing
+		// required functional" state without proper Disabled handling.
+		//
+		// TODO(crafting/phase5+) — generalize Disabled transition: introduce
+		// `EProcessPhase Phase` on FCraftingStationInstance itself (shared by all station
+		// types) so this branch handles all stations uniformly. Until then the per-type
+		// cast above is the source of truth, and this guard keeps us honest.
+		ensureMsgf(false,
+			TEXT("RecomputeEffectiveLayout: station '%s' StationType=%u has MissingMask=0x%04x but no FSmelterInstance — Disabled transition NOT wired for this type. Future refactor required."),
+			*Static->StationName.ToString(),
+			static_cast<uint32>(Static->StationType),
+			MissingBitmask);
 	}
 
 	// Dirty snapshot so widgets see the new MissingPartsBitmask + ExtensionPortsOccupied.
@@ -642,7 +690,71 @@ void RecomputeEffectiveLayout(flecs::entity StationE)
 // PHASE 4 — ATTACH / DETACH / DECONSTRUCT
 // ═══════════════════════════════════════════════════════════════
 
-bool AttachPartToStation(flecs::entity PartItem, flecs::entity StationE, int32 PortIndex)
+namespace
+{
+	/** HIGH #2 — Port-type vs part-component validation. Returns false (and logs) when
+	 *  the spawned-via-EntityDefinition part will not satisfy the port's runtime contract.
+	 *
+	 *  This guard is INTENTIONALLY pre-spawn. We inspect the candidate part item entity
+	 *  (the inventory copy) — its prefab inheritance carries the same components the
+	 *  to-be-spawned attached child will inherit. PartRole role-list filtering already
+	 *  happens upstream; this guard catches type-vs-port mismatches the role list cannot
+	 *  express (e.g. a part with the right PartRole but missing FCraftingFuelItemData).
+	 */
+	bool ValidatePartComponentsForPort(
+		flecs::entity PartItem,
+		EExtensionPortType PortType,
+		const FName& PartRole)
+	{
+		switch (PortType)
+		{
+		case EExtensionPortType::FuelTank:
+			if (!PartItem.has<FCraftingFuelItemData>())
+			{
+				UE_LOG(LogCrafting, Warning,
+					TEXT("[Modular] AttachPart rejected — FuelTank port requires part with FCraftingFuelItemData (role='%s' has none)"),
+					*PartRole.ToString());
+				return false;
+			}
+			return true;
+
+		case EExtensionPortType::DieSlot:
+		case EExtensionPortType::OutputTray:
+		case EExtensionPortType::ToolRack:
+			// These ports rely on FMultiblockPartStatic for slot identity. Any multiblock
+			// part has it via prefab inheritance — but we re-check defensively so that
+			// orphan (non-multiblock) inventory items can't pass.
+			if (!PartItem.has<FMultiblockPartStatic>())
+			{
+				UE_LOG(LogCrafting, Warning,
+					TEXT("[Modular] AttachPart rejected — port type %u requires FMultiblockPartStatic (role='%s' has none)"),
+					static_cast<uint32>(PortType), *PartRole.ToString());
+				return false;
+			}
+			return true;
+
+		case EExtensionPortType::Generic:
+			// Designer-defined effect — no required components. AcceptedPartRoles list
+			// is the only filter.
+			return true;
+
+		case EExtensionPortType::None:
+			// Sentinel — never used in production. Reject defensively.
+			UE_LOG(LogCrafting, Error,
+				TEXT("[Modular] AttachPart rejected — port type None is sentinel-only"));
+			return false;
+
+		default:
+			UE_LOG(LogCrafting, Warning,
+				TEXT("[Modular] AttachPart rejected — unknown port type %u"),
+				static_cast<uint32>(PortType));
+			return false;
+		}
+	}
+}
+
+bool AttachPartToStation(flecs::entity PartItem, flecs::entity StationE, int32 PortIndex,
+	TWeakObjectPtr<UWorld> WeakWorld)
 {
 	check(PartItem.is_valid() && PartItem.is_alive());
 	check(StationE.is_valid() && StationE.is_alive());
@@ -656,7 +768,8 @@ bool AttachPartToStation(flecs::entity PartItem, flecs::entity StationE, int32 P
 	}
 
 	// V2 PATCH 3 — idempotency guard. Reject if either the part item OR the station
-	// has an in-flight attach reservation. The 5-tick timeout is the backstop.
+	// has an in-flight attach reservation. The HIGH #1 timeout (60 sim ticks ≈ 1s) is
+	// the backstop; FinalizePartAttach re-checks PortOccupants for the contract.
 	if (PartItem.has<FPendingPartAttach>())
 	{
 		UE_LOG(LogCrafting, Verbose,
@@ -715,6 +828,13 @@ bool AttachPartToStation(flecs::entity PartItem, flecs::entity StationE, int32 P
 		return false;
 	}
 
+	// HIGH #2 — port-type vs part-component check. Catches mismatches the role list
+	// cannot express (e.g. FuelTank with non-fuel part of the right role).
+	if (!ValidatePartComponentsForPort(PartItem, Port.PortType, PartRole))
+	{
+		return false;
+	}
+
 	// Stack cap check — count occupants of same PortType.
 	FMultiblockExtensions* Ext = StationE.try_get_mut<FMultiblockExtensions>();
 	if (!Ext)
@@ -761,7 +881,8 @@ bool AttachPartToStation(flecs::entity PartItem, flecs::entity StationE, int32 P
 	const FVector PortWorldPos = AnchorPos + SnappedQuat.RotateVector(Port.RelativeOffset);
 
 	// Reserve part item + station against player-mutation race (V2 PATCH 3).
-	const flecs::world& W = StationE.world();
+	// HIGH #4 — `flecs::world W = ...` (by-value copy, lightweight handle) for consistency.
+	flecs::world W = StationE.world();
 	const uint64 NowTick = W.get_info()->frame_count_total;
 
 	FPendingPartAttach Pending;
@@ -780,11 +901,13 @@ bool AttachPartToStation(flecs::entity PartItem, flecs::entity StationE, int32 P
 	FEntitySpawnRequest Req = FEntitySpawnRequest::FromDefinition(PartDef, PortWorldPos);
 	Req.bPickupable = false;  // attached part is bonded, not pickupable
 
-	UFlecsArtillerySubsystem* Sub = UFlecsArtillerySubsystem::SelfPtr;
-	if (!Sub)
+	// CRITICAL #1 — WeakWorld is captured by the GAME-THREAD BP entry, NOT taken via
+	// UFlecsArtillerySubsystem::GetWorld() here on sim thread (UObjectArray race). If
+	// the caller failed to capture (shouldn't happen — checkf upstream), bail.
+	if (!WeakWorld.IsValid())
 	{
 		UE_LOG(LogCrafting, Error,
-			TEXT("[Modular] AttachPart: no subsystem — clearing reservations and aborting"));
+			TEXT("[Modular] AttachPart: WeakWorld stale at sim entry — clearing reservations and aborting"));
 		PartItem.remove<FPendingPartAttach>();
 		StationE.remove<FPendingStationAttach>();
 		return false;
@@ -793,17 +916,6 @@ bool AttachPartToStation(flecs::entity PartItem, flecs::entity StationE, int32 P
 	const FSkeletonKey StationKey(static_cast<uint64>(StationE.id()));
 	const int32 PortIdxCopy = PortIndex;
 	const int64 OldItemId = static_cast<int64>(PartItem.id());
-
-	UWorld* WorldCtx = Sub->GetWorld();
-	if (!WorldCtx)
-	{
-		UE_LOG(LogCrafting, Error,
-			TEXT("[Modular] AttachPart: no UWorld — clearing reservations and aborting"));
-		PartItem.remove<FPendingPartAttach>();
-		StationE.remove<FPendingStationAttach>();
-		return false;
-	}
-	TWeakObjectPtr<UWorld> WeakWorld = WorldCtx;
 
 	AsyncTask(ENamedThreads::GameThread, [WeakWorld, Req, StationKey, PortIdxCopy, OldItemId]()
 	{
@@ -838,7 +950,8 @@ void FinalizePartAttach(FSkeletonKey StationKey, int32 PortIndex, FSkeletonKey N
 
 	flecs::world* WorldPtr = Sub->GetFlecsWorld();
 	if (!WorldPtr) return;
-	flecs::world& W = *WorldPtr;
+	// HIGH #4 — `flecs::world W = ...` (by-value copy, lightweight handle) for consistency.
+	flecs::world W = *WorldPtr;
 
 	flecs::entity StationE = Sub->GetEntityForBarrageKey(StationKey);
 	flecs::entity NewChild = Sub->GetEntityForBarrageKey(NewChildKey);
@@ -860,6 +973,74 @@ void FinalizePartAttach(FSkeletonKey StationKey, int32 PortIndex, FSkeletonKey N
 		UE_LOG(LogCrafting, Warning,
 			TEXT("[Modular] FinalizePartAttach: new child no longer alive (station=%llu port=%d) — clearing reservations"),
 			(unsigned long long)StationE.id(), PortIndex);
+		StationE.remove<FPendingStationAttach>();
+		flecs::entity OldItem = W.entity(static_cast<flecs::entity_t>(OldItemId));
+		if (OldItem.is_alive() && OldItem.has<FPendingPartAttach>())
+		{
+			OldItem.remove<FPendingPartAttach>();
+		}
+		return;
+	}
+
+	// CRITICAL #3 — invariants on the spawned child + port-occupancy guard.
+	// AttachPartToStation gated the EntityDefinition pre-spawn, but the prefab inheritance
+	// must actually have produced FMultiblockPartStatic and a role accepted by this port.
+	// If any invariant fails, rollback (destruct NewChild) — never blind-bond unknown data.
+	const UFlecsMultiblockBlueprint* BP = ResolveBlueprintForStation(StationE);
+	if (!BP || !BP->ExtensionPorts.IsValidIndex(PortIndex))
+	{
+		UE_LOG(LogCrafting, Error,
+			TEXT("[Modular] FinalizePartAttach: invalid port %d on station=%llu — rolling back"),
+			PortIndex, (unsigned long long)StationE.id());
+		NewChild.destruct();
+		StationE.remove<FPendingStationAttach>();
+		flecs::entity OldItem = W.entity(static_cast<flecs::entity_t>(OldItemId));
+		if (OldItem.is_alive() && OldItem.has<FPendingPartAttach>())
+		{
+			OldItem.remove<FPendingPartAttach>();
+		}
+		return;
+	}
+
+	// Invariant 1: spawned entity carries FMultiblockPartStatic.
+	checkf(NewChild.has<FMultiblockPartStatic>(),
+		TEXT("FinalizePartAttach: spawned NewChild=%llu has no FMultiblockPartStatic — prefab not authored as a multiblock part"),
+		(unsigned long long)NewChild.id());
+
+	// Invariant 2: spawned PartRole is in port's AcceptedPartRoles (if list non-empty).
+	const FMultiblockPartStatic* PS = NewChild.try_get<FMultiblockPartStatic>();
+	checkf(PS, TEXT("FinalizePartAttach: try_get<FMultiblockPartStatic> failed despite has<>"));
+	const TArray<FName>& Accepted = BP->ExtensionPorts[PortIndex].AcceptedPartRoles;
+	checkf(Accepted.IsEmpty() || Accepted.Contains(PS->PartRole),
+		TEXT("FinalizePartAttach: spawned PartRole='%s' not accepted by port %d (port='%s')"),
+		*PS->PartRole.ToString(), PortIndex, *BP->ExtensionPorts[PortIndex].PortId.ToString());
+
+	// Invariant 3 (HIGH #1 timeout-race protection): port must still be vacant at finalize.
+	// If the 60-tick reservation timeout fired during AsyncTask flight and another attach
+	// passed AttachPartToStation's `PortOccupants[PortIndex] != 0` gate, this guard catches
+	// the corruption. Rollback: destruct NewChild (unbonded), keep existing occupant.
+	FMultiblockExtensions* Ext = StationE.try_get_mut<FMultiblockExtensions>();
+	if (!Ext)
+	{
+		UE_LOG(LogCrafting, Error,
+			TEXT("[Modular] FinalizePartAttach: station=%llu lost FMultiblockExtensions mid-flight — rolling back"),
+			(unsigned long long)StationE.id());
+		NewChild.destruct();
+		StationE.remove<FPendingStationAttach>();
+		flecs::entity OldItem = W.entity(static_cast<flecs::entity_t>(OldItemId));
+		if (OldItem.is_alive() && OldItem.has<FPendingPartAttach>())
+		{
+			OldItem.remove<FPendingPartAttach>();
+		}
+		return;
+	}
+	if (Ext->PortOccupants[PortIndex] != 0)
+	{
+		UE_LOG(LogCrafting, Error,
+			TEXT("[Modular] FinalizePartAttach: TIMEOUT-RACE — port %d on station=%llu occupied by %lld during AsyncTask flight (reservation timeout fired). Rolling back NewChild=%llu."),
+			PortIndex, (unsigned long long)StationE.id(),
+			Ext->PortOccupants[PortIndex], (unsigned long long)NewChild.id());
+		NewChild.destruct();
 		StationE.remove<FPendingStationAttach>();
 		flecs::entity OldItem = W.entity(static_cast<flecs::entity_t>(OldItemId));
 		if (OldItem.is_alive() && OldItem.has<FPendingPartAttach>())
@@ -912,16 +1093,12 @@ void FinalizePartAttach(FSkeletonKey StationKey, int32 PortIndex, FSkeletonKey N
 	Row.bIsExtension  = 1;
 	Row.PortIndex     = static_cast<uint8>(PortIndex);
 	Row.bSwappable    = 1;  // extensions are always swappable
-	const UFlecsMultiblockBlueprint* BP = ResolveBlueprintForStation(StationE);
-	if (BP && BP->ExtensionPorts.IsValidIndex(PortIndex) && !BP->ExtensionPorts[PortIndex].AcceptedPartRoles.IsEmpty())
-	{
-		Row.PartRole = BP->ExtensionPorts[PortIndex].AcceptedPartRoles[0];
-	}
+	// Use the spawned part's actual PartRole (validated above) — more accurate than
+	// AcceptedPartRoles[0] which was a heuristic.
+	Row.PartRole = PS->PartRole;
 	if (InsertIdx >= Roster->ChildCount) Roster->ChildCount = static_cast<uint8>(InsertIdx + 1);
 
 	// Update extension occupancy.
-	FMultiblockExtensions* Ext = StationE.try_get_mut<FMultiblockExtensions>();
-	check(Ext);
 	Ext->PortOccupants[PortIndex] = static_cast<int64>(NewChild.id());
 
 	// Destruct the original part item (it lived in player inventory or world floor).
@@ -1002,6 +1179,18 @@ bool DetachPartFromStation(flecs::entity ChildE)
 	if (!StationE.is_alive() || StationE.has<FTagCraftingStationDestroying>())
 		return false;
 
+	// MEDIUM #4 — gate on FPendingStationAttach. If the station has an in-flight attach
+	// reservation, detaching mid-flight could race against FinalizePartAttach (which
+	// expects the roster + extensions in a known state). Defer; the player will re-fire
+	// the input next tick. Verbose log because this is normal user behavior under load.
+	if (StationE.has<FPendingStationAttach>())
+	{
+		UE_LOG(LogCrafting, Verbose,
+			TEXT("[Modular] DetachPart deferred — station=%llu has in-flight attach (re-try next tick)"),
+			(unsigned long long)StationE.id());
+		return false;
+	}
+
 	const FSmelterInstance* Sm = StationE.try_get<FSmelterInstance>();
 	const bool bStationIdleOrDisabled = !Sm
 		|| Sm->Phase == EProcessPhase::Idle
@@ -1043,21 +1232,27 @@ bool DetachPartFromStation(flecs::entity ChildE)
 		return false;
 	}
 
-	// Restore Dynamic + pickup tags. Inverse of BondMultiblock Step 1+2.
-	RestorePartToDynamic(ChildE);
+	// MEDIUM #1 — order matters: tags + grace BEFORE RestorePartToDynamic + Impulse.
+	// RestorePartToDynamic activates the Jolt body; once active, the same-tick
+	// PickupCollisionSystem could pick this body up via collision before grace timer
+	// is installed. Order:
+	//   1. Strip bonded tags + add pickup tags (tag-set is sim-thread-coherent — no race)
+	//   2. InstallPickupGrace BEFORE body activation (FWorldItemInstance + FTagDroppedItem)
+	//   3. RestorePartToDynamic (body wakes up — grace already in place)
+	//   4. ApplyDetachImpulse (kicks the now-active body upward)
 	ChildE.remove<FTagMultiblockBonded>();
 	ChildE.remove<FMultiblockChildOf>();
 	ChildE.add<FTagPickupable>();
 	ChildE.add<FTagItem>();
 	ChildE.add<FTagInteractable>();
 
-	const float Impulse = ResolveDeconstructImpulse(StationE);
-	ApplyDetachImpulse(ChildE, Impulse);
-
-	// V2 PATCH 4 — install pickup grace BEFORE clearing roster so PickupCollisionSystem
-	// short-circuits this tick.
 	const float Grace = ResolveDetachPickupGrace(StationE);
 	InstallPickupGrace(ChildE, static_cast<int64>(StationE.id()), Grace);
+
+	RestorePartToDynamic(ChildE);
+
+	const float Impulse = ResolveDeconstructImpulse(StationE);
+	ApplyDetachImpulse(ChildE, Impulse);
 
 	// Update roster + extensions.
 	Roster->ChildSlots[RosterIdx].ChildEntityId = 0;
@@ -1095,24 +1290,47 @@ void DeconstructStation(flecs::entity StationE)
 	}
 
 	// ALL slots empty check (player must clear before deconstruct).
+	// MEDIUM #5 — single World.each() pass tallying per-slot occupancy via TMap.
+	// Was O(slots × world-items); now O(world-items + slots). For typical
+	// kMaxCraftingSlots=24 with thousands of world items this is a meaningful win
+	// when players spam wrench-deconstruct in a populated scene.
 	const FCraftingSlots* Slots = StationE.try_get<FCraftingSlots>();
 	if (Slots)
 	{
-		flecs::world World = StationE.world();
+		// Build set of slot ids we care about (≤ kMaxCraftingSlots non-zero entries).
+		TSet<int64> SlotIdSet;
+		SlotIdSet.Reserve(kMaxCraftingSlots);
 		for (int32 i = 0; i < kMaxCraftingSlots; ++i)
 		{
 			const int64 SlotId = Slots->SlotEntityIds[i];
-			if (SlotId == 0) continue;
-			int32 Found = 0;
-			World.each([SlotId, &Found](flecs::entity, const FContainedIn& CI)
+			if (SlotId != 0) SlotIdSet.Add(SlotId);
+		}
+
+		if (SlotIdSet.Num() > 0)
+		{
+			flecs::world World = StationE.world();
+			TMap<int64, int32> CountsBySlot;
+			CountsBySlot.Reserve(SlotIdSet.Num());
+			World.each([&SlotIdSet, &CountsBySlot](flecs::entity, const FContainedIn& CI)
 			{
-				if (CI.ContainerEntityId == SlotId) ++Found;
+				if (SlotIdSet.Contains(CI.ContainerEntityId))
+				{
+					CountsBySlot.FindOrAdd(CI.ContainerEntityId)++;
+				}
 			});
-			if (Found > 0)
+
+			// Find any non-empty slot — log + reject.
+			for (int32 i = 0; i < kMaxCraftingSlots; ++i)
 			{
-				UE_LOG(LogCrafting, Warning,
-					TEXT("[Modular] Deconstruct rejected — slot %d still has %d items"), i, Found);
-				return;
+				const int64 SlotId = Slots->SlotEntityIds[i];
+				if (SlotId == 0) continue;
+				const int32* CountPtr = CountsBySlot.Find(SlotId);
+				if (CountPtr && *CountPtr > 0)
+				{
+					UE_LOG(LogCrafting, Warning,
+						TEXT("[Modular] Deconstruct rejected — slot %d still has %d items"), i, *CountPtr);
+					return;
+				}
 			}
 		}
 	}
@@ -1127,6 +1345,7 @@ void DeconstructStation(flecs::entity StationE)
 	flecs::world World = StationE.world();
 
 	// Walk roster: restore each child to Dynamic + pickup, impulse pop, install grace.
+	// MEDIUM #1 — order: tags + grace BEFORE RestorePartToDynamic + Impulse (see DetachPart).
 	FMultiblockChildren* Roster = StationE.try_get_mut<FMultiblockChildren>();
 	int32 ChildrenPopped = 0;
 	if (Roster)
@@ -1138,26 +1357,26 @@ void DeconstructStation(flecs::entity StationE)
 			flecs::entity Ch = World.entity(static_cast<flecs::entity_t>(ChildId));
 			if (!Ch.is_alive()) continue;
 
-			RestorePartToDynamic(Ch);
 			Ch.remove<FTagMultiblockBonded>();
 			Ch.remove<FMultiblockChildOf>();
 			Ch.add<FTagPickupable>();
 			Ch.add<FTagItem>();
 			Ch.add<FTagInteractable>();
-			ApplyDetachImpulse(Ch, Impulse);
 			InstallPickupGrace(Ch, StationId, Grace);
+			RestorePartToDynamic(Ch);
+			ApplyDetachImpulse(Ch, Impulse);
 			++ChildrenPopped;
 		}
 	}
 
-	// Restore the anchor itself to Dynamic + pickup.
-	RestorePartToDynamic(StationE);
+	// Restore the anchor itself to Dynamic + pickup. Same order: tags + grace, then activate.
 	StationE.remove<FTagMultiblockBonded>();
 	StationE.add<FTagPickupable>();
 	StationE.add<FTagItem>();
 	StationE.add<FTagInteractable>();
-	ApplyDetachImpulse(StationE, Impulse);
 	InstallPickupGrace(StationE, StationId, Grace);
+	RestorePartToDynamic(StationE);
+	ApplyDetachImpulse(StationE, Impulse);
 
 	// Drain + destruct slot containers (slots already verified empty above).
 	if (Slots)

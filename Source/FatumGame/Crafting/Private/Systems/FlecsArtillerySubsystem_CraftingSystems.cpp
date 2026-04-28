@@ -19,6 +19,14 @@
 #include "Engine/World.h"
 #include "Engine/GameInstance.h"
 
+// HIGH #1 — Attach reservation timeout (sim ticks @60Hz). See SetupCraftingSystems
+// below for full rationale. 60 ticks = ~1 second; FinalizePartAttach re-check is
+// the contract, this is the backstop for player-side state cleanup.
+namespace
+{
+	constexpr uint64 kAttachReservationTimeoutTicks = 60;
+}
+
 void UFlecsArtillerySubsystem::SetupCraftingSystems()
 {
 	flecs::world& World = *FlecsWorld;
@@ -103,19 +111,32 @@ void UFlecsArtillerySubsystem::SetupCraftingSystems()
 		});
 
 	// ─────────────────────────────────────────────────────────
-	// Phase 4 — ClearStaleAttachReservationsSystem (5-tick timeout backstop)
+	// Phase 4 — ClearStaleAttachReservationsSystem (timeout BACKSTOP)
 	// V2 PATCH 3: dual query — clears both FPendingPartAttach (on part items)
-	// and FPendingStationAttach (on stations) when EnqueuedTickStamp + 5 < NowTick.
+	// and FPendingStationAttach (on stations) when EnqueuedTickStamp + N < NowTick.
+	//
+	// HIGH #1 — timeout bumped from 5 to 60 sim ticks (~1 second @60Hz). 5 ticks
+	// (~83ms) was insufficient under load: a GC pause or level-streaming hitch on the
+	// game thread could clear the reservation while the AsyncTask SpawnEntity was still
+	// in flight, allowing a second attach to pass AttachPartToStation's port-vacancy
+	// gate and corrupt PortOccupants.
+	//
+	// CONTRACT: this timeout is a BACKSTOP, not the source of truth. FinalizePartAttach
+	// re-checks `Ext->PortOccupants[PortIndex] == 0` (CRITICAL #3) and rolls back the
+	// spawned NewChild if the slot was taken during the AsyncTask flight. The 60-tick
+	// window only governs how long FPendingPartAttach lingers on the player's inventory
+	// item before player-side mutations (drag-drop) become unblocked.
 	// ─────────────────────────────────────────────────────────
 	World.system<const FPendingPartAttach>("ClearStalePartAttachReservationsSystem")
 		.each([](flecs::entity E, const FPendingPartAttach& P)
 		{
 			const uint64 NowTick = E.world().get_info()->frame_count_total;
-			if (NowTick > P.EnqueuedTickStamp + 5)
+			if (NowTick > P.EnqueuedTickStamp + kAttachReservationTimeoutTicks)
 			{
 				UE_LOG(LogCrafting, Warning,
-					TEXT("[Modular] Stale FPendingPartAttach on part entity=%llu (target=%lld) — clearing"),
-					(unsigned long long)E.id(), P.TargetStationEntityId);
+					TEXT("[Modular] Stale FPendingPartAttach on part entity=%llu (target=%lld) — clearing after %llu-tick timeout"),
+					(unsigned long long)E.id(), P.TargetStationEntityId,
+					(unsigned long long)kAttachReservationTimeoutTicks);
 				E.remove<FPendingPartAttach>();
 			}
 		});
@@ -124,11 +145,12 @@ void UFlecsArtillerySubsystem::SetupCraftingSystems()
 		.each([](flecs::entity E, const FPendingStationAttach& P)
 		{
 			const uint64 NowTick = E.world().get_info()->frame_count_total;
-			if (NowTick > P.EnqueuedTickStamp + 5)
+			if (NowTick > P.EnqueuedTickStamp + kAttachReservationTimeoutTicks)
 			{
 				UE_LOG(LogCrafting, Warning,
-					TEXT("[Modular] Stale FPendingStationAttach on station entity=%llu (port=%d) — clearing"),
-					(unsigned long long)E.id(), P.ReservedPortIndex);
+					TEXT("[Modular] Stale FPendingStationAttach on station entity=%llu (port=%d) — clearing after %llu-tick timeout"),
+					(unsigned long long)E.id(), P.ReservedPortIndex,
+					(unsigned long long)kAttachReservationTimeoutTicks);
 				E.remove<FPendingStationAttach>();
 			}
 		});

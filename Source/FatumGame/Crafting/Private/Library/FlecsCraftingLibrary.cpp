@@ -246,7 +246,20 @@ void UFlecsCraftingLibrary::RequestPartAttach(UObject* WorldContextObject,
 		return;
 	}
 
-	Subsystem->EnqueueCommand([Subsystem, StationKey, PortIndex, PartItemEntityId]()
+	// CRITICAL #1 — capture UWorld on the GAME THREAD here. AttachPartToStation runs
+	// inside the EnqueueCommand lambda (sim thread) and MUST NOT touch UObjectArray-backed
+	// APIs like Subsystem->GetWorld(). The TWeakObjectPtr is forwarded into the lambda;
+	// AsyncTask(GameThread) inside AttachPartToStation calls .Get() back on game thread.
+	UWorld* WorldCtx = WorldContextObject ? WorldContextObject->GetWorld() : nullptr;
+	if (!WorldCtx)
+	{
+		UE_LOG(LogCrafting, Warning,
+			TEXT("RequestPartAttach: no UWorld from WorldContextObject"));
+		return;
+	}
+	TWeakObjectPtr<UWorld> WeakWorld = WorldCtx;
+
+	Subsystem->EnqueueCommand([Subsystem, StationKey, PortIndex, PartItemEntityId, WeakWorld]()
 	{
 		flecs::world* W = Subsystem->GetFlecsWorld();
 		if (!W) return;
@@ -266,7 +279,7 @@ void UFlecsCraftingLibrary::RequestPartAttach(UObject* WorldContextObject,
 				PartItemEntityId);
 			return;
 		}
-		FlecsMultiblockRuntime::AttachPartToStation(PartItem, StationE, PortIndex);
+		FlecsMultiblockRuntime::AttachPartToStation(PartItem, StationE, PortIndex, WeakWorld);
 	});
 }
 
@@ -280,7 +293,17 @@ void UFlecsCraftingLibrary::RequestPartAttachAuto(UObject* WorldContextObject,
 		return;
 	}
 
-	Subsystem->EnqueueCommand([Subsystem, StationKey, PortIndex, PlayerInventoryEntityId]()
+	// CRITICAL #1 — capture UWorld on game thread (see RequestPartAttach for rationale).
+	UWorld* WorldCtx = WorldContextObject ? WorldContextObject->GetWorld() : nullptr;
+	if (!WorldCtx)
+	{
+		UE_LOG(LogCrafting, Warning,
+			TEXT("RequestPartAttachAuto: no UWorld from WorldContextObject"));
+		return;
+	}
+	TWeakObjectPtr<UWorld> WeakWorld = WorldCtx;
+
+	Subsystem->EnqueueCommand([Subsystem, StationKey, PortIndex, PlayerInventoryEntityId, WeakWorld]()
 	{
 		flecs::world* W = Subsystem->GetFlecsWorld();
 		if (!W) return;
@@ -327,7 +350,7 @@ void UFlecsCraftingLibrary::RequestPartAttachAuto(UObject* WorldContextObject,
 			return;
 		}
 
-		FlecsMultiblockRuntime::AttachPartToStation(Picked, StationE, PortIndex);
+		FlecsMultiblockRuntime::AttachPartToStation(Picked, StationE, PortIndex, WeakWorld);
 	});
 }
 

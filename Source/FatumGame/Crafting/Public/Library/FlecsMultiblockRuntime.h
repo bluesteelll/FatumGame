@@ -7,6 +7,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "UObject/WeakObjectPtr.h"
 #include "FlecsCraftingTypes.h"
 #include "SkeletonTypes.h"
 
@@ -14,6 +15,7 @@ namespace flecs { struct entity; }
 class UFlecsCraftingStationProfile;
 class UFlecsContainerProfile;
 class UFlecsMultiblockBlueprint;
+class UWorld;
 
 // Global-scope forward decls — MUST be outside the FlecsMultiblockRuntime namespace
 // so function signatures below reference the global types, not namespace-scoped ones
@@ -134,13 +136,17 @@ namespace FlecsMultiblockRuntime
 	 * @param PartItem    The candidate inventory item entity (will be consumed on success).
 	 * @param StationE    Target station entity (must have FMultiblockExtensions).
 	 * @param PortIndex   Index into Blueprint->ExtensionPorts.
+	 * @param WeakWorld   UWorld captured by the BP entry on the GAME THREAD (NEVER call
+	 *                    UFlecsArtillerySubsystem::GetWorld() from sim — UObjectArray race).
+	 *                    Must be a live weak ptr at call time; AsyncTask will Get() on game thread.
 	 * @return true if reservation accepted (game-thread spawn marshal pending);
 	 *         false on rejection (port full, role mismatch, station busy, etc.).
 	 */
 	FATUMGAME_API bool AttachPartToStation(
 		flecs::entity PartItem,
 		flecs::entity StationE,
-		int32 PortIndex);
+		int32 PortIndex,
+		TWeakObjectPtr<UWorld> WeakWorld);
 
 	/**
 	 * Phase 4 — sim-thread continuation, called from EnqueueCommand after the
