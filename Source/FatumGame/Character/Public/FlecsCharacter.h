@@ -381,6 +381,21 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Crafting")
 	FSkeletonKey GetCraftingHoverTarget() const { return Interact.CraftingHoverTarget; }
 
+	/** Phase 4 — true if the active weapon entity carries FTagWrench. Game thread.
+	 *  Used by PerformInteractionTrace + HandleInteractionInput to route wrench-aware
+	 *  interactions (attach extension, detach swappable, Hold-E deconstruct anchor). */
+	bool IsWrenchEquipped() const;
+
+	/** Phase 4 — read-only accessors for wrench-aware UI feedback (cyan/yellow/red glow hooks). */
+	UFUNCTION(BlueprintPure, Category = "Crafting|Wrench")
+	uint8 GetWrenchHoverKind() const { return static_cast<uint8>(Interact.WrenchHoverKind); }
+
+	UFUNCTION(BlueprintPure, Category = "Crafting|Wrench")
+	int64 GetWrenchHoverTargetId() const { return Interact.WrenchHoverTargetId; }
+
+	UFUNCTION(BlueprintPure, Category = "Crafting|Wrench")
+	int32 GetWrenchHoverPortIndex() const { return Interact.WrenchHoverPortIndex; }
+
 	/** Get prompt text for current interaction target */
 	UFUNCTION(BlueprintPure, Category = "Flecs|Interaction")
 	FText GetInteractionPrompt() const;

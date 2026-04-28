@@ -22,6 +22,12 @@
 #include "EnhancedInputSubsystems.h"
 #include "Async/Async.h"
 
+// Phase 4 — wrench-aware interaction routing.
+#include "Components/FlecsMultiblockComponents.h"
+#include "Library/FlecsCraftingLibrary.h"
+#include "Library/FlecsMultiblockRuntime.h"
+#include "FlecsMultiblockBlueprint.h"
+
 // =================================================================
 // EASING FUNCTIONS
 // =================================================================
@@ -109,6 +115,21 @@ bool AFlecsCharacter::GetEntityWorldTransform(FSkeletonKey EntityKey, FVector& O
 }
 
 // =================================================================
+// PHASE 4 — WRENCH SUPPORT
+// =================================================================
+
+bool AFlecsCharacter::IsWrenchEquipped() const
+{
+	if (ActiveWeaponEntityId == 0) return false;
+	UFlecsArtillerySubsystem* Sub = GetWorld() ? GetWorld()->GetSubsystem<UFlecsArtillerySubsystem>() : nullptr;
+	if (!Sub) return false;
+	flecs::world* W = Sub->GetFlecsWorld();
+	if (!W) return false;
+	flecs::entity E = W->entity(static_cast<flecs::entity_t>(ActiveWeaponEntityId));
+	return E.is_valid() && E.is_alive() && E.has<FTagWrench>();
+}
+
+// =================================================================
 // INPUT ROUTING
 // =================================================================
 
@@ -130,7 +151,47 @@ void AFlecsCharacter::HandleInteractionInput()
 		return; // Hold is driven by key held state, not presses
 	}
 
-	// Start new interaction
+	// ─── Phase 4 — wrench branch takes priority over standard routing ───
+	if (IsWrenchEquipped())
+	{
+		switch (Interact.WrenchHoverKind)
+		{
+		case EWrenchHoverKind::SwappableFunctional:
+		{
+			const FSkeletonKey ChildKey(static_cast<uint64>(Interact.WrenchHoverTargetId));
+			UFlecsCraftingLibrary::RequestPartDetach(this, ChildKey);
+			return;
+		}
+		case EWrenchHoverKind::EmptyExtensionPort:
+		{
+			const FSkeletonKey StationKey(static_cast<uint64>(Interact.WrenchHoverTargetId));
+			UFlecsCraftingLibrary::RequestPartAttachAuto(
+				this, StationKey, Interact.WrenchHoverPortIndex, InventoryEntityId);
+			return;
+		}
+		case EWrenchHoverKind::Anchor:
+		{
+			// Hold-E for full deconstruct.
+			Interact.bHoldIsWrenchDeconstruct = true;
+			Interact.HoldAccumulator = 0.f;
+			Interact.HoldRequiredDuration = 1.f;
+			Interact.HoldTargetLostTime = 0.f;
+			Interact.bHoldCanCancel = true;
+			Interact.bInteractKeyHeld = true;
+			Interact.ActiveTargetKey = FSkeletonKey(static_cast<uint64>(Interact.WrenchHoverTargetId));
+			SetInteractionState(EInteractionState::Holding);
+			return;
+		}
+		case EWrenchHoverKind::RigidFunctional:
+		case EWrenchHoverKind::OccupiedExtensionPort:
+		case EWrenchHoverKind::NotApplicable:
+		default:
+			// No-op — designer feedback only (red glow / "rigid" tooltip).
+			return;
+		}
+	}
+
+	// Start new interaction (legacy non-wrench path).
 	if (!Interact.CurrentTarget.IsValid()) return;
 
 	const UFlecsInteractionProfile* Profile = ResolveInteractionProfile(Interact.CurrentTarget);
@@ -283,9 +344,26 @@ void AFlecsCharacter::TickInteractionStateMachine(float DeltaTime)
 			return;
 		}
 
-		// Cancel if target lost (with grace period to handle 10Hz trace flicker)
-		if (!Interact.CurrentTarget.IsValid() ||
+		// Cancel if target lost (with grace period to handle 10Hz trace flicker).
+		// Phase 4 — for wrench-deconstruct sub-state, target identity check uses
+		// WrenchHoverKind == Anchor + WrenchHoverTargetId match (Flecs id, not BarrageKey).
+		bool bTargetLost = false;
+		if (Interact.bHoldIsWrenchDeconstruct)
+		{
+			const int64 ExpectedId = static_cast<int64>(Interact.ActiveTargetKey.Obj);
+			if (Interact.WrenchHoverKind != EWrenchHoverKind::Anchor
+				|| Interact.WrenchHoverTargetId != ExpectedId)
+			{
+				bTargetLost = true;
+			}
+		}
+		else if (!Interact.CurrentTarget.IsValid() ||
 			Interact.CurrentTarget != Interact.ActiveTargetKey)
+		{
+			bTargetLost = true;
+		}
+
+		if (bTargetLost)
 		{
 			Interact.HoldTargetLostTime += DeltaTime;
 			if (Interact.HoldTargetLostTime >= 0.3f)
@@ -561,6 +639,7 @@ void AFlecsCharacter::CancelHoldInteraction()
 	Interact.ActiveTargetKey = FSkeletonKey();
 	Interact.HoldAccumulator = 0.f;
 	Interact.bInteractKeyHeld = false;
+	Interact.bHoldIsWrenchDeconstruct = false;  // Phase 4 — clear sub-state
 }
 
 void AFlecsCharacter::CompleteHoldInteraction()
@@ -573,6 +652,21 @@ void AFlecsCharacter::CompleteHoldInteraction()
 		Msg.bFinished = true;
 		Msg.bCompleted = true;
 		MsgSub->BroadcastMessage(TAG_UI_HoldProgress, Msg);
+	}
+
+	// Phase 4 — wrench-Hold-E deconstruct path. ActiveProfile is null in this path
+	// (we never resolved a profile because the wrench branch in HandleInteractionInput
+	// goes directly to Holding without the legacy profile resolution).
+	if (Interact.bHoldIsWrenchDeconstruct)
+	{
+		UFlecsCraftingLibrary::RequestStationDeconstruct(this, Interact.ActiveTargetKey);
+		Interact.bHoldIsWrenchDeconstruct = false;
+		SetInteractionState(EInteractionState::Gameplay);
+		Interact.ActiveProfile = nullptr;
+		Interact.ActiveTargetKey = FSkeletonKey();
+		Interact.HoldAccumulator = 0.f;
+		Interact.bInteractKeyHeld = false;
+		return;
 	}
 
 	check(Interact.ActiveProfile);
@@ -856,6 +950,95 @@ void AFlecsCharacter::PerformInteractionTrace()
 	// Crafting hover target — independent of FTagInteractable detection.
 	// Silent write-through (no broadcast/event); widgets poll via GetCraftingHoverTarget.
 	Interact.CraftingHoverTarget = NewCraftingHover;
+
+	// ─── Phase 4 — wrench-aware hover classification ─────────────
+	// Recompute every trace tick (10 Hz). Cheap: hits the same FlecsSubsystem +
+	// optional roster walk (≤15) + optional port loop (≤8). Game thread only.
+	EWrenchHoverKind WrenchKind = EWrenchHoverKind::NotApplicable;
+	int64 WrenchTargetId = 0;
+	int32 WrenchPortIdx  = -1;
+
+	if (HitResult->bBlockingHit && IsWrenchEquipped())
+	{
+		const FBarrageKey HitBarrageKey = Barrage->GetBarrageKeyFromFHitResult(HitResult);
+		FBLet HitPrim = Barrage->GetShapeRef(HitBarrageKey);
+		if (FBarragePrimitive::IsNotNull(HitPrim))
+		{
+			const FSkeletonKey HitKey = HitPrim->KeyOutOfBarrage;
+			flecs::entity Hit = FlecsSubsystem->GetEntityForBarrageKey(HitKey);
+			if (Hit.is_valid() && Hit.is_alive() && !Hit.has<FTagDead>())
+			{
+				// Case A: hit a bonded child → Swappable / Rigid Functional
+				if (const FMultiblockChildOf* Back = Hit.try_get<FMultiblockChildOf>())
+				{
+					flecs::world* World = FlecsSubsystem->GetFlecsWorld();
+					if (World)
+					{
+						flecs::entity Anchor = World->entity(static_cast<flecs::entity_t>(Back->AnchorEntityId));
+						if (Anchor.is_alive())
+						{
+							if (const FMultiblockChildren* Roster = Anchor.try_get<FMultiblockChildren>())
+							{
+								for (int32 i = 0; i < Roster->ChildCount; ++i)
+								{
+									if (Roster->ChildSlots[i].ChildEntityId == static_cast<int64>(Hit.id()))
+									{
+										WrenchKind = (Roster->ChildSlots[i].bSwappable != 0)
+											? EWrenchHoverKind::SwappableFunctional
+											: EWrenchHoverKind::RigidFunctional;
+										// Use Flecs entity id for the target key (matches CraftingHoverTarget).
+										WrenchTargetId = static_cast<int64>(Hit.id());
+										break;
+									}
+								}
+							}
+						}
+					}
+				}
+				// Case B: hit the anchor itself → Anchor (rigid) + maybe an empty extension port nearby
+				else if (Hit.has<FTagCraftingStation>() && Hit.has<FMultiblockChildren>())
+				{
+					WrenchKind = EWrenchHoverKind::Anchor;
+					WrenchTargetId = static_cast<int64>(Hit.id());
+
+					// Extension-port-empty proximity test: closest unoccupied port pose within 100 cm.
+					const FMultiblockChildren* Roster = Hit.try_get<FMultiblockChildren>();
+					const FMultiblockExtensions* Ext = Hit.try_get<FMultiblockExtensions>();
+					const UFlecsMultiblockBlueprint* BP = FlecsMultiblockRuntime::ResolveBlueprintForStation(Hit);
+					if (Roster && BP && BP->ExtensionPorts.Num() > 0)
+					{
+						FVector AnchorPos;
+						FQuat AnchorQuat;
+						if (GetEntityWorldTransform(HitKey, AnchorPos, AnchorQuat))
+						{
+							const FQuat SnappedQuat(FRotator(0.f, static_cast<float>(Roster->AnchorYawSnappedDeg), 0.f).Quaternion());
+							float ClosestSq = 100.f * 100.f;  // 100 cm hover radius
+							for (int32 p = 0; p < BP->ExtensionPorts.Num() && p < 8; ++p)
+							{
+								const bool bOccupied = (Ext && Ext->PortOccupants[p] != 0);
+								const FVector PortPos = AnchorPos + SnappedQuat.RotateVector(BP->ExtensionPorts[p].RelativeOffset);
+								const float DistSq = FVector::DistSquared(PortPos, HitResult->Location);
+								if (DistSq < ClosestSq)
+								{
+									ClosestSq = DistSq;
+									WrenchPortIdx = p;
+									WrenchKind = bOccupied
+										? EWrenchHoverKind::OccupiedExtensionPort
+										: EWrenchHoverKind::EmptyExtensionPort;
+									// For empty/occupied port hover, target is still the station entity id.
+									WrenchTargetId = static_cast<int64>(Hit.id());
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	Interact.WrenchHoverKind     = WrenchKind;
+	Interact.WrenchHoverTargetId = WrenchTargetId;
+	Interact.WrenchHoverPortIndex = WrenchPortIdx;
 }
 
 FText AFlecsCharacter::GetInteractionPrompt() const

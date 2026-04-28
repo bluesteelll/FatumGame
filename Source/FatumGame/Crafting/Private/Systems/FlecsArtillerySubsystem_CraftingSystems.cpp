@@ -11,6 +11,7 @@
 #include "FlecsCraftingTypes.h"
 #include "FlecsCraftingUISubsystem.h"
 #include "Components/FlecsCraftingComponents.h"
+#include "Components/FlecsMultiblockComponents.h"  // Phase 4 — FPendingPartAttach / FPendingStationAttach
 #include "Library/FlecsCraftingRuntime.h"
 #include "Library/FlecsCraftingSnapshot.h"
 #include "FlecsCraftingRecipeRegistry.h"
@@ -99,5 +100,36 @@ void UFlecsArtillerySubsystem::SetupCraftingSystems()
 
 			// Clear dirty flag only after successful publish.
 			Inst.bSnapshotDirty = false;
+		});
+
+	// ─────────────────────────────────────────────────────────
+	// Phase 4 — ClearStaleAttachReservationsSystem (5-tick timeout backstop)
+	// V2 PATCH 3: dual query — clears both FPendingPartAttach (on part items)
+	// and FPendingStationAttach (on stations) when EnqueuedTickStamp + 5 < NowTick.
+	// ─────────────────────────────────────────────────────────
+	World.system<const FPendingPartAttach>("ClearStalePartAttachReservationsSystem")
+		.each([](flecs::entity E, const FPendingPartAttach& P)
+		{
+			const uint64 NowTick = E.world().get_info()->frame_count_total;
+			if (NowTick > P.EnqueuedTickStamp + 5)
+			{
+				UE_LOG(LogCrafting, Warning,
+					TEXT("[Modular] Stale FPendingPartAttach on part entity=%llu (target=%lld) — clearing"),
+					(unsigned long long)E.id(), P.TargetStationEntityId);
+				E.remove<FPendingPartAttach>();
+			}
+		});
+
+	World.system<const FPendingStationAttach>("ClearStaleStationAttachReservationsSystem")
+		.each([](flecs::entity E, const FPendingStationAttach& P)
+		{
+			const uint64 NowTick = E.world().get_info()->frame_count_total;
+			if (NowTick > P.EnqueuedTickStamp + 5)
+			{
+				UE_LOG(LogCrafting, Warning,
+					TEXT("[Modular] Stale FPendingStationAttach on station entity=%llu (port=%d) — clearing"),
+					(unsigned long long)E.id(), P.ReservedPortIndex);
+				E.remove<FPendingStationAttach>();
+			}
 		});
 }

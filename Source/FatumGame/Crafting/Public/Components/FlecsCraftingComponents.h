@@ -142,12 +142,17 @@ struct FFuelSlot
  * Lives on each SLOT CONTAINER entity (not the station).
  * Lets the FContainedIn observer fast-gate: if this component is absent, the
  * container is not a crafting slot and the observer early-exits.
+ *
+ * V2 PATCH 1 (Phase 4): OwningPortIndex stamped at slot creation. 0xFF = baseline
+ * (profile-defined) slot; 0..7 = extension port index. EnsurePortSlot uses this
+ * for defense-in-depth identity check during RecomputeEffectiveLayout.
  */
 struct FCraftingSlotBackRef
 {
 	int64   StationEntityId = 0;  // non-zero if this container is a crafting-station slot
 	uint16  SlotIndex = 0;        // index into FCraftingSlots::SlotEntityIds
 	uint8   Role = 0;             // ESlotRole narrowed to uint8
+	uint8   OwningPortIndex = 0xFF; // 0..7 = extension port index, 0xFF = baseline slot (Phase 4)
 };
 
 // ═══════════════════════════════════════════════════════════════
@@ -233,6 +238,28 @@ struct FCraftingSlotLockedByStation
 };
 
 // ═══════════════════════════════════════════════════════════════
+// PHASE 4 — STATION EFFECTIVE LAYOUT (derived state — extensions deltas)
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Derived station effective layout. Lives on station entities whose blueprint
+ * has any ExtensionPort. Recomputed by RecomputeEffectiveLayout after attach /
+ * detach / part death. NOT a snapshot — sim-thread state.
+ *
+ * Effective slots = profile baseline + sum of attached extension contributions.
+ * Effective fuel ceiling = baseline (90s default) + 60s × #FuelTank extensions occupied.
+ *
+ * Snapshot reads BOTH FCraftingStationStatic.Profile (baseline) AND this (delta).
+ */
+struct FStationEffectiveLayout
+{
+	uint8  EffectiveSlotCount    = 0;   // total slots in FCraftingSlots after recompute
+	float  EffectiveFuelCeiling  = 0.f; // ceiling on FuelChargeSecondsRemaining
+	uint8  ExtensionPortsOccupiedCount = 0;
+	uint16 MissingRequiredRolesBitmask = 0;  // bit i = role index → 1 if any required functional with that role is missing
+};
+
+// ═══════════════════════════════════════════════════════════════
 // TAGS (zero-size, archetype markers)
 // ═══════════════════════════════════════════════════════════════
 
@@ -244,3 +271,11 @@ struct FTagCraftingStationDestroying {};
 
 /** Marks fuel-item prefabs — lets SlotFilter / UI / matching quickly identify fuel. */
 struct FTagCraftingFuel {};
+
+/**
+ * Phase 4 — transient one-tick tag. Added by TransitionStationToDisabled when
+ * station enters Disabled, removed by TransitionStationToIdle when leaving.
+ * Lets queries early-exit cheaply via .without<FTagStationDisabled>().
+ * Source of truth for the Disabled state is FSmelterInstance.Phase.
+ */
+struct FTagStationDisabled {};

@@ -6,6 +6,7 @@
 #include "CoreMinimal.h"
 #include "SkeletonTypes.h"
 #include "FlecsInteractionTypes.h"
+#include "FlecsCraftingTypes.h"  // Phase 4 — EWrenchHoverKind
 
 class UFlecsInteractionProfile;
 
@@ -42,4 +43,16 @@ struct FCharacterInteractionState
 	float HoldTargetLostTime = 0.f;
 	bool bHoldCanCancel = true;
 	bool bInteractKeyHeld = false;
+
+	// ─── Phase 4 — wrench-aware hover classification ─────────────
+	// Written by PerformInteractionTrace each tick; read by HandleInteractionInput
+	// to route wrench-active E presses to attach/detach/deconstruct dispatchers.
+	EWrenchHoverKind WrenchHoverKind = EWrenchHoverKind::NotApplicable;
+	int64            WrenchHoverTargetId = 0;   // Flecs entity id of hovered child OR station
+	int32            WrenchHoverPortIndex = -1; // index into Blueprint->ExtensionPorts (Empty/Occupied port)
+
+	// ─── Phase 4 — Hold-E wrench-deconstruct sub-state ───────────
+	// True when a Hold-E session was started by wrench-on-anchor; on completion
+	// dispatches RequestStationDeconstruct instead of the legacy interaction path.
+	bool bHoldIsWrenchDeconstruct = false;
 };

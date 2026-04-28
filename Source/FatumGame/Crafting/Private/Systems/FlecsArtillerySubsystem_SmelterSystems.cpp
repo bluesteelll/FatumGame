@@ -84,6 +84,23 @@ void UFlecsArtillerySubsystem::SetupSmelterSystems()
 				// Refund already executed in SmelterCancel — clear lock, return to Idle.
 				FlecsCraftingRuntime::SmelterFinalizeCancel(Station, Inst, SmInst, Slots);
 				break;
+
+			case EProcessPhase::Disabled:
+				// Phase 4 — terminal-no-op while a required functional is missing.
+				// Drain any racing requests.
+				if (SmInst.bStartRequested)
+				{
+					SmInst.bStartRequested = false;
+					UE_LOG(LogCrafting, Verbose,
+						TEXT("[Smelter] '%s' START rejected — station Disabled (missing required functional)"),
+						*Static.StationName.ToString());
+				}
+				if (SmInst.bCancelRequested)
+				{
+					SmInst.bCancelRequested = false;
+					// No-op — Disabled has no in-flight ledger to refund.
+				}
+				break;
 			}
 
 			// Publish phase atomic for cosmetic UI consumers, every tick. See

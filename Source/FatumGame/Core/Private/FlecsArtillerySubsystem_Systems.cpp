@@ -52,6 +52,7 @@
 #include "FlecsMeleeComponents.h"
 #include "FlecsCraftingComponents.h"
 #include "Components/FlecsMultiblockComponents.h"
+#include "Library/FlecsMultiblockRuntime.h"  // Phase 4 — DeconstructStation, RecomputeEffectiveLayout
 
 // ═══════════════════════════════════════════════════════════════
 // COMPONENT REGISTRATION
@@ -305,6 +306,18 @@ void UFlecsArtillerySubsystem::RegisterFlecsComponents()
 	World.component<FTagMultiblockPart>();
 	World.component<FTagMultiblockAnchor>();
 	World.component<FTagMultiblockBonded>();
+
+	// ─────────────────────────────────────────────────────────
+	// CRAFTING / MULTIBLOCK (Phase 4 — modular stations)
+	// FMultiblockChildSlot lives inline inside FMultiblockChildren and is
+	// NOT registered (mirrors FConsumedIngredient inside FSmelterInstance).
+	// ─────────────────────────────────────────────────────────
+	World.component<FMultiblockExtensions>();
+	World.component<FStationEffectiveLayout>();
+	World.component<FPendingPartAttach>();
+	World.component<FPendingStationAttach>();
+	World.component<FTagWrench>();
+	World.component<FTagStationDisabled>();
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -785,6 +798,24 @@ void UFlecsArtillerySubsystem::SetupFlecsSystems()
 		.each([this](flecs::entity Entity)
 		{
 			EnsureBarrageAccess();
+
+			// Phase 4 — multiblock hooks BEFORE destruct.
+			// Anchor itself dying → emergency deconstruct (children pop free).
+			if (Entity.has<FTagCraftingStation>() && Entity.has<FMultiblockChildren>()
+				&& !Entity.has<FTagCraftingStationDestroying>())
+			{
+				FlecsMultiblockRuntime::DeconstructStation(Entity);
+			}
+			// Bonded child dying → notify anchor to recompute.
+			else if (const FMultiblockChildOf* Back = Entity.try_get<FMultiblockChildOf>())
+			{
+				flecs::world W = Entity.world();
+				flecs::entity Anchor = W.entity(static_cast<flecs::entity_t>(Back->AnchorEntityId));
+				if (Anchor.is_alive() && !Anchor.has<FTagCraftingStationDestroying>())
+				{
+					FlecsMultiblockRuntime::RecomputeEffectiveLayout(Anchor);
+				}
+			}
 
 			// Free cache slot before destruction
 			SimStateCache.Unregister(static_cast<int64>(Entity.id()));

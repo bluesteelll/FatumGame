@@ -64,6 +64,41 @@ public:
 	static void RequestSmelterCancel(UObject* WorldContextObject, FSkeletonKey StationKey);
 
 	// ═══════════════════════════════════════════════════════════════
+	// PHASE 4 — MODULAR STATIONS (wrench attach/detach/deconstruct)
+	// ═══════════════════════════════════════════════════════════════
+
+	/** Phase 4 — request hot-swap detach of a swappable functional or extension.
+	 *  ChildKey is the FSkeletonKey wrapping the child Flecs entity id (NOT BarrageKey). */
+	UFUNCTION(BlueprintCallable, Category = "Flecs|Crafting", meta = (WorldContext = "WorldContextObject"))
+	static void RequestPartDetach(UObject* WorldContextObject, FSkeletonKey ChildKey);
+
+	/** Phase 4 — request attach of a SPECIFIC inventory item to a SPECIFIC extension port.
+	 *  StationKey + PartItemEntityId are Flecs entity ids (wrapped). */
+	UFUNCTION(BlueprintCallable, Category = "Flecs|Crafting", meta = (WorldContext = "WorldContextObject"))
+	static void RequestPartAttach(
+		UObject* WorldContextObject,
+		FSkeletonKey StationKey,
+		int32 PortIndex,
+		int64 PartItemEntityId);
+
+	/** Phase 4 — auto-pick the first compatible inventory item for a port. Useful when
+	 *  the player presses E on a port without explicitly selecting an item. */
+	UFUNCTION(BlueprintCallable, Category = "Flecs|Crafting", meta = (WorldContext = "WorldContextObject"))
+	static void RequestPartAttachAuto(
+		UObject* WorldContextObject,
+		FSkeletonKey StationKey,
+		int32 PortIndex,
+		int64 PlayerInventoryEntityId);
+
+	/** Phase 4 — request full station deconstruct (Hold-E + wrench on anchor). */
+	UFUNCTION(BlueprintCallable, Category = "Flecs|Crafting", meta = (WorldContext = "WorldContextObject"))
+	static void RequestStationDeconstruct(UObject* WorldContextObject, FSkeletonKey StationKey);
+
+	/** Phase 4 — pure query: is the given child swappable? Used by hover UI feedback. */
+	UFUNCTION(BlueprintPure, Category = "Flecs|Crafting", meta = (WorldContext = "WorldContextObject"))
+	static bool IsPartSwappable(UObject* WorldContextObject, FSkeletonKey ChildKey);
+
+	// ═══════════════════════════════════════════════════════════════
 	// UI HELPERS (static — no world dependency)
 	// ═══════════════════════════════════════════════════════════════
 

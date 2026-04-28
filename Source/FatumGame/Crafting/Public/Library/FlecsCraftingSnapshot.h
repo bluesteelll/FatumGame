@@ -82,6 +82,14 @@ struct FATUMGAME_API FCraftingStationSnapshot
 	UPROPERTY(BlueprintReadOnly, Category = "Crafting")
 	float DurationSecondsCached = 0.f;
 
+	/** Phase 4 — bitmask of missing required functional roles (UI hint colour: red = missing). */
+	UPROPERTY(BlueprintReadOnly, Category = "Crafting")
+	int32 MissingPartsBitmask = 0;
+
+	/** Phase 4 — count of currently-occupied extension ports on this station. */
+	UPROPERTY(BlueprintReadOnly, Category = "Crafting")
+	uint8 ExtensionPortsOccupied = 0;
+
 	/** One row per configured slot (inline allocator — snapshot holds up to 8 inline). */
 	TArray<FCraftingStationSlotSnapshot, TInlineAllocator<8>> Slots;
 

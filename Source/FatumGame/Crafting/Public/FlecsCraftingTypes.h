@@ -90,6 +90,42 @@ enum class EProcessPhase : uint8
 	Stalled    = 2  UMETA(DisplayName = "Stalled"),
 	Completing = 3  UMETA(DisplayName = "Completing"),
 	Cancelled  = 4  UMETA(DisplayName = "Cancelled"),
+	Disabled   = 5  UMETA(DisplayName = "Disabled"),    // Phase 4 — required functional missing (modular stations)
+};
+
+// ═══════════════════════════════════════════════════════════════
+// PHASE 4 — MODULAR STATIONS (extension ports + wrench)
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Type of an extension port on a multiblock blueprint. Drives runtime layout
+ * deltas (extra slots, fuel ceiling, etc.) when occupied.
+ */
+UENUM(BlueprintType)
+enum class EExtensionPortType : uint8
+{
+	None        = 0  UMETA(DisplayName = "None"),         // Sentinel — never used in production
+	DieSlot     = 1  UMETA(DisplayName = "Die Slot"),     // +1 Die slot in effective layout
+	FuelTank    = 2  UMETA(DisplayName = "Fuel Tank"),    // +60s ceiling on FuelChargeSecondsRemaining
+	OutputTray  = 3  UMETA(DisplayName = "Output Tray"),  // +1 Output slot
+	ToolRack    = 4  UMETA(DisplayName = "Tool Rack"),    // +1 Tool slot
+	Generic     = 5  UMETA(DisplayName = "Generic"),      // Designer-defined effect (placeholder)
+};
+
+/**
+ * Game-thread enum, written by PerformInteractionTrace, read by widget hooks.
+ * Drives wrench-aware visual feedback (cyan/yellow/red glow) and input routing.
+ * Sim thread NEVER touches this.
+ */
+UENUM(BlueprintType)
+enum class EWrenchHoverKind : uint8
+{
+	NotApplicable        = 0  UMETA(DisplayName = "Not Applicable"),
+	Anchor               = 1  UMETA(DisplayName = "Anchor (Rigid)"),
+	SwappableFunctional  = 2  UMETA(DisplayName = "Swappable Functional"),
+	RigidFunctional      = 3  UMETA(DisplayName = "Rigid Functional"),
+	EmptyExtensionPort   = 4  UMETA(DisplayName = "Empty Extension Port"),
+	OccupiedExtensionPort= 5  UMETA(DisplayName = "Occupied Extension Port"),
 };
 
 // ═══════════════════════════════════════════════════════════════

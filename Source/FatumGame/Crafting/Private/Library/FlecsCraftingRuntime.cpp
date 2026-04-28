@@ -345,6 +345,8 @@ void BuildSnapshot(flecs::entity StationE, FCraftingStationSnapshot& OutSnapshot
 	OutSnapshot.ProcessPhase = 0;          // Phase 3 — default Idle
 	OutSnapshot.ProgressSeconds = 0.f;
 	OutSnapshot.DurationSecondsCached = 0.f;
+	OutSnapshot.MissingPartsBitmask = 0;   // Phase 4 default
+	OutSnapshot.ExtensionPortsOccupied = 0;
 	OutSnapshot.Slots.Reset();
 
 	if (!StationE.is_valid() || !StationE.is_alive()) return;
@@ -367,6 +369,14 @@ void BuildSnapshot(flecs::entity StationE, FCraftingStationSnapshot& OutSnapshot
 		OutSnapshot.ProcessPhase          = static_cast<uint8>(SmInst->Phase);
 		OutSnapshot.ProgressSeconds       = SmInst->ProgressSeconds;
 		OutSnapshot.DurationSecondsCached = SmInst->DurationCached;
+	}
+
+	// Phase 4 — extension state (only present on multiblock-bonded stations
+	// whose blueprint has any extension ports).
+	if (const FStationEffectiveLayout* Layout = StationE.try_get<FStationEffectiveLayout>())
+	{
+		OutSnapshot.MissingPartsBitmask     = static_cast<int32>(Layout->MissingRequiredRolesBitmask);
+		OutSnapshot.ExtensionPortsOccupied  = Layout->ExtensionPortsOccupiedCount;
 	}
 
 	if (Inst->MatchedRecipe)
@@ -1096,6 +1106,79 @@ void SmelterComplete(
 	SmInst.Phase = EProcessPhase::Idle;
 	SmInst.ProgressSeconds = 0.f;
 	Inst.bSnapshotDirty = true;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PHASE 4 — STATION PHASE TRANSITIONS
+// ═══════════════════════════════════════════════════════════════
+
+void TransitionStationToDisabled(flecs::entity StationE)
+{
+	if (!StationE.is_valid() || !StationE.is_alive()) return;
+	if (StationE.has<FTagCraftingStationDestroying>()) return;
+
+	FSmelterInstance* Sm = StationE.try_get_mut<FSmelterInstance>();
+	if (!Sm) return;
+
+	// V2 PATCH 2 — accept Idle / Cancelled / Disabled. Active phases
+	// (Processing/Stalled/Completing) reach here only AFTER SmelterCancel
+	// already ran in the recompute phase-transition block.
+	if (Sm->Phase != EProcessPhase::Idle
+	 && Sm->Phase != EProcessPhase::Cancelled
+	 && Sm->Phase != EProcessPhase::Disabled)
+	{
+		UE_LOG(LogCrafting, Error,
+			TEXT("[Modular] TransitionStationToDisabled called with unexpected Phase=%u entity=%llu"),
+			(uint32)Sm->Phase, (unsigned long long)StationE.id());
+		return;
+	}
+	if (Sm->Phase == EProcessPhase::Disabled) return;  // idempotent
+
+	Sm->Phase = EProcessPhase::Disabled;
+	StationE.add<FTagStationDisabled>();
+
+	// Release Phase 3 locks defensively (in case force-cancel left them set).
+	const FCraftingSlots* Slots = StationE.try_get<FCraftingSlots>();
+	if (Slots)
+	{
+		UnlockStationSlots(StationE, *Slots, ESlotRoleLockMask::All);
+	}
+
+	// Clear MatchedRecipe — Disabled stations cannot match recipes.
+	if (FCraftingStationInstance* Inst = StationE.try_get_mut<FCraftingStationInstance>())
+	{
+		Inst->MatchedRecipe = nullptr;
+		Inst->LastDiagnostic = ECraftingMatchDiagnostic::NoMatch;
+		Inst->bSnapshotDirty = true;
+	}
+
+	UE_LOG(LogCrafting, Log,
+		TEXT("[Modular] Station entity=%llu -> Disabled"),
+		(unsigned long long)StationE.id());
+}
+
+void TransitionStationToIdle(flecs::entity StationE)
+{
+	if (!StationE.is_valid() || !StationE.is_alive()) return;
+	if (StationE.has<FTagCraftingStationDestroying>()) return;
+
+	FSmelterInstance* Sm = StationE.try_get_mut<FSmelterInstance>();
+	if (!Sm) return;
+	if (Sm->Phase != EProcessPhase::Disabled) return;
+
+	Sm->Phase = EProcessPhase::Idle;
+	StationE.remove<FTagStationDisabled>();
+
+	if (FCraftingStationInstance* Inst = StationE.try_get_mut<FCraftingStationInstance>())
+	{
+		// Force a re-match next flush by clearing LastMatchedDigest.
+		Inst->LastMatchedDigest = 0;
+		Inst->bSnapshotDirty = true;
+	}
+
+	UE_LOG(LogCrafting, Log,
+		TEXT("[Modular] Station entity=%llu Disabled -> Idle"),
+		(unsigned long long)StationE.id());
 }
 
 } // namespace FlecsCraftingRuntime

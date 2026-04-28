@@ -37,22 +37,46 @@ namespace
 		TEXT("1 = log near-miss multiblock matches for authoring diagnosis"),
 		ECVF_Default);
 
-	/** One anchor ↔ {blueprint, matched children} record collected during Pass 1. */
+	/** One anchor ↔ {blueprint, matched children, snapped yaw} record collected during Pass 1. */
 	struct FBondRequest
 	{
 		flecs::entity                               Anchor;
 		const UFlecsMultiblockBlueprint*            Blueprint = nullptr;
 		TArray<int64, TInlineAllocator<15>>         ChildEntityIds;
+		float                                       SnappedYawDeg = 0.f;
 	};
+
+	/** Phase 4 — snap an anchor's measured yaw to the nearest cardinal {0, 90, 180, 270}.
+	 *  Returns true if within ToleranceDeg (default 22.5°) of any cardinal; false otherwise.
+	 *  OutSnapped is in [0, 360) on success; left untouched on failure. */
+	static bool TrySnapYawToCardinal(float YawDeg, float ToleranceDeg, float& OutSnapped)
+	{
+		YawDeg = FMath::UnwindDegrees(YawDeg);  // [-180, 180]
+		const float Cardinals[4] = { 0.f, 90.f, 180.f, -90.f };
+		for (float C : Cardinals)
+		{
+			const float Diff = FMath::Abs(FMath::FindDeltaAngleDegrees(YawDeg, C));
+			if (Diff <= ToleranceDeg)
+			{
+				OutSnapped = (C < 0.f) ? (C + 360.f) : C;
+				return true;
+			}
+		}
+		return false;
+	}
 
 	/** Pass-1 helper: try to match every child spec in Blueprint against the
 	 *  candidate set; write matched ids into OutMatchedChildIds (1-to-1 with
 	 *  Blueprint->Children). Returns false (and leaves output indeterminate)
-	 *  if any spec has no acceptable candidate. */
+	 *  if any spec has no acceptable candidate.
+	 *
+	 *  Phase 4 R3: ExpectedPos uses AnchorQuatSnapped.RotateVector(RelativeOffset)
+	 *  so anchors at 90/180/270° yaw correctly position children. */
 	static bool TryMatchAllChildren(
 		flecs::world& World,
 		flecs::entity Anchor,
 		const FVector& AnchorPos,
+		const FQuat& AnchorQuatSnapped,
 		const UFlecsMultiblockBlueprint* Blueprint,
 		const TArray<uint64, TInlineAllocator<64>>& CandidateEntIds,
 		const TArray<FVector, TInlineAllocator<64>>& CandidatePositions,
@@ -69,7 +93,7 @@ namespace
 			const FMultiblockChildPartSpec& Spec = Blueprint->Children[i];
 			if (!Spec.PartDefinition) return false;
 
-			const FVector ExpectedPos = AnchorPos + Spec.RelativeOffset;
+			const FVector ExpectedPos = AnchorPos + AnchorQuatSnapped.RotateVector(Spec.RelativeOffset);
 			const float TolSq = Spec.PositionTolerance * Spec.PositionTolerance;
 			const float NearMissSq = 4.f * TolSq;
 
@@ -190,6 +214,21 @@ void UFlecsArtillerySubsystem::SetupMultiblockSystems()
 				const FVector3f AnchorPosF = FBarragePrimitive::GetPosition(Prim);
 				const FVector AnchorPos(AnchorPosF.X, AnchorPosF.Y, AnchorPosF.Z);
 
+				// Phase 4 R3 — read anchor yaw, snap to nearest cardinal {0,90,180,270}.
+				// Reject yaws outside 22.5° of any cardinal (designer must straighten anchor).
+				const FQuat4f AnchorQuatF = FBarragePrimitive::OptimisticGetAbsoluteRotation(Prim);
+				const FQuat AnchorQuat(AnchorQuatF);
+				const float YawDegMeasured = static_cast<float>(FRotator(AnchorQuat).Yaw);
+				float SnappedYaw = 0.f;
+				if (!TrySnapYawToCardinal(YawDegMeasured, /*ToleranceDeg=*/22.5f, SnappedYaw))
+				{
+					UE_LOG(LogCrafting, Verbose,
+						TEXT("[MultiblockDetect] anchor=%llu yaw=%.1f° not within 22.5° of cardinal — skip"),
+						(unsigned long long)Anchor.id(), YawDegMeasured);
+					return;
+				}
+				const FQuat AnchorQuatSnapped(FRotator(0.f, SnappedYaw, 0.f).Quaternion());
+
 				// SphereSearch expects Jolt coordinates (meters). Convert.
 				const double RadiusJolt = BP->DetectionScanRadius / 100.0;
 
@@ -240,7 +279,7 @@ void UFlecsArtillerySubsystem::SetupMultiblockSystems()
 				if (CandidateEntIds.Num() < BP->Children.Num()) return;
 
 				TArray<int64, TInlineAllocator<15>> MatchedIds;
-				if (!TryMatchAllChildren(W, Anchor, AnchorPos, BP,
+				if (!TryMatchAllChildren(W, Anchor, AnchorPos, AnchorQuatSnapped, BP,
 				                          CandidateEntIds, CandidatePositions, MatchedIds))
 				{
 					return;
@@ -250,6 +289,7 @@ void UFlecsArtillerySubsystem::SetupMultiblockSystems()
 				Req.Anchor = Anchor;
 				Req.Blueprint = BP;
 				Req.ChildEntityIds = MoveTemp(MatchedIds);
+				Req.SnappedYawDeg = SnappedYaw;
 				BondRequests.Add(MoveTemp(Req));
 			});
 
@@ -265,12 +305,13 @@ void UFlecsArtillerySubsystem::SetupMultiblockSystems()
 				}
 
 				UE_LOG(LogCrafting, Log,
-					TEXT("[MultiblockDetect] MATCH anchor=%llu blueprint=%s children=%d — bonding"),
+					TEXT("[MultiblockDetect] MATCH anchor=%llu blueprint=%s children=%d snappedYaw=%.0f — bonding"),
 					(unsigned long long)Req.Anchor.id(),
 					*Req.Blueprint->BlueprintId.ToString(),
-					Req.ChildEntityIds.Num());
+					Req.ChildEntityIds.Num(),
+					Req.SnappedYawDeg);
 
-				BondMultiblock(Req.Anchor, Req.Blueprint, Req.ChildEntityIds);
+				BondMultiblock(Req.Anchor, Req.Blueprint, Req.ChildEntityIds, Req.SnappedYawDeg);
 			}
 		});
 }
@@ -296,7 +337,8 @@ void UFlecsArtillerySubsystem::SetupMultiblockSystems()
 
 void UFlecsArtillerySubsystem::BondMultiblock(flecs::entity Anchor,
 	const UFlecsMultiblockBlueprint* Blueprint,
-	const TArray<int64, TInlineAllocator<15>>& ChildEntityIds)
+	const TArray<int64, TInlineAllocator<15>>& ChildEntityIds,
+	float SnappedYawDeg)
 {
 	checkf(Anchor.is_valid() && Anchor.is_alive(),
 		TEXT("BondMultiblock: invalid anchor"));
@@ -304,6 +346,9 @@ void UFlecsArtillerySubsystem::BondMultiblock(flecs::entity Anchor,
 		TEXT("BondMultiblock: invalid blueprint"));
 	checkf(ChildEntityIds.Num() <= 15,
 		TEXT("BondMultiblock: too many children (%d > 15)"), ChildEntityIds.Num());
+	checkf(ChildEntityIds.Num() == Blueprint->Children.Num(),
+		TEXT("BondMultiblock: matched-children count %d does not equal blueprint child count %d"),
+		ChildEntityIds.Num(), Blueprint->Children.Num());
 	check(CachedBarrageDispatch);
 
 	flecs::world World = Anchor.world();
@@ -348,13 +393,17 @@ void UFlecsArtillerySubsystem::BondMultiblock(flecs::entity Anchor,
 
 	Freeze(Anchor);
 
-	// ── Step 3: write roster + back-refs ─────────────────────────
+	// ── Step 3: write roster + back-refs (Phase 4 — per-slot rows) ─
 	const int64 AnchorId = static_cast<int64>(Anchor.id());
 	FMultiblockChildren Roster;
-	uint8 WrittenCount = 0;
+	Roster.AnchorYawSnappedDeg = static_cast<uint16>(FMath::RoundToInt(SnappedYawDeg)) % 360;
 
-	for (int64 ChildId : ChildEntityIds)
+	uint8 WrittenCount = 0;
+	for (int32 i = 0; i < ChildEntityIds.Num() && i < 15; ++i)
 	{
+		const int64 ChildId = ChildEntityIds[i];
+		if (ChildId == 0) continue;
+
 		flecs::entity C = World.entity(static_cast<flecs::entity_t>(ChildId));
 		if (!C.is_alive()) continue;
 
@@ -364,7 +413,14 @@ void UFlecsArtillerySubsystem::BondMultiblock(flecs::entity Anchor,
 		BackRef.AnchorEntityId = AnchorId;
 		C.set<FMultiblockChildOf>(BackRef);
 
-		Roster.ChildEntityIds[WrittenCount++] = ChildId;
+		FMultiblockChildSlot& Row = Roster.ChildSlots[WrittenCount];
+		Row.ChildEntityId = ChildId;
+		Row.PartRole      = Blueprint->Children[i].PartRole;
+		// Phase 4 — per-child swappability comes from the blueprint spec.
+		Row.bSwappable    = Blueprint->Children[i].bSwappable ? 1 : 0;
+		Row.bIsExtension  = 0;  // required-child rows; extensions are appended via AttachPartToStation
+		Row.PortIndex     = 0;
+		++WrittenCount;
 	}
 	Roster.ChildCount = WrittenCount;
 	Anchor.set<FMultiblockChildren>(Roster);
@@ -373,8 +429,9 @@ void UFlecsArtillerySubsystem::BondMultiblock(flecs::entity Anchor,
 	FlecsMultiblockRuntime::SetupStationInstance(Anchor, Blueprint->StationProfile);
 
 	UE_LOG(LogCrafting, Log,
-		TEXT("[Multiblock] Bonded %s at anchor=%llu (children=%u)"),
+		TEXT("[Multiblock] Bonded %s at anchor=%llu children=%u snappedYaw=%u"),
 		*Blueprint->BlueprintId.ToString(),
 		(unsigned long long)Anchor.id(),
-		static_cast<uint32>(Roster.ChildCount));
+		static_cast<uint32>(Roster.ChildCount),
+		static_cast<uint32>(Roster.AnchorYawSnappedDeg));
 }

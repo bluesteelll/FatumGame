@@ -3,13 +3,36 @@
 #include "FlecsCraftingLibrary.h"
 #include "FlecsCraftingRuntime.h"
 #include "Components/FlecsCraftingComponents.h"
+#include "Components/FlecsMultiblockComponents.h"
 #include "FlecsCraftingLog.h"
 #include "FlecsCraftingUISubsystem.h"
 #include "FlecsArtillerySubsystem.h"
 #include "FlecsLibraryHelpers.h"
 #include "FlecsItemComponents.h"
+#include "FlecsItemDefinition.h"
+#include "FlecsEntityComponents.h"
+#include "FlecsEntityDefinition.h"
+#include "FlecsMultiblockBlueprint.h"
+#include "Library/FlecsMultiblockRuntime.h"
 #include "flecs.h"
 #include "Async/Async.h"
+
+namespace
+{
+	/** Phase 4 — resolve an FSkeletonKey wrapping a Flecs entity id to the entity.
+	 *  Used by RequestPartDetach/Attach/Deconstruct entry points where the key is
+	 *  the entity id directly (NOT a Barrage key). Mirrors PerformInteractionTrace's
+	 *  CraftingHoverTarget convention (post commit 64f54e3). */
+	flecs::entity GetEntityFromFlecsIdKey(UFlecsArtillerySubsystem* Sub, FSkeletonKey Key)
+	{
+		if (!Sub || !Key.IsValid()) return flecs::entity();
+		flecs::world* W = Sub->GetFlecsWorld();
+		if (!W) return flecs::entity();
+		const uint64 Id = static_cast<uint64>(Key.Obj);
+		flecs::entity E = W->entity(static_cast<flecs::entity_t>(Id));
+		return E.is_valid() ? E : flecs::entity();
+	}
+}
 
 // ═══════════════════════════════════════════════════════════════
 // COMMAND API
@@ -184,6 +207,181 @@ void UFlecsCraftingLibrary::RequestSmelterCancel(UObject* WorldContextObject, FS
 			(unsigned long long)StationE.id(),
 			static_cast<uint32>(SmInst->Phase));
 	});
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PHASE 4 — MODULAR STATIONS (wrench attach/detach/deconstruct)
+// ═══════════════════════════════════════════════════════════════
+
+void UFlecsCraftingLibrary::RequestPartDetach(UObject* WorldContextObject, FSkeletonKey ChildKey)
+{
+	UFlecsArtillerySubsystem* Subsystem = FlecsLibrary::GetSubsystem(WorldContextObject);
+	if (!Subsystem || !ChildKey.IsValid())
+	{
+		UE_LOG(LogCrafting, Verbose, TEXT("RequestPartDetach: invalid input"));
+		return;
+	}
+
+	Subsystem->EnqueueCommand([Subsystem, ChildKey]()
+	{
+		flecs::entity ChildE = GetEntityFromFlecsIdKey(Subsystem, ChildKey);
+		if (!ChildE.is_alive())
+		{
+			UE_LOG(LogCrafting, Verbose,
+				TEXT("RequestPartDetach: child entity not alive (key=0x%llX)"),
+				(unsigned long long)ChildKey.Obj);
+			return;
+		}
+		FlecsMultiblockRuntime::DetachPartFromStation(ChildE);
+	});
+}
+
+void UFlecsCraftingLibrary::RequestPartAttach(UObject* WorldContextObject,
+	FSkeletonKey StationKey, int32 PortIndex, int64 PartItemEntityId)
+{
+	UFlecsArtillerySubsystem* Subsystem = FlecsLibrary::GetSubsystem(WorldContextObject);
+	if (!Subsystem || !StationKey.IsValid() || PartItemEntityId == 0)
+	{
+		UE_LOG(LogCrafting, Verbose, TEXT("RequestPartAttach: invalid input"));
+		return;
+	}
+
+	Subsystem->EnqueueCommand([Subsystem, StationKey, PortIndex, PartItemEntityId]()
+	{
+		flecs::world* W = Subsystem->GetFlecsWorld();
+		if (!W) return;
+		flecs::entity StationE = GetEntityFromFlecsIdKey(Subsystem, StationKey);
+		flecs::entity PartItem = W->entity(static_cast<flecs::entity_t>(PartItemEntityId));
+		if (!StationE.is_alive())
+		{
+			UE_LOG(LogCrafting, Warning,
+				TEXT("RequestPartAttach: station entity not alive (key=0x%llX)"),
+				(unsigned long long)StationKey.Obj);
+			return;
+		}
+		if (!PartItem.is_alive())
+		{
+			UE_LOG(LogCrafting, Warning,
+				TEXT("RequestPartAttach: part item entity not alive (id=%lld)"),
+				PartItemEntityId);
+			return;
+		}
+		FlecsMultiblockRuntime::AttachPartToStation(PartItem, StationE, PortIndex);
+	});
+}
+
+void UFlecsCraftingLibrary::RequestPartAttachAuto(UObject* WorldContextObject,
+	FSkeletonKey StationKey, int32 PortIndex, int64 PlayerInventoryEntityId)
+{
+	UFlecsArtillerySubsystem* Subsystem = FlecsLibrary::GetSubsystem(WorldContextObject);
+	if (!Subsystem || !StationKey.IsValid() || PlayerInventoryEntityId == 0)
+	{
+		UE_LOG(LogCrafting, Verbose, TEXT("RequestPartAttachAuto: invalid input"));
+		return;
+	}
+
+	Subsystem->EnqueueCommand([Subsystem, StationKey, PortIndex, PlayerInventoryEntityId]()
+	{
+		flecs::world* W = Subsystem->GetFlecsWorld();
+		if (!W) return;
+		flecs::entity StationE = GetEntityFromFlecsIdKey(Subsystem, StationKey);
+		if (!StationE.is_alive())
+		{
+			UE_LOG(LogCrafting, Verbose,
+				TEXT("RequestPartAttachAuto: station entity not alive (key=0x%llX)"),
+				(unsigned long long)StationKey.Obj);
+			return;
+		}
+
+		// Resolve port acceptance set.
+		const UFlecsMultiblockBlueprint* BP = FlecsMultiblockRuntime::ResolveBlueprintForStation(StationE);
+		if (!BP || !BP->ExtensionPorts.IsValidIndex(PortIndex))
+		{
+			UE_LOG(LogCrafting, Warning,
+				TEXT("RequestPartAttachAuto: invalid port index %d"), PortIndex);
+			return;
+		}
+		const TArray<FName>& Accepted = BP->ExtensionPorts[PortIndex].AcceptedPartRoles;
+
+		// Walk player inventory: find first item whose EntityDefinition->MultiblockPartRole
+		// is in the port's accepted-roles set. Containers can have nested items via
+		// FContainedIn; we walk by container id (player inventory is one container entity).
+		const int64 InventoryId = PlayerInventoryEntityId;
+		flecs::entity Picked;
+		W->each([InventoryId, &Accepted, &Picked](flecs::entity ItemE, const FContainedIn& CI)
+		{
+			if (Picked.is_valid()) return;  // already found
+			if (CI.ContainerEntityId != InventoryId) return;
+			const FEntityDefinitionRef* DefRef = ItemE.try_get<FEntityDefinitionRef>();
+			if (!DefRef || !DefRef->Definition) return;
+			const FName Role = DefRef->Definition->MultiblockPartRole;
+			if (!Accepted.IsEmpty() && !Accepted.Contains(Role)) return;
+			Picked = ItemE;
+		});
+
+		if (!Picked.is_valid() || !Picked.is_alive())
+		{
+			UE_LOG(LogCrafting, Verbose,
+				TEXT("RequestPartAttachAuto: no compatible part for port %d in inventory %lld"),
+				PortIndex, InventoryId);
+			return;
+		}
+
+		FlecsMultiblockRuntime::AttachPartToStation(Picked, StationE, PortIndex);
+	});
+}
+
+void UFlecsCraftingLibrary::RequestStationDeconstruct(UObject* WorldContextObject, FSkeletonKey StationKey)
+{
+	UFlecsArtillerySubsystem* Subsystem = FlecsLibrary::GetSubsystem(WorldContextObject);
+	if (!Subsystem || !StationKey.IsValid())
+	{
+		UE_LOG(LogCrafting, Verbose, TEXT("RequestStationDeconstruct: invalid input"));
+		return;
+	}
+
+	Subsystem->EnqueueCommand([Subsystem, StationKey]()
+	{
+		flecs::entity StationE = GetEntityFromFlecsIdKey(Subsystem, StationKey);
+		if (!StationE.is_alive())
+		{
+			UE_LOG(LogCrafting, Verbose,
+				TEXT("RequestStationDeconstruct: station entity not alive (key=0x%llX)"),
+				(unsigned long long)StationKey.Obj);
+			return;
+		}
+		FlecsMultiblockRuntime::DeconstructStation(StationE);
+	});
+}
+
+bool UFlecsCraftingLibrary::IsPartSwappable(UObject* WorldContextObject, FSkeletonKey ChildKey)
+{
+	UFlecsArtillerySubsystem* Subsystem = FlecsLibrary::GetSubsystem(WorldContextObject);
+	if (!Subsystem || !ChildKey.IsValid()) return false;
+
+	flecs::entity ChildE = GetEntityFromFlecsIdKey(Subsystem, ChildKey);
+	if (!ChildE.is_alive()) return false;
+
+	const FMultiblockChildOf* Back = ChildE.try_get<FMultiblockChildOf>();
+	if (!Back) return false;
+
+	flecs::world* W = Subsystem->GetFlecsWorld();
+	if (!W) return false;
+
+	flecs::entity Anchor = W->entity(static_cast<flecs::entity_t>(Back->AnchorEntityId));
+	if (!Anchor.is_alive()) return false;
+
+	const FMultiblockChildren* Roster = Anchor.try_get<FMultiblockChildren>();
+	if (!Roster) return false;
+
+	for (int32 i = 0; i < Roster->ChildCount; ++i)
+	{
+		if (Roster->ChildSlots[i].ChildEntityId == static_cast<int64>(ChildE.id()))
+		{
+			return Roster->ChildSlots[i].bSwappable != 0;
+		}
+	}
+	return false;
 }
 
 // ═══════════════════════════════════════════════════════════════

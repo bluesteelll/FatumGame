@@ -236,4 +236,25 @@ namespace FlecsCraftingRuntime
 		FCraftingStationInstance& Inst,
 		FSmelterInstance& SmInst,
 		const FCraftingSlots& Slots);
+
+	// ═══════════════════════════════════════════════════════════════
+	// PHASE 4 — STATION PHASE TRANSITIONS (modular stations)
+	// ═══════════════════════════════════════════════════════════════
+
+	/**
+	 * Phase 4 — flip a station from Idle/Cancelled into Disabled (required
+	 * functional missing). Releases Phase 3 locks defensively, clears
+	 * MatchedRecipe, dirties snapshot. Idempotent on already-Disabled stations.
+	 *
+	 * V2 PATCH 2: gate widened to accept Idle/Cancelled/Disabled.
+	 * Sim thread only.
+	 */
+	FATUMGAME_API void TransitionStationToDisabled(flecs::entity StationE);
+
+	/**
+	 * Phase 4 — flip a station from Disabled back to Idle (functional restored).
+	 * Forces re-match on next flush (LastMatchedDigest=0). Idempotent on already-Idle.
+	 * Sim thread only.
+	 */
+	FATUMGAME_API void TransitionStationToIdle(flecs::entity StationE);
 }

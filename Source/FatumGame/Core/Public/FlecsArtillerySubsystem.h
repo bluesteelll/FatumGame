@@ -504,9 +504,12 @@ private:
 	/** Bond an anchor + its matched children into a single crafting-station assembly.
 	 *  Strips pickup/item tags, freezes bodies to Static, writes FMultiblockChildren /
 	 *  FMultiblockChildOf roster links, then delegates station setup to
-	 *  FlecsMultiblockRuntime::SetupStationInstance. Sim thread only. */
+	 *  FlecsMultiblockRuntime::SetupStationInstance. Sim thread only.
+	 *
+	 *  Phase 4 R3: SnappedYawDeg is stored once on FMultiblockChildren so attach /
+	 *  detection / detach all use the same deterministic rotated offset. */
 	void BondMultiblock(flecs::entity Anchor, const class UFlecsMultiblockBlueprint* Blueprint,
-		const TArray<int64, TInlineAllocator<15>>& ChildEntityIds);
+		const TArray<int64, TInlineAllocator<15>>& ChildEntityIds, float SnappedYawDeg);
 
 	/** Explosion system: processes FTagDetonate → ApplyExplosion → FTagDead */
 	void SetupExplosionSystems();

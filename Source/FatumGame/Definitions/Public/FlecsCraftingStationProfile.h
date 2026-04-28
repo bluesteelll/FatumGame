@@ -10,6 +10,8 @@
 #include "FlecsCraftingTypes.h"
 #include "FlecsCraftingStationProfile.generated.h"
 
+class UFlecsContainerProfile;
+
 /**
  * Profile describing a crafting station type.
  *
@@ -69,6 +71,36 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slots")
 	TArray<FSlotLayoutDef> SlotLayout;
+
+	// ═══════════════════════════════════════════════════════════════
+	// PHASE 4 — EXTENSIONS (templates for runtime-added ports)
+	// ═══════════════════════════════════════════════════════════════
+
+	/** Phase 4 — slot template used when an extension port adds a Die slot.
+	 *  Required if any ExtensionPort has PortType == DieSlot. IsDataValid enforces. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Instanced, Category = "Extensions")
+	TObjectPtr<UFlecsContainerProfile> ExtensionDieSlotProfile;
+
+	/** Phase 4 — slot template used when an extension port adds an Output slot. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Instanced, Category = "Extensions")
+	TObjectPtr<UFlecsContainerProfile> ExtensionOutputSlotProfile;
+
+	/** Phase 4 — slot template used when an extension port adds a Tool slot. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Instanced, Category = "Extensions")
+	TObjectPtr<UFlecsContainerProfile> ExtensionToolSlotProfile;
+
+	/** Phase 4 — impulse magnitude (cm/s) applied to detached parts on wrench-detach
+	 *  or full deconstruct. Designer-tunable. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Extensions",
+		meta = (ClampMin = "0", ClampMax = "200"))
+	float DeconstructImpulseCmS = 50.f;
+
+	/** Phase 4 (V2 PATCH 4) — pickup-grace seconds applied to wrench-detached parts
+	 *  and deconstructed station bodies. Prevents same-tick pickup by overlapping
+	 *  player capsule. Mirrors the existing player-drop grace UX. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Extensions",
+		meta = (ClampMin = "0", ClampMax = "5"))
+	float DetachPickupGraceSeconds = 0.5f;
 
 #if WITH_EDITOR
 	virtual EDataValidationResult IsDataValid(class FDataValidationContext& Context) const override;

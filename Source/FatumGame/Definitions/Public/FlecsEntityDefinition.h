@@ -232,6 +232,12 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tags")
 	bool bIsCharacter = false;
 
+	/** Phase 4 — adds FTagWrench on the spawned entity. Wrench-tagged items are
+	 *  the wrench tool used for hot-swap detach / extension attach / Hold-E
+	 *  deconstruct on multiblock anchors. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tags")
+	bool bAddTagWrench = false;
+
 	// ═══════════════════════════════════════════════════════════════
 	// SPAWN DEFAULTS
 	// ═══════════════════════════════════════════════════════════════

@@ -9,6 +9,7 @@
 
 #include "CoreMinimal.h"
 #include "Engine/DataAsset.h"
+#include "FlecsCraftingTypes.h"
 #include "FlecsMultiblockBlueprint.generated.h"
 
 class UFlecsEntityDefinition;
@@ -60,6 +61,50 @@ struct FATUMGAME_API FMultiblockChildPartSpec
 		meta = (ClampMin = "0.0", ClampMax = "180.0",
 		        Tooltip = "Phase 2 MVP: rotation tolerance IGNORED."))
 	float RotationToleranceDegrees = 180.f;
+
+	/** Phase 4 — true = hot-swappable via wrench when station is Idle/Disabled.
+	 *  False = rigid (like the anchor) — wrench-detach rejected with Warning. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Multiblock",
+		meta = (Tooltip = "Phase 4: hot-swappable via wrench when station Idle/Disabled. False = rigid."))
+	bool bSwappable = false;
+};
+
+// ═══════════════════════════════════════════════════════════════
+// PHASE 4 — EXTENSION PORT (designer-authored optional socket)
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * One extension port on a multiblock blueprint. Empty by default; player attaches
+ * a compatible part via wrench. Effect (extra slot, fuel ceiling bump, etc.)
+ * is summed into the station's effective layout via RecomputeEffectiveLayout.
+ *
+ * V2 PATCH 1: each port reserves slot index BaselineCount + PortIndex regardless
+ * of port type — slot identity is by-port-index, NOT contiguous packing.
+ */
+USTRUCT(BlueprintType)
+struct FATUMGAME_API FMultiblockExtensionPort
+{
+	GENERATED_BODY()
+
+	/** Identifier for logs / future save-restore. */
+	UPROPERTY(EditAnywhere, Category = "Port")
+	FName PortId;
+
+	/** Port type — drives the runtime extension effect (DieSlot etc.). */
+	UPROPERTY(EditAnywhere, Category = "Port")
+	EExtensionPortType PortType = EExtensionPortType::None;
+
+	/** Local offset from anchor (cm) — rotated by AnchorYawSnappedDeg at attach time. */
+	UPROPERTY(EditAnywhere, Category = "Port")
+	FVector RelativeOffset = FVector::ZeroVector;
+
+	/** Which PartRoles the port accepts. Wrench-attach validates against this. */
+	UPROPERTY(EditAnywhere, Category = "Port")
+	TArray<FName> AcceptedPartRoles;
+
+	/** Stack cap for ports of this PortType on this blueprint (designer-set per port). */
+	UPROPERTY(EditAnywhere, Category = "Port", meta = (ClampMin = "1", ClampMax = "8"))
+	uint8 MaxStackedAtThisPort = 1;
 };
 
 // ═══════════════════════════════════════════════════════════════
@@ -116,6 +161,12 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Schema",
 		meta = (ClampMin = "10.0"))
 	float DetectionScanRadius = 300.f;
+
+	/** Phase 4 — optional extension ports. Empty by default; players wrench-attach
+	 *  parts to occupy them. NOT scanned during initial bond. Max 8 ports. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Schema",
+		meta = (Tooltip = "Phase 4 extension ports — empty by default, attach via wrench."))
+	TArray<FMultiblockExtensionPort> ExtensionPorts;
 
 #if WITH_EDITOR
 	virtual EDataValidationResult IsDataValid(class FDataValidationContext& Context) const override;

@@ -27,6 +27,7 @@
 #include "FlecsCraftingStationProfile.h"
 #include "FlecsCraftingUISubsystem.h"
 #include "FlecsCraftingLog.h"
+#include "Components/FlecsMultiblockComponents.h"  // Phase 4 — FTagWrench
 #include "Library/FlecsMultiblockRuntime.h"
 #include "Async/Async.h"
 #include "BarrageDispatch.h"
@@ -755,6 +756,12 @@ FSkeletonKey UFlecsEntityLibrary::SpawnEntity(
 		if (Data.bInteractable)
 		{
 			Entity.add<FTagInteractable>();
+		}
+
+		// Phase 4 — wrench tool tag (read by AFlecsCharacter::IsWrenchEquipped on game thread).
+		if (Data.EntityDefinition && Data.EntityDefinition->bAddTagWrench)
+		{
+			Entity.add<FTagWrench>();
 		}
 
 		// Focus camera override (per-instance, read by character on interaction)
