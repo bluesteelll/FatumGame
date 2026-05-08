@@ -386,6 +386,14 @@ public:
 	 *  interactions (attach extension, detach swappable, Hold-E deconstruct anchor). */
 	bool IsWrenchEquipped() const;
 
+	/** Phase 5a — true when the active hand carries an FTagConnectorSegment item.
+	 *  Used by HandleInteractionInput to route LMB to TryConnectorPlace. */
+	bool IsConnectorEquipped() const;
+
+	/** Phase 5a — game-thread connector LMB handler: snap-resolve front+back endpoints
+	 *  to compatible station ports, LOS check, dispatch RequestConnectorPlace via BP API. */
+	void TryConnectorPlace();
+
 	/** Phase 4 — read-only accessors for wrench-aware UI feedback (cyan/yellow/red glow hooks). */
 	UFUNCTION(BlueprintPure, Category = "Crafting|Wrench")
 	uint8 GetWrenchHoverKind() const { return static_cast<uint8>(Interact.WrenchHoverKind); }

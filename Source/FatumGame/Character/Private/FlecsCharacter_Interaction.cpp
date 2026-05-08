@@ -24,9 +24,14 @@
 
 // Phase 4 — wrench-aware interaction routing.
 #include "Components/FlecsMultiblockComponents.h"
+// Phase 5a — connector hover + place (FTagConnectorSegment/Placed, FStationPorts, FPortSlot).
+#include "Components/FlecsTransportComponents.h"
 #include "Library/FlecsCraftingLibrary.h"
 #include "Library/FlecsMultiblockRuntime.h"
 #include "FlecsMultiblockBlueprint.h"
+#include "FlecsEntityDefinition.h"  // Phase 5a — ConnectorTransportRole / ConnectorSegmentLengthCm
+#include "FlecsEntityComponents.h"  // FEntityDefinitionRef
+#include "FlecsCraftingLog.h"       // Phase 5a — LogCrafting category
 
 // =================================================================
 // EASING FUNCTIONS
@@ -129,6 +134,145 @@ bool AFlecsCharacter::IsWrenchEquipped() const
 	return E.is_valid() && E.is_alive() && E.has<FTagWrench>();
 }
 
+bool AFlecsCharacter::IsConnectorEquipped() const
+{
+	if (ActiveWeaponEntityId == 0) return false;
+	UFlecsArtillerySubsystem* Sub = GetWorld() ? GetWorld()->GetSubsystem<UFlecsArtillerySubsystem>() : nullptr;
+	if (!Sub) return false;
+	flecs::world* W = Sub->GetFlecsWorld();
+	if (!W) return false;
+	flecs::entity E = W->entity(static_cast<flecs::entity_t>(ActiveWeaponEntityId));
+	return E.is_valid() && E.is_alive() && E.has<FTagConnectorSegment>();
+}
+
+void AFlecsCharacter::TryConnectorPlace()
+{
+	// Phase 5a — game-thread connector placement.
+	// 1. Resolve held connector definition (Role + segment length).
+	// 2. SphereCast at front + back camera-forward offsets.
+	// 3. For each hit, find a compatible station port within snap tolerance.
+	// 4. LineOfSight check; reject if blocked.
+	// 5. Dispatch RequestConnectorPlace via the BP API.
+	APlayerController* PC = Cast<APlayerController>(Controller);
+	UWorld* WorldCtx = GetWorld();
+	if (!PC || !WorldCtx) return;
+
+	UBarrageDispatch* Barrage = WorldCtx->GetSubsystem<UBarrageDispatch>();
+	UFlecsArtillerySubsystem* FlecsSub = WorldCtx->GetSubsystem<UFlecsArtillerySubsystem>();
+	if (!Barrage || !FlecsSub) return;
+	flecs::world* WorldPtr = FlecsSub->GetFlecsWorld();
+	if (!WorldPtr) return;
+
+	// Resolve held connector entity → role + length.
+	flecs::entity HeldEntity = WorldPtr->entity(static_cast<flecs::entity_t>(ActiveWeaponEntityId));
+	if (!HeldEntity.is_alive() || !HeldEntity.has<FTagConnectorSegment>()) return;
+	const FEntityDefinitionRef* DefRef = HeldEntity.try_get<FEntityDefinitionRef>();
+	UFlecsEntityDefinition* ConnectorDef = (DefRef && DefRef->Definition) ? DefRef->Definition : nullptr;
+	if (!ConnectorDef || ConnectorDef->ConnectorTransportRole == EConnectorTransportRole::None)
+	{
+		UE_LOG(LogCrafting, Verbose, TEXT("[Transport] TryConnectorPlace: held entity has no connector role"));
+		return;
+	}
+	const EConnectorTransportRole HeldRole = ConnectorDef->ConnectorTransportRole;
+	const float SegmentLen = FMath::Max(10.f, ConnectorDef->ConnectorSegmentLengthCm);
+
+	// Compute front+back world points (segment laid along camera forward).
+	FVector CamLoc; FRotator CamRot;
+	PC->GetPlayerViewPoint(CamLoc, CamRot);
+	const FVector Forward = CamRot.Vector();
+	const FVector PlaceCenter = CamLoc + Forward * 150.0;
+	const FVector FrontWorld = PlaceCenter + Forward * (SegmentLen * 0.5f);
+	const FVector BackWorld  = PlaceCenter - Forward * (SegmentLen * 0.5f);
+
+	// Filters (mirror PerformInteractionTrace).
+	auto BroadFilter = Barrage->GetDefaultBroadPhaseLayerFilter(Layers::MOVING);
+	auto LayerFilter = Barrage->GetDefaultLayerFilter(Layers::MOVING);
+	FBarrageKey CharKey = Barrage->GetBarrageKeyFromSkeletonKey(CharacterKey);
+	auto BodyFilter = Barrage->GetFilterToIgnoreSingleBody(CharKey);
+
+	auto SnapToPort = [&](const FVector& World, int64& OutTargetId, int32& OutPortIdx) -> bool
+	{
+		OutTargetId = 0; OutPortIdx = -1;
+		TSharedPtr<FHitResult> Hit = MakeShared<FHitResult>();
+		Barrage->SphereCast(/*Radius=*/30.0, /*Distance=*/30.0, World, FVector(0, 0, -1),
+			Hit, BroadFilter, LayerFilter, BodyFilter);
+		if (!Hit->bBlockingHit) return false;
+		FBarrageKey HitBKey = Barrage->GetBarrageKeyFromFHitResult(Hit);
+		FBLet Prim = Barrage->GetShapeRef(HitBKey);
+		if (!FBarragePrimitive::IsNotNull(Prim)) return false;
+		flecs::entity HitE = FlecsSub->GetEntityForBarrageKey(Prim->KeyOutOfBarrage);
+		if (!HitE.is_alive()) return false;
+		const FStationPorts* Ports = HitE.try_get<FStationPorts>();
+		if (!Ports) return false;
+		// Find closest unoccupied compatible port within 50 cm.
+		float BestDistSq = 50.0f * 50.0f;
+		int32 BestIdx = -1;
+		for (int32 p = 0; p < Ports->Ports.Num(); ++p)
+		{
+			const FPortSlot& Slot = Ports->Ports[p];
+			if (Slot.ConnectedSegmentId != 0) continue;
+			const bool bRoleOk =
+				(HeldRole == EConnectorTransportRole::Liquid &&
+					(Slot.Kind == EPortKind::LiquidOutlet || Slot.Kind == EPortKind::LiquidInlet)) ||
+				(HeldRole == EConnectorTransportRole::Power &&
+					(Slot.Kind == EPortKind::PowerOutlet  || Slot.Kind == EPortKind::PowerInlet));
+			if (!bRoleOk) continue;
+			const FVector PortWorld = FlecsMultiblockRuntime::ResolvePortWorldPosition(HitE, p);
+			const float D2 = FVector::DistSquared(PortWorld, World);
+			if (D2 < BestDistSq) { BestDistSq = D2; BestIdx = p; }
+		}
+		if (BestIdx < 0) return false;
+		OutTargetId = static_cast<int64>(HitE.id());
+		OutPortIdx = BestIdx;
+		return true;
+	};
+
+	int64 FrontId = 0, BackId = 0;
+	int32 FrontPortIdx = -1, BackPortIdx = -1;
+	if (!SnapToPort(FrontWorld, FrontId, FrontPortIdx) ||
+	    !SnapToPort(BackWorld,  BackId,  BackPortIdx))
+	{
+		UE_LOG(LogCrafting, Verbose, TEXT("[Transport] TryConnectorPlace: snap failed (front=%lld back=%lld)"), FrontId, BackId);
+		return;
+	}
+	if (FrontId == BackId && FrontPortIdx == BackPortIdx)
+	{
+		UE_LOG(LogCrafting, Verbose, TEXT("[Transport] TryConnectorPlace: front=back same port"));
+		return;
+	}
+
+	// LOS check — exclude both endpoint stations' Jolt bodies (M2).
+	TSharedPtr<FHitResult> LOSHit = MakeShared<FHitResult>();
+	Barrage->CastRay(FrontWorld, (BackWorld - FrontWorld), BroadFilter, LayerFilter, BodyFilter, LOSHit);
+	if (LOSHit->bBlockingHit)
+	{
+		// If the blocker is a station endpoint we accept (we're snapping to it). For 5a
+		// we do best-effort: accept blocker if it's the front or back target.
+		FBarrageKey BKey = Barrage->GetBarrageKeyFromFHitResult(LOSHit);
+		FBLet BPrim = Barrage->GetShapeRef(BKey);
+		bool bIsEndpoint = false;
+		if (FBarragePrimitive::IsNotNull(BPrim))
+		{
+			flecs::entity BlockerE = FlecsSub->GetEntityForBarrageKey(BPrim->KeyOutOfBarrage);
+			if (BlockerE.is_alive())
+			{
+				const int64 BId = static_cast<int64>(BlockerE.id());
+				bIsEndpoint = (BId == FrontId || BId == BackId);
+			}
+		}
+		if (!bIsEndpoint)
+		{
+			UE_LOG(LogCrafting, Verbose, TEXT("[Transport] TryConnectorPlace: LOS blocked"));
+			return;
+		}
+	}
+
+	UFlecsCraftingLibrary::RequestConnectorPlace(this, ConnectorDef, FrontWorld, BackWorld,
+		FrontId, FrontPortIdx, BackId, BackPortIdx);
+	UE_LOG(LogCrafting, Log, TEXT("[Transport] TryConnectorPlace dispatched: front=%lld:%d back=%lld:%d"),
+		FrontId, FrontPortIdx, BackId, BackPortIdx);
+}
+
 // =================================================================
 // INPUT ROUTING
 // =================================================================
@@ -182,6 +326,13 @@ void AFlecsCharacter::HandleInteractionInput()
 			SetInteractionState(EInteractionState::Holding);
 			return;
 		}
+		case EWrenchHoverKind::ConnectorSegment:
+		{
+			// Phase 5a — wrench LMB on placed connector segment → detach.
+			const FSkeletonKey SegmentKey(static_cast<uint64>(Interact.WrenchHoverTargetId));
+			UFlecsCraftingLibrary::RequestConnectorDetach(this, SegmentKey);
+			return;
+		}
 		case EWrenchHoverKind::RigidFunctional:
 		case EWrenchHoverKind::OccupiedExtensionPort:
 		case EWrenchHoverKind::NotApplicable:
@@ -189,6 +340,13 @@ void AFlecsCharacter::HandleInteractionInput()
 			// No-op — designer feedback only (red glow / "rigid" tooltip).
 			return;
 		}
+	}
+
+	// Phase 5a — connector item equipped (trough/wire). LMB → place segment.
+	if (IsConnectorEquipped())
+	{
+		TryConnectorPlace();
+		return;
 	}
 
 	// Start new interaction (legacy non-wrench path).
@@ -994,6 +1152,13 @@ void AFlecsCharacter::PerformInteractionTrace()
 							}
 						}
 					}
+				}
+				// Case C (Phase 5a): hit a placed connector segment → ConnectorSegment hover (cyan glow / wrench-detach target).
+				else if (Hit.has<FTagConnectorPlaced>())
+				{
+					WrenchKind = EWrenchHoverKind::ConnectorSegment;
+					WrenchTargetId = static_cast<int64>(Hit.id());
+					WrenchPortIdx = -1;
 				}
 				// Case B: hit the anchor itself → Anchor (rigid) + maybe an empty extension port nearby
 				else if (Hit.has<FTagCraftingStation>() && Hit.has<FMultiblockChildren>())
