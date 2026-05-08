@@ -174,4 +174,28 @@ namespace FlecsMultiblockRuntime
 	 * Gated on (a) station Idle/Disabled (b) ALL slots empty.
 	 */
 	FATUMGAME_API void DeconstructStation(flecs::entity StationE);
+
+	// ═══════════════════════════════════════════════════════════════
+	// PHASE 5a — TRANSPORT (ports + game-thread preview helper)
+	// ═══════════════════════════════════════════════════════════════
+
+	/**
+	 * Phase 5a — resolve port world position from FStationPorts.Ports[PortIndex].LocalOffsetCm.
+	 * Reuses ReadStationWorldTransform (Barrage body lookup). Returns ZeroVector on lookup
+	 * failure (no FStationPorts, invalid port index, or no Barrage body).
+	 *
+	 * Sim-thread safe (reads Barrage transforms via existing helper). Game-thread safe
+	 * for preview when called inline (Barrage transform read is lock-free atomic).
+	 *
+	 * Cite: V2 PATCH 9.
+	 */
+	FATUMGAME_API FVector ResolvePortWorldPosition(flecs::entity Station, int32 PortIndex);
+
+	/**
+	 * Phase 5a — accessible Phase-4 detach helpers re-exposed for connector detach reuse.
+	 * (Originally file-local in FlecsMultiblockRuntime.cpp.) RequestConnectorDetach mirrors
+	 * the wrench-detach Phase 4 ordering: tags + grace BEFORE body wake to suppress
+	 * same-tick PickupCollisionSystem auto-pickup.
+	 */
+	FATUMGAME_API void InstallPickupGrace(flecs::entity ChildE, int64 OwnerStationId, float GraceSeconds);
 }

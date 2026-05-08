@@ -31,8 +31,14 @@ void UFlecsArtillerySubsystem::SetupCraftingSystems()
 {
 	flecs::world& World = *FlecsWorld;
 
-	// Phase 3 — register Smelter system FIRST so per-tick phase changes are observed
-	// by the same-tick CraftingSnapshotFlushSystem registered below.
+	// Phase 5a — register transport systems FIRST in crafting block so the network
+	// roster is rebuilt (when needed) before any same-tick consumer reads it. Smelter
+	// path doesn't read the roster yet (5b adds pour-emit + power scheduling), but
+	// the ordering invariant is established now to avoid a late-phase reorder churn.
+	SetupTransportSystems();
+
+	// Phase 3 — register Smelter system after transport so per-tick phase changes are
+	// observed by the same-tick CraftingSnapshotFlushSystem registered below.
 	SetupSmelterSystems();
 
 	// Cache the recipe registry once — GameInstanceSubsystem, lives for the game session.

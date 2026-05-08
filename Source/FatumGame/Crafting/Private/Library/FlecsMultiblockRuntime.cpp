@@ -39,6 +39,8 @@
 #include "FlecsMultiblockBlueprint.h"
 #include "Components/FlecsCraftingComponents.h"
 #include "Components/FlecsMultiblockComponents.h"
+#include "Components/FlecsTransportComponents.h"     // Phase 5a — ports + reservations
+#include "FlecsCraftingTransportSubsystem.h"          // Phase 5a — QueueRebuild
 #include "Engine/World.h"
 #include "SkeletonTypes.h"
 
@@ -234,6 +236,43 @@ void FlecsMultiblockRuntime::SetupStationInstance(
 		// station that's missing parts. Document so future maintainers don't add a
 		// "force Idle on first setup" hack here.
 		FlecsMultiblockRuntime::RecomputeEffectiveLayout(Anchor);
+	}
+
+	// ─── Phase 5a — populate transport ports from designer authoring ─────
+	// Cite: V2 PATCH 9. Reads FEntityDefinitionRef.Definition->StationPortAuthoring,
+	// constructs runtime FPortSlot rows, attaches FStationPorts. Triggers a network
+	// rebuild so the new station joins (or splits) the existing roster.
+	const FEntityDefinitionRef* DefRef = Anchor.try_get<FEntityDefinitionRef>();
+	if (DefRef && DefRef->Definition && DefRef->Definition->StationPortAuthoring.Num() > 0)
+	{
+		FStationPorts Ports;
+		Ports.Ports.Reserve(DefRef->Definition->StationPortAuthoring.Num());
+		for (const FStationPortAuthoring& Auth : DefRef->Definition->StationPortAuthoring)
+		{
+			if (Auth.Kind == EPortKind::None) continue;  // designer-inert row — skip silently
+			FPortSlot Slot;
+			Slot.Kind                = Auth.Kind;
+			Slot.SocketName          = Auth.SocketName;
+			Slot.LocalOffsetCm       = Auth.LocalOffsetCm;
+			Slot.AcceptPriority      = static_cast<int8>(FMath::Clamp(Auth.AcceptPriority, -128, 127));
+			Slot.ConnectedSegmentId  = 0;
+			Slot.NetworkId           = 0;
+			Ports.Ports.Add(Slot);
+		}
+
+		if (Ports.Ports.Num() > 0)
+		{
+			Anchor.set<FStationPorts>(Ports);
+
+			if (UFlecsCraftingTransportSubsystem* TransportSub = UFlecsCraftingTransportSubsystem::SelfPtr)
+			{
+				TransportSub->QueueRebuild();
+			}
+
+			UE_LOG(LogCrafting, Log,
+				TEXT("[Transport] SetupStationInstance: station=%llu ports=%d populated from definition '%s'"),
+				(unsigned long long)Anchor.id(), Ports.Ports.Num(), *DefRef->Definition->GetName());
+		}
 	}
 }
 
@@ -786,6 +825,20 @@ bool AttachPartToStation(flecs::entity PartItem, flecs::entity StationE, int32 P
 		return false;
 	}
 
+	// Phase 5a — V2 PATCH 1 cross-pollution: connector-place reservation on the same
+	// station entity. The two reservation types target DIFFERENT port-index spaces
+	// (FStationPorts.Ports[] vs FMultiblockExtensions.PortOccupants[]) and so are
+	// orthogonal, but coarse-rejecting here keeps the contract simple and prevents a
+	// rare race where a connector continuation lambda commits during this attach.
+	if (StationE.has<FPendingConnectorPlace>())
+	{
+		const FPendingConnectorPlace* PC = StationE.try_get<FPendingConnectorPlace>();
+		UE_LOG(LogCrafting, Verbose,
+			TEXT("[Modular] AttachPart rejected — station entity=%llu has in-flight connector place (port %u)"),
+			(unsigned long long)StationE.id(), PC ? (uint32)PC->ReservedPortIndex : 0xFFu);
+		return false;
+	}
+
 	const FSmelterInstance* Sm = StationE.try_get<FSmelterInstance>();
 	const bool bStationIdleOrDisabled = !Sm
 		|| Sm->Phase == EProcessPhase::Idle
@@ -1152,19 +1205,24 @@ namespace
 		return 0.5f;
 	}
 
-	/** V2 PATCH 4 — install pickup grace on a freshly detached body so the
-	 *  same-tick PickupCollisionSystem doesn't suck it into the player. */
-	void InstallPickupGrace(flecs::entity ChildE, int64 OwnerStationId, float GraceSeconds)
-	{
-		if (!ChildE.is_valid() || !ChildE.is_alive()) return;
+}
 
-		FWorldItemInstance WorldInst;
-		WorldInst.PickupGraceTimer  = GraceSeconds;
-		WorldInst.DespawnTimer      = -1.f;
-		WorldInst.DroppedByEntityId = OwnerStationId;
-		ChildE.set<FWorldItemInstance>(WorldInst);
-		ChildE.add<FTagDroppedItem>();
-	}
+/**
+ * V2 PATCH 4 — install pickup grace on a freshly detached body so the
+ * same-tick PickupCollisionSystem doesn't suck it into the player.
+ *
+ * Phase 5a — exposed publicly for connector-detach reuse (originally file-local).
+ */
+void InstallPickupGrace(flecs::entity ChildE, int64 OwnerStationId, float GraceSeconds)
+{
+	if (!ChildE.is_valid() || !ChildE.is_alive()) return;
+
+	FWorldItemInstance WorldInst;
+	WorldInst.PickupGraceTimer  = GraceSeconds;
+	WorldInst.DespawnTimer      = -1.f;
+	WorldInst.DroppedByEntityId = OwnerStationId;
+	ChildE.set<FWorldItemInstance>(WorldInst);
+	ChildE.add<FTagDroppedItem>();
 }
 
 bool DetachPartFromStation(flecs::entity ChildE)
@@ -1418,6 +1476,24 @@ void DeconstructStation(flecs::entity StationE)
 	UE_LOG(LogCrafting, Log,
 		TEXT("[Modular] Deconstruct SUCCESS: anchor=%llu restored to Dynamic+Pickup, %d children popped"),
 		(unsigned long long)StationE.id(), ChildrenPopped);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PHASE 5a — TRANSPORT (port world resolution)
+// ═══════════════════════════════════════════════════════════════
+
+FVector ResolvePortWorldPosition(flecs::entity Station, int32 PortIndex)
+{
+	if (!Station.is_valid() || !Station.is_alive()) return FVector::ZeroVector;
+
+	const FStationPorts* Ports = Station.try_get<FStationPorts>();
+	if (!Ports || !Ports->Ports.IsValidIndex(PortIndex)) return FVector::ZeroVector;
+
+	FVector StationPos;
+	FQuat   StationQuat;
+	if (!ReadStationWorldTransform(Station, StationPos, StationQuat)) return FVector::ZeroVector;
+
+	return StationPos + StationQuat.RotateVector(Ports->Ports[PortIndex].LocalOffsetCm);
 }
 
 } // namespace FlecsMultiblockRuntime

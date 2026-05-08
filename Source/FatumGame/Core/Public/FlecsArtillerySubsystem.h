@@ -497,6 +497,11 @@ private:
 	 *  Must register BEFORE the snapshot flush so per-tick phase changes publish same tick. */
 	void SetupSmelterSystems();
 
+	/** Phase 5a — connector topology (NetworkRebuild + ClearStaleConnectorReservations).
+	 *  Registered BEFORE SetupSmelterSystems so the rebuilt roster is visible to the
+	 *  same-tick smelter / process systems in 5b+. */
+	void SetupTransportSystems();
+
 	/** Multiblock detection + bond (Phase 2). Must register BEFORE SetupCraftingSystems
 	 *  so first-tick bonds publish their initial snapshot in the same sim tick. */
 	void SetupMultiblockSystems();

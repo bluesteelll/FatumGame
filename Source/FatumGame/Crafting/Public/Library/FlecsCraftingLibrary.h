@@ -16,6 +16,8 @@
 #include "FlecsCraftingTypes.h"
 #include "FlecsCraftingLibrary.generated.h"
 
+class UFlecsEntityDefinition;  // Phase 5a — RequestConnectorPlace param
+
 UCLASS()
 class FATUMGAME_API UFlecsCraftingLibrary : public UBlueprintFunctionLibrary
 {
@@ -97,6 +99,38 @@ public:
 	/** Phase 4 — pure query: is the given child swappable? Used by hover UI feedback. */
 	UFUNCTION(BlueprintPure, Category = "Flecs|Crafting", meta = (WorldContext = "WorldContextObject"))
 	static bool IsPartSwappable(UObject* WorldContextObject, FSkeletonKey ChildKey);
+
+	// ═══════════════════════════════════════════════════════════════
+	// PHASE 5a — CONNECTOR TOPOLOGY (place / detach)
+	// ═══════════════════════════════════════════════════════════════
+
+	/** Phase 5a — place a connector segment between two snap targets.
+	 *
+	 *  Call from game thread on LMB after PerformConnectorPreviewTrace resolved a valid
+	 *  snap pair. Marshals to sim thread for re-validation, takes per-port reservations,
+	 *  AsyncTask GameThread to spawn the segment entity, then sim continuation commits
+	 *  FConnectorPlaced + reverse port refs + queues NetworkRebuild.
+	 *
+	 *  Cite: V2 PATCH 1 5-step flow.
+	 *
+	 *  @param FrontSnapTargetId  Flecs entity id of the front-end target (0 = dangling — REJECTED in 5a).
+	 *  @param FrontPortIndex     Port slot index on the front station; -1 (cast 0xFF) = peer-segment.
+	 *  @param BackSnapTargetId   Flecs entity id of the back-end target (0 = dangling — REJECTED in 5a).
+	 *  @param BackPortIndex      Port slot index on the back station; -1 = peer-segment.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Flecs|Crafting|Connector", meta = (WorldContext = "WorldContextObject"))
+	static void RequestConnectorPlace(
+		UObject* WorldContextObject,
+		UFlecsEntityDefinition* ConnectorDef,
+		FVector FrontWorld, FVector BackWorld,
+		int64 FrontSnapTargetId, int32 FrontPortIndex,
+		int64 BackSnapTargetId,  int32 BackPortIndex);
+
+	/** Phase 5a — detach a placed connector segment (wrench LMB). Restores segment to
+	 *  Pickupable+Item, applies detach impulse, installs pickup grace, clears reverse
+	 *  station-port refs, queues NetworkRebuild. */
+	UFUNCTION(BlueprintCallable, Category = "Flecs|Crafting|Connector", meta = (WorldContext = "WorldContextObject"))
+	static void RequestConnectorDetach(UObject* WorldContextObject, FSkeletonKey SegmentKey);
 
 	// ═══════════════════════════════════════════════════════════════
 	// UI HELPERS (static — no world dependency)

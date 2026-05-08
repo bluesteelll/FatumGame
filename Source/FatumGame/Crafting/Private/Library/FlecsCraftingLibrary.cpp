@@ -4,7 +4,9 @@
 #include "FlecsCraftingRuntime.h"
 #include "Components/FlecsCraftingComponents.h"
 #include "Components/FlecsMultiblockComponents.h"
+#include "Components/FlecsTransportComponents.h"     // Phase 5a — connector components
 #include "FlecsCraftingLog.h"
+#include "FlecsCraftingTransportSubsystem.h"          // Phase 5a — QueueRebuild
 #include "FlecsCraftingUISubsystem.h"
 #include "FlecsArtillerySubsystem.h"
 #include "FlecsLibraryHelpers.h"
@@ -13,6 +15,13 @@
 #include "FlecsEntityComponents.h"
 #include "FlecsEntityDefinition.h"
 #include "FlecsMultiblockBlueprint.h"
+#include "FlecsEntitySpawner.h"                       // Phase 5a — FEntitySpawnRequest, SpawnEntity
+#include "FlecsBarrageComponents.h"                   // Phase 5a — FBarrageBody (freeze body to Static)
+#include "BarrageDispatch.h"                          // Phase 5a — SetBodyMotionType, CastRay (re-validate)
+#include "FBarragePrimitive.h"
+#include "EPhysicsLayer.h"
+#include "IsolatedJoltIncludes.h"                     // JPH::EMotionType + body filter
+#include "PhysicsFilters/FastObjectLayerFilters.h"
 #include "Library/FlecsMultiblockRuntime.h"
 #include "flecs.h"
 #include "Async/Async.h"
@@ -438,4 +447,291 @@ FText UFlecsCraftingLibrary::GetSlotRoleText(ESlotRole Role)
 	case ESlotRole::Internal:      return NSLOCTEXT("Crafting", "Role_Internal", "Internal");
 	default:                       return FText::GetEmpty();
 	}
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PHASE 5a — CONNECTOR PLACEMENT / DETACH (V2 PATCH 1)
+// ═══════════════════════════════════════════════════════════════
+
+void UFlecsCraftingLibrary::RequestConnectorPlace(
+	UObject* WorldContextObject,
+	UFlecsEntityDefinition* ConnectorDef,
+	FVector FrontWorld, FVector BackWorld,
+	int64 FrontSnapTargetId, int32 FrontPortIndex,
+	int64 BackSnapTargetId,  int32 BackPortIndex)
+{
+	UFlecsArtillerySubsystem* Subsystem = FlecsLibrary::GetSubsystem(WorldContextObject);
+	if (!Subsystem || !ConnectorDef ||
+		ConnectorDef->ConnectorTransportRole == EConnectorTransportRole::None)
+	{
+		UE_LOG(LogCrafting, Verbose, TEXT("[Transport] RequestConnectorPlace: invalid input"));
+		return;
+	}
+	// 5a: dangling endpoints rejected (both ends MUST snap to a station port).
+	if (FrontSnapTargetId == 0 || BackSnapTargetId == 0 ||
+		FrontPortIndex < 0 || BackPortIndex < 0)
+	{
+		UE_LOG(LogCrafting, Verbose,
+			TEXT("[Transport] RequestConnectorPlace: dangling endpoint rejected (front=%lld:%d back=%lld:%d)"),
+			FrontSnapTargetId, FrontPortIndex, BackSnapTargetId, BackPortIndex);
+		return;
+	}
+
+	// PATCH M4: capture UWorld + subsystem as weak refs on game thread BEFORE EnqueueCommand,
+	// so AsyncTask round-trip survives PIE shutdown gracefully (5-tick timeout backstop).
+	UWorld* WorldCtx = WorldContextObject ? WorldContextObject->GetWorld() : nullptr;
+	if (!WorldCtx)
+	{
+		UE_LOG(LogCrafting, Warning, TEXT("[Transport] RequestConnectorPlace: no UWorld"));
+		return;
+	}
+	TWeakObjectPtr<UWorld> WeakWorld = WorldCtx;
+	TWeakObjectPtr<UFlecsArtillerySubsystem> WeakArt = Subsystem;
+	const EConnectorTransportRole Role = ConnectorDef->ConnectorTransportRole;
+	UFlecsEntityDefinition* CapturedDef = ConnectorDef;
+
+	Subsystem->EnqueueCommand([Subsystem, CapturedDef, FrontWorld, BackWorld,
+		FrontSnapTargetId, FrontPortIndex, BackSnapTargetId, BackPortIndex,
+		Role, WeakWorld, WeakArt]()
+	{
+		// Step 1 — RE-VALIDATE.
+		flecs::world* WorldPtr = Subsystem->GetFlecsWorld();
+		if (!WorldPtr) return;
+		flecs::world W = *WorldPtr;
+
+		flecs::entity FrontT = W.entity(static_cast<flecs::entity_t>(FrontSnapTargetId));
+		flecs::entity BackT  = W.entity(static_cast<flecs::entity_t>(BackSnapTargetId));
+		if (!FrontT.is_alive() || !BackT.is_alive() ||
+			FrontT.has<FTagCraftingStationDestroying>() ||
+			BackT.has<FTagCraftingStationDestroying>())
+		{
+			UE_LOG(LogCrafting, Verbose, TEXT("[Transport] place rejected: dead target"));
+			return;
+		}
+		// Same-port self-snap defensive check.
+		if (FrontSnapTargetId == BackSnapTargetId && FrontPortIndex == BackPortIndex)
+		{
+			UE_LOG(LogCrafting, Verbose, TEXT("[Transport] place rejected: same port self-snap"));
+			return;
+		}
+
+		auto ValidateStationSide = [Role](flecs::entity Target, int32 PortIdx) -> bool
+		{
+			if (Target.has<FPendingConnectorPlace>())
+			{
+				UE_LOG(LogCrafting, Verbose,
+					TEXT("[Transport] place rejected: station=%llu has pending connector place"),
+					(unsigned long long)Target.id());
+				return false;
+			}
+			// PATCH M1: Smelter Phase guard via try_get; absence = not-busy.
+			if (const FSmelterInstance* Sm = Target.try_get<FSmelterInstance>())
+			{
+				if (Sm->Phase != EProcessPhase::Idle && Sm->Phase != EProcessPhase::Disabled)
+				{
+					UE_LOG(LogCrafting, Warning,
+						TEXT("[Transport] place rejected: Smelter station=%llu mid-process Phase=%u"),
+						(unsigned long long)Target.id(), (uint32)Sm->Phase);
+					return false;
+				}
+			}
+			const FStationPorts* Ports = Target.try_get<FStationPorts>();
+			if (!Ports || !Ports->Ports.IsValidIndex(PortIdx))
+			{
+				UE_LOG(LogCrafting, Warning,
+					TEXT("[Transport] place rejected: station=%llu has no port index %d"),
+					(unsigned long long)Target.id(), PortIdx);
+				return false;
+			}
+			const FPortSlot& Slot = Ports->Ports[PortIdx];
+			if (Slot.ConnectedSegmentId != 0)
+			{
+				UE_LOG(LogCrafting, Verbose,
+					TEXT("[Transport] place rejected: station=%llu port=%d already occupied (segment=%lld)"),
+					(unsigned long long)Target.id(), PortIdx, Slot.ConnectedSegmentId);
+				return false;
+			}
+			// Kind / Role match.
+			const bool bRoleOk =
+				(Role == EConnectorTransportRole::Liquid &&
+					(Slot.Kind == EPortKind::LiquidOutlet || Slot.Kind == EPortKind::LiquidInlet)) ||
+				(Role == EConnectorTransportRole::Power &&
+					(Slot.Kind == EPortKind::PowerOutlet  || Slot.Kind == EPortKind::PowerInlet));
+			if (!bRoleOk)
+			{
+				UE_LOG(LogCrafting, Warning,
+					TEXT("[Transport] place rejected: kind mismatch station=%llu port=%d kind=%u role=%u"),
+					(unsigned long long)Target.id(), PortIdx,
+					(uint32)Slot.Kind, (uint32)Role);
+				return false;
+			}
+			return true;
+		};
+		if (!ValidateStationSide(FrontT, FrontPortIndex)) return;
+		if (!ValidateStationSide(BackT,  BackPortIndex))  return;
+
+		// Step 2 — RESERVE atomically.
+		const uint64 NowTick = WorldPtr->get_info()->frame_count_total;
+		FPendingConnectorPlace Pf; Pf.EnqueuedTickStamp = NowTick; Pf.ReservedPortIndex = (uint8)FrontPortIndex;
+		FPendingConnectorPlace Pb; Pb.EnqueuedTickStamp = NowTick; Pb.ReservedPortIndex = (uint8)BackPortIndex;
+		FrontT.set<FPendingConnectorPlace>(Pf);
+		BackT.set<FPendingConnectorPlace>(Pb);
+
+		// Step 3 — AsyncTask GameThread → SpawnEntity.
+		AsyncTask(ENamedThreads::GameThread, [WeakWorld, WeakArt, CapturedDef,
+			FrontWorld, BackWorld, FrontSnapTargetId, BackSnapTargetId,
+			FrontPortIndex, BackPortIndex]()
+		{
+			UWorld* W = WeakWorld.Get();
+			UFlecsArtillerySubsystem* Art = WeakArt.Get();
+			if (!W || !Art)
+			{
+				// PIE exit between dispatch and game-thread continuation.
+				// The 60-tick ClearStaleConnectorReservationsSystem is the timeout backstop.
+				UE_LOG(LogCrafting, Warning,
+					TEXT("[Transport] AsyncTask spawn skipped: WeakWorld/WeakArt stale; reservations will time out"));
+				return;
+			}
+			const FVector MidPoint = (FrontWorld + BackWorld) * 0.5;
+			const FRotator Rot = (BackWorld - FrontWorld).Rotation();
+			const FSkeletonKey NewKey = UFlecsEntityLibrary::SpawnEntityFromDefinition(W, CapturedDef, MidPoint, Rot);
+
+			// Step 4 — CONTINUATION on sim thread.
+			Art->EnqueueCommand([Art, NewKey, FrontSnapTargetId, BackSnapTargetId,
+				FrontPortIndex, BackPortIndex]()
+			{
+				flecs::world* Wp = Art->GetFlecsWorld();
+				if (!Wp) return;
+				flecs::world W = *Wp;
+
+				flecs::entity SegE = Art->GetEntityForBarrageKey(NewKey);
+				if (!SegE.is_alive())
+				{
+					UE_LOG(LogCrafting, Error,
+						TEXT("[Transport] continuation: spawned segment not alive (key=0x%llX)"),
+						(unsigned long long)NewKey.Obj);
+					return;
+				}
+
+				FConnectorPlaced Placed;
+				Placed.FrontSnapTargetId       = FrontSnapTargetId;
+				Placed.BackSnapTargetId        = BackSnapTargetId;
+				Placed.FrontSnappedToPortIndex = (uint8)FrontPortIndex;
+				Placed.BackSnappedToPortIndex  = (uint8)BackPortIndex;
+				Placed.NetworkId               = 0;
+				SegE.set<FConnectorPlaced>(Placed);
+				SegE.add<FTagConnectorPlaced>();
+				SegE.remove<FTagPickupable>();
+				SegE.remove<FTagItem>();
+
+				// Freeze body to Static.
+				if (UBarrageDispatch* Barrage = Art->GetBarrageDispatch())
+				{
+					if (const FBarrageBody* Body = SegE.try_get<FBarrageBody>())
+					{
+						FBLet Prim = Barrage->GetShapeRef(Body->BarrageKey);
+						if (FBarragePrimitive::IsNotNull(Prim))
+						{
+							Barrage->SetBodyMotionType(Prim->KeyIntoBarrage,
+								JPH::EMotionType::Static, /*bActivate=*/false);
+						}
+					}
+				}
+
+				// Commit reverse refs on station ports.
+				flecs::entity FrontT = W.entity(static_cast<flecs::entity_t>(FrontSnapTargetId));
+				flecs::entity BackT  = W.entity(static_cast<flecs::entity_t>(BackSnapTargetId));
+				if (FrontT.is_alive())
+				{
+					if (FStationPorts* P = FrontT.try_get_mut<FStationPorts>())
+					{
+						if (P->Ports.IsValidIndex(FrontPortIndex))
+							P->Ports[FrontPortIndex].ConnectedSegmentId = (int64)SegE.id();
+					}
+					FrontT.remove<FPendingConnectorPlace>();
+				}
+				if (BackT.is_alive())
+				{
+					if (FStationPorts* P = BackT.try_get_mut<FStationPorts>())
+					{
+						if (P->Ports.IsValidIndex(BackPortIndex))
+							P->Ports[BackPortIndex].ConnectedSegmentId = (int64)SegE.id();
+					}
+					BackT.remove<FPendingConnectorPlace>();
+				}
+
+				if (auto* Sub = UFlecsCraftingTransportSubsystem::SelfPtr)
+					Sub->QueueRebuild();
+
+				UE_LOG(LogCrafting, Log,
+					TEXT("[Transport] PLACED segment=%llu front=(%lld port=%d) back=(%lld port=%d)"),
+					(unsigned long long)SegE.id(),
+					FrontSnapTargetId, FrontPortIndex,
+					BackSnapTargetId, BackPortIndex);
+			});
+		});
+	});
+}
+
+void UFlecsCraftingLibrary::RequestConnectorDetach(UObject* WorldContextObject, FSkeletonKey SegmentKey)
+{
+	UFlecsArtillerySubsystem* Subsystem = FlecsLibrary::GetSubsystem(WorldContextObject);
+	if (!Subsystem || !SegmentKey.IsValid())
+	{
+		UE_LOG(LogCrafting, Verbose, TEXT("[Transport] RequestConnectorDetach: invalid input"));
+		return;
+	}
+
+	Subsystem->EnqueueCommand([Subsystem, SegmentKey]()
+	{
+		flecs::entity SegE = GetEntityFromFlecsIdKey(Subsystem, SegmentKey);
+		if (!SegE.is_alive() || !SegE.has<FTagConnectorPlaced>())
+		{
+			UE_LOG(LogCrafting, Verbose, TEXT("[Transport] DetachConnector: target invalid"));
+			return;
+		}
+
+		const FConnectorPlaced Placed = SegE.get<FConnectorPlaced>();
+		flecs::world W = SegE.world();
+
+		// Clear reverse refs on both ends.
+		auto ClearStationSide = [&W](int64 TargetId, uint8 PortIdx)
+		{
+			if (TargetId == 0 || PortIdx == 0xFF) return;
+			flecs::entity T = W.entity(static_cast<flecs::entity_t>(TargetId));
+			if (!T.is_alive()) return;
+			if (FStationPorts* P = T.try_get_mut<FStationPorts>())
+			{
+				if (P->Ports.IsValidIndex(PortIdx))
+					P->Ports[PortIdx].ConnectedSegmentId = 0;
+			}
+		};
+		ClearStationSide(Placed.FrontSnapTargetId, Placed.FrontSnappedToPortIndex);
+		ClearStationSide(Placed.BackSnapTargetId,  Placed.BackSnappedToPortIndex);
+
+		// Restore item-form tags (order matches Phase 4 detach: tags + grace BEFORE body wake).
+		SegE.remove<FTagConnectorPlaced>();
+		SegE.remove<FConnectorPlaced>();
+		SegE.add<FTagPickupable>();
+		SegE.add<FTagItem>();
+		SegE.add<FTagInteractable>();
+
+		// Phase 4 helpers reuse: pickup grace 0.5s, restore Dynamic body, small impulse.
+		FWorldItemInstance WI;
+		WI.PickupGraceTimer  = 0.5f;
+		WI.DespawnTimer      = -1.f;
+		WI.DroppedByEntityId = 0;
+		SegE.set<FWorldItemInstance>(WI);
+		SegE.add<FTagDroppedItem>();
+		FlecsMultiblockRuntime::RestorePartToDynamic(SegE);
+		FlecsMultiblockRuntime::ApplyDetachImpulse(SegE, /*ImpulseCmS=*/200.f);
+
+		if (auto* TransportSub = UFlecsCraftingTransportSubsystem::SelfPtr)
+			TransportSub->QueueRebuild();
+
+		UE_LOG(LogCrafting, Log,
+			TEXT("[Transport] DETACHED segment=%llu (front=%lld back=%lld)"),
+			(unsigned long long)SegE.id(),
+			Placed.FrontSnapTargetId, Placed.BackSnapTargetId);
+	});
 }

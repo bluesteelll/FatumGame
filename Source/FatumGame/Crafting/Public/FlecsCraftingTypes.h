@@ -126,7 +126,64 @@ enum class EWrenchHoverKind : uint8
 	RigidFunctional      = 3  UMETA(DisplayName = "Rigid Functional"),
 	EmptyExtensionPort   = 4  UMETA(DisplayName = "Empty Extension Port"),
 	OccupiedExtensionPort= 5  UMETA(DisplayName = "Occupied Extension Port"),
+	ConnectorSegment     = 6  UMETA(DisplayName = "Connector Segment"),  // Phase 5a
 };
+
+// ═══════════════════════════════════════════════════════════════
+// PHASE 5a — CONNECTOR TOPOLOGY (transport graph)
+// ═══════════════════════════════════════════════════════════════
+
+/** Phase 5a — connector entity-definition transport role. Authored on UFlecsEntityDefinition. */
+UENUM(BlueprintType)
+enum class EConnectorTransportRole : uint8
+{
+	None    = 0  UMETA(DisplayName = "None"),
+	Liquid  = 1  UMETA(DisplayName = "Liquid (Trough)"),
+	Power   = 2  UMETA(DisplayName = "Power (Wire)"),
+};
+
+/** Phase 5a — port direction kind on a station. Stored in FStationPorts.Ports[].Kind. */
+UENUM(BlueprintType)
+enum class EPortKind : uint8
+{
+	None         = 0  UMETA(DisplayName = "None"),
+	LiquidOutlet = 1  UMETA(DisplayName = "Liquid Outlet"),
+	LiquidInlet  = 2  UMETA(DisplayName = "Liquid Inlet"),
+	PowerOutlet  = 3  UMETA(DisplayName = "Power Outlet"),
+	PowerInlet   = 4  UMETA(DisplayName = "Power Inlet"),
+};
+
+/** Phase 5a — network resource classification. One value per FCraftingTransportNetwork. */
+UENUM(BlueprintType)
+enum class ETransportKind : uint8
+{
+	None   = 0  UMETA(DisplayName = "None"),
+	Liquid = 1  UMETA(DisplayName = "Liquid"),
+	Power  = 2  UMETA(DisplayName = "Power"),
+};
+
+/** Phase 5a — connector placement rejection reasons (logged at sim re-validation). */
+UENUM(BlueprintType)
+enum class EConnectorPlacementResult : uint8
+{
+	Accepted              = 0  UMETA(DisplayName = "Accepted"),
+	Rejected_NoSnap       = 1  UMETA(DisplayName = "No Snap"),
+	Rejected_KindMismatch = 2  UMETA(DisplayName = "Kind Mismatch"),
+	Rejected_LOSBlocked   = 3  UMETA(DisplayName = "LOS Blocked"),
+	Rejected_PortOccupied = 4  UMETA(DisplayName = "Port Occupied"),
+	Rejected_StationBusy  = 5  UMETA(DisplayName = "Station Busy"),
+	Rejected_NetworkOverflow = 6  UMETA(DisplayName = "Network Overflow"),
+	Rejected_DeadTarget   = 7  UMETA(DisplayName = "Dead Target"),
+};
+
+// Phase 5a constants — bounds + tunables (cite: V1 §1.3 + V2 PATCH 1/8).
+constexpr uint32 kMaxNetworksPerScene             = 32;
+constexpr uint32 kMaxSegmentsPerNetwork           = 64;
+constexpr uint32 kMaxNodesPerRebuildPass          = 4096;       // V2 PATCH 8 hard cap
+constexpr float  kSnapToleranceCm                 = 25.f;
+constexpr float  kSnapToleranceDeg                = 30.f;
+constexpr uint64 kPendingConnectorTimeoutTicks    = 60;         // V2 PATCH 1
+constexpr float  kConnectorPreviewSphereRadiusCm  = 30.f;       // game-thread SphereCast radius
 
 // ═══════════════════════════════════════════════════════════════
 // RECIPE INPUT / OUTPUT

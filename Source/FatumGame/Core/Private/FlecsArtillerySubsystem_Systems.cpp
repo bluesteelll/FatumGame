@@ -52,6 +52,7 @@
 #include "FlecsMeleeComponents.h"
 #include "FlecsCraftingComponents.h"
 #include "Components/FlecsMultiblockComponents.h"
+#include "Components/FlecsTransportComponents.h"  // Phase 5a — connector + station ports
 #include "Library/FlecsMultiblockRuntime.h"  // Phase 4 — DeconstructStation, RecomputeEffectiveLayout
 
 // ═══════════════════════════════════════════════════════════════
@@ -318,6 +319,19 @@ void UFlecsArtillerySubsystem::RegisterFlecsComponents()
 	World.component<FPendingStationAttach>();
 	World.component<FTagWrench>();
 	World.component<FTagStationDisabled>();
+
+	// ─────────────────────────────────────────────────────────
+	// CRAFTING (Phase 5a — transport graph topology only)
+	// ─────────────────────────────────────────────────────────
+	// PHASE 5a — DO NOT REGISTER (inline-only; entity.set<>() would crash 0x80000003):
+	//   FPortSlot                — held inside FStationPorts.Ports[]
+	// Phase 4 precedent: FConsumedIngredient inside FSmelterInstance.ConsumedLedger.
+	World.component<FConnectorSegmentStatic>();
+	World.component<FConnectorPlaced>();
+	World.component<FStationPorts>();
+	World.component<FPendingConnectorPlace>();
+	World.component<FTagConnectorSegment>();
+	World.component<FTagConnectorPlaced>();
 }
 
 // ═══════════════════════════════════════════════════════════════

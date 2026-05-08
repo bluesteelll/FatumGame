@@ -4,6 +4,8 @@
 
 #include "CoreMinimal.h"
 #include "Engine/DataAsset.h"
+#include "FlecsCraftingTypes.h"            // Phase 5a — EConnectorTransportRole
+#include "FlecsStationPortAuthoring.h"     // Phase 5a — FStationPortAuthoring
 #include "FlecsEntityDefinition.generated.h"
 
 class UFlecsItemDefinition;
@@ -211,6 +213,37 @@ public:
 	 *  ensureMsgf's that this flag matches MultiblockBlueprint->AnchorPartDefinition. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Multiblock")
 	bool bMultiblockIsAnchor = false;
+
+	// ═══════════════════════════════════════════════════════════════
+	// CRAFTING (Phase 5a — connector transport graph)
+	// ═══════════════════════════════════════════════════════════════
+
+	/** Phase 5a — connector transport role. None = not a connector entity (default).
+	 *  Liquid → trough segment; Power → wire segment. Master enable for connector
+	 *  ECS components (FConnectorSegmentStatic, FTagConnectorSegment). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Crafting|Connector")
+	EConnectorTransportRole ConnectorTransportRole = EConnectorTransportRole::None;
+
+	/** Phase 5a — segment front-to-back length in cm. Designer-tuned per segment mesh.
+	 *  Default 100; clamped to 100 if zero/negative at runtime. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Crafting|Connector",
+		meta = (EditCondition = "ConnectorTransportRole != EConnectorTransportRole::None"))
+	float ConnectorSegmentLengthCm = 100.f;
+
+	/** Phase 5a — debug-only socket label on connector mesh; runtime uses the entity's
+	 *  world transform front/back endpoints derived from SegmentLengthCm. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Crafting|Connector",
+		meta = (EditCondition = "ConnectorTransportRole != EConnectorTransportRole::None"))
+	FName ConnectorFrontSocketName;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Crafting|Connector",
+		meta = (EditCondition = "ConnectorTransportRole != EConnectorTransportRole::None"))
+	FName ConnectorBackSocketName;
+
+	/** Phase 5a — designer-authored station ports populated into FStationPorts at
+	 *  SetupStationInstance time. Empty array = no transport ports on this station. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Crafting|Station Ports")
+	TArray<FStationPortAuthoring> StationPortAuthoring;
 
 	// ═══════════════════════════════════════════════════════════════
 	// DEFAULT TAGS
