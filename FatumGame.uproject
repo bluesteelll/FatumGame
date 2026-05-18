@@ -8,6 +8,11 @@
 			"Name": "FatumGame",
 			"Type": "Runtime",
 			"LoadingPhase": "Default"
+		},
+		{
+			"Name": "FatumGameSave",
+			"Type": "Runtime",
+			"LoadingPhase": "PostEngineInit"
 		}
 	],
 	"Plugins": [

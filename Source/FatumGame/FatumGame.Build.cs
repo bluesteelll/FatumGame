@@ -132,6 +132,12 @@ public class FatumGame : ModuleRules
 				"CommonUI",
 				// VFX
 				"Niagara",
+				// NOTE: FatumGameSave deliberately NOT added here in Phase 1.
+				// FatumGameSave -> FatumGame (one-way: needs FSimulationWorker fence).
+				// Adding FatumGameSave here would create a circular dependency.
+				// In Phase 6 the checkpoint actor lives in FatumGameSave itself (not
+				// FatumGame) so this dep is unnecessary; the Editor / BP / external
+				// modules add FatumGameSave to their own Build.cs when they need it.
 			}
 		);
 	}

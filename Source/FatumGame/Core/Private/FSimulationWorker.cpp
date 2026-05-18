@@ -5,6 +5,7 @@
 #include "BarrageDispatch.h"
 #include "HAL/PlatformProcess.h"
 #include "HAL/PlatformTime.h"
+#include "Logging/LogMacros.h"
 
 bool FSimulationWorker::Init()
 {
@@ -54,11 +55,18 @@ uint32 FSimulationWorker::Run()
 		// Publish smoothed scale for game thread (UE GlobalTimeDilation mirrors this)
 		ActiveTimeScalePublished.store(ActiveTimeScale, std::memory_order_relaxed);
 
-		// Drain game thread commands (lock-free MPSC queue)
+		// Drain game thread commands (lock-free MPSC queue) — legacy non-fenced API.
 		if (FlecsSubsystem)
 		{
 			FlecsSubsystem->DrainCommandQueue();
 		}
+
+		// Drain the seq-fenced command queue and publish CompletedCommandSeq.
+		// Per v2 §M7, the save fence's quiescent point is "after StepWorld, before
+		// progress()" — but fenced commands themselves are general-purpose, so we
+		// drain them at the same point we drain the legacy command queue (top of tick)
+		// so they share the same "before physics/ECS step" guarantee.
+		DrainSeqCommandQueueOnSimThread();
 
 		if (!bRunning.load(std::memory_order_acquire)) break;
 
@@ -119,4 +127,67 @@ void FSimulationWorker::Stop()
 {
 	UE_LOG(LogTemp, Warning, TEXT("SimulationWorker: Stop() called"));
 	bRunning.store(false, std::memory_order_release);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// SEQUENCE-COUNTER FENCE (v2 §5.1)
+// ═══════════════════════════════════════════════════════════════
+
+uint64 FSimulationWorker::AllocateCommandSeq()
+{
+	// fetch_add returns the old value; we want a 1-based seq, so initial = 1.
+	return NextCommandSeq.fetch_add(1, std::memory_order_relaxed);
+}
+
+uint64 FSimulationWorker::EnqueueSeqCommand(TFunction<void()> Cmd)
+{
+	const uint64 Seq = AllocateCommandSeq();
+	SeqCommandQueue.Enqueue(FSeqCommand{ Seq, MoveTemp(Cmd) });
+	return Seq;
+}
+
+void FSimulationWorker::DrainSeqCommandQueueOnSimThread()
+{
+	uint64 MaxSeqThisBatch = 0;
+
+	FSeqCommand Entry;
+	while (SeqCommandQueue.Dequeue(Entry))
+	{
+		// Execute the queued work. The lambda may capture sim-thread-only state
+		// (Worker* / Subsystem*) — that's the caller's responsibility.
+		if (Entry.Cmd)
+		{
+			Entry.Cmd();
+		}
+		MaxSeqThisBatch = FMath::Max(MaxSeqThisBatch, Entry.Seq);
+	}
+
+	if (MaxSeqThisBatch != 0)
+	{
+		// Release-store so the game thread's acquire-load in WaitForSequence sees ALL the
+		// data written by Entry.Cmd(). Single sync-edge replaces the old sleep-based fences.
+		CompletedCommandSeq.store(MaxSeqThisBatch, std::memory_order_release);
+	}
+}
+
+bool FSimulationWorker::WaitForSequence(uint64 TargetSeq, double TimeoutSeconds)
+{
+	const double Deadline = FPlatformTime::Seconds() + TimeoutSeconds;
+
+	while (CompletedCommandSeq.load(std::memory_order_acquire) < TargetSeq)
+	{
+		if (FPlatformTime::Seconds() > Deadline)
+		{
+			UE_LOG(LogTemp, Error,
+				TEXT("FSimulationWorker::WaitForSequence timeout — Target=%llu Completed=%llu"),
+				TargetSeq,
+				CompletedCommandSeq.load(std::memory_order_relaxed));
+			return false;
+		}
+		// Light polling — 0.5 ms is well below a 60Hz frame (16.7ms) but enough to avoid
+		// pegging the game thread CPU. The sleep ALSO yields to the sim thread on a 1-core
+		// pinned scenario.
+		FPlatformProcess::SleepNoStats(0.0005f);
+	}
+	return true;
 }
