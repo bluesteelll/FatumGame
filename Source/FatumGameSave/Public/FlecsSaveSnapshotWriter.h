@@ -24,15 +24,19 @@ public:
 	/** Sim-thread entry point.
 	 *
 	 *  Walks the world, serializes all save-worthy entities into SerializedBytes.
-	 *  Layout per v1 §"Payload framing":
+	 *  Layout per v2 §"Payload framing" (Phase 7 — kPayloadVersion=2):
 	 *    [PayloadHeader 16B]
+	 *    [WorldName  — uint32 ByteLen + UTF-8 bytes + pad-to-4]
 	 *    [Asset path table — uint32 count + per-entry { uint32 len, UTF-8 bytes, pad }]
 	 *    [Entity records — header + tags + components per entity]
 	 *    [PayloadFooter 8B]
 	 *
 	 *  @param World Flecs world to snapshot.
+	 *  @param WorldName Map name captured by the caller on the game thread BEFORE the
+	 *         sim-thread dispatch (PIE prefix already stripped via UWorld::RemovePIEPrefix).
+	 *         Sim thread MUST NOT touch UWorld* APIs to derive this — caller passes by value.
 	 */
-	void WalkAndSerialize(flecs::world* World);
+	void WalkAndSerialize(flecs::world* World, const FString& WorldName);
 
 	/** Game-thread accessor — returns the freshly serialized payload bytes (uncompressed).
 	 *  Safe to call only AFTER WaitForSequence has confirmed the sim-thread walk completed. */

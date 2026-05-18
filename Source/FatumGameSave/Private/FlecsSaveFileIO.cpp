@@ -368,9 +368,16 @@ namespace FlecsSaveIO
 		}
 
 		// Main file exists but failed validation (magic, version, CRC, decompress). Walk backups.
+		// Phase 7 — track whether ANY backup file existed so we can return the
+		// most-informative final code:
+		//   - At least one backup existed but all failed → preserve the main failure code
+		//     (CrcMismatch / VersionMismatch / DecompressFail — diagnostic-friendly)
+		//   - No backups existed at all → AllBackupsFailed (signals "no recovery possible")
 		UE_LOG(LogFlecsSave, Warning,
 			TEXT("ReadSaveFileWithBackups: main slot '%s' failed (%d); walking backups"),
 			*SlotName, (int32)R);
+
+		bool bAnyBackupExisted = false;
 
 		for (int32 Gen = 1; Gen <= kBackupChainDepth; ++Gen)
 		{
@@ -385,14 +392,25 @@ namespace FlecsSaveIO
 			}
 			if (BR != ELoadResult::FileMissing)
 			{
+				bAnyBackupExisted = true;
 				UE_LOG(LogFlecsSave, Warning,
 					TEXT("ReadSaveFileWithBackups: '%s' .bak%d also failed (%d)"),
 					*SlotName, Gen, (int32)BR);
 			}
 		}
 
-		// Nothing recovered. Return the most informative code from the original main attempt
-		// (CRC mismatch is more useful than "all backups failed" for diagnostics).
+		if (!bAnyBackupExisted)
+		{
+			// Main was corrupt; no backups on disk at all → callers learn there is no
+			// recovery point available for this slot.
+			UE_LOG(LogFlecsSave, Error,
+				TEXT("ReadSaveFileWithBackups: '%s' main file failed (%d) and no backup files exist"),
+				*SlotName, (int32)R);
+			return ELoadResult::AllBackupsFailed;
+		}
+
+		// Backups existed but every one failed verification — preserve the main failure
+		// code so the UI can show a meaningful reason (CRC vs version vs decompress).
 		return R;
 	}
 }

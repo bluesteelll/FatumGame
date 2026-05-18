@@ -29,7 +29,10 @@
 #include "Engine/GameInstance.h"
 #include "Engine/Level.h"
 #include "Engine/World.h"
+#include "GenericPlatform/GenericPlatformFile.h" // IPlatformFile::FDirectoryVisitor (Phase 7 — tmp cleanup)
 #include "HAL/FileManager.h"               // IFileManager (Phase 6 — DeleteSlot)
+#include "HAL/PlatformFileManager.h"       // FPlatformFileManager (Phase 7 — tmp cleanup)
+#include "Misc/Paths.h"                    // FPaths::ProjectSavedDir (Phase 7 — savedir + tmp cleanup)
 #include "UObject/WeakObjectPtr.h"
 
 #include "flecs.h"
@@ -53,7 +56,25 @@ FString UFlecsSaveSubsystem::GetSlotNameForIndex(int32 SlotIndex)
 void UFlecsSaveSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
-	UE_LOG(LogFlecsSave, Log, TEXT("UFlecsSaveSubsystem: Initialize"));
+
+	// Phase 7 — Sub-C: sweep stale <slot>.sav.tmp leftovers from crashed prior saves.
+	// Runs once per subsystem lifetime (== once per GameInstance == once per process
+	// in standalone, once per PIE-instance in editor).
+	CleanupOrphanTempFiles();
+
+	// Phase 7 — Sub-A: hook world init so the first GameWorld can trigger autoload.
+	// Per session (subsystem lifetime), bAutoloadAttempted guards against re-fire on
+	// seamless travel / sublevel streaming.
+	PostWorldInitHandle = FWorldDelegates::OnPostWorldInitialization.AddUObject(
+		this, &UFlecsSaveSubsystem::HandlePostWorldInit);
+
+	// Phase 7 — Sub-E: surface readiness state at Display so users can find their
+	// save directory and confirm the autoload toggle without grepping Verbose logs.
+	UE_LOG(LogFlecsSave, Display,
+		TEXT("FlecsSaveSubsystem ready — %d slots, autoload=%d, savedir=%s"),
+		kTotalSlots,
+		(int32)bAutoloadLastSessionOnStart,
+		*(FPaths::ProjectSavedDir() / TEXT("SaveGames")));
 }
 
 void UFlecsSaveSubsystem::Deinitialize()
@@ -64,6 +85,21 @@ void UFlecsSaveSubsystem::Deinitialize()
 	{
 		FTSTicker::RemoveTicker(DeferredLoadHandle);
 		DeferredLoadHandle.Reset();
+	}
+
+	// Phase 7 — symmetric cleanup for the autoload ticker.
+	if (AutoloadDeferredHandle.IsValid())
+	{
+		FTSTicker::RemoveTicker(AutoloadDeferredHandle);
+		AutoloadDeferredHandle.Reset();
+	}
+
+	// Phase 7 — unbind world-init hook. Required because FWorldDelegates outlives the
+	// subsystem (engine-static) and would call into a GC'd UObject otherwise.
+	if (PostWorldInitHandle.IsValid())
+	{
+		FWorldDelegates::OnPostWorldInitialization.Remove(PostWorldInitHandle);
+		PostWorldInitHandle.Reset();
 	}
 
 	// Drop any in-flight reader so the underlying buffer is released eagerly.
@@ -238,20 +274,34 @@ ESaveResult UFlecsSaveSubsystem::RequestSave(int32 SlotIndex, const FString& Dis
 		return ESaveResult::NoWorld;
 	}
 
+	// Phase 7 — capture the world map name on the GAME THREAD before dispatching the
+	// sim-thread lambda. UWorld* APIs are game-thread only; the writer can't derive
+	// this from Flecs alone. PIE prefix stripped here so saves taken in PIE / standalone
+	// load identically. The captured string is passed into WalkAndSerialize().
+	UGameInstance* SaveGI = GetGameInstance();
+	UWorld* SaveWorld = SaveGI ? SaveGI->GetWorld() : nullptr;
+	if (!SaveWorld)
+	{
+		bSaveBusy.store(false);
+		UE_LOG(LogFlecsSave, Error, TEXT("RequestSave: no live world to capture map name from"));
+		return ESaveResult::NoWorld;
+	}
+	const FString WorldNameForSave = UWorld::RemovePIEPrefix(SaveWorld->GetMapName());
+
 	// Heap-shared writer (v2 §5.11) — captured by value into the sim-thread lambda;
 	// released by whichever thread drops the last ref.
 	TSharedPtr<FFlecsSaveSnapshotWriter, ESPMode::ThreadSafe> Writer =
 		MakeShared<FFlecsSaveSnapshotWriter, ESPMode::ThreadSafe>();
 
 	UE_LOG(LogFlecsSave, Log,
-		TEXT("RequestSave: scheduling snapshot for %s ('%s')"),
-		*GetSlotNameForIndex(SlotIndex), *DisplayName);
+		TEXT("RequestSave: scheduling snapshot for %s ('%s') world='%s'"),
+		*GetSlotNameForIndex(SlotIndex), *DisplayName, *WorldNameForSave);
 
 	// Step 1 — sim-thread snapshot walk under the sequence fence.
 	// Lambda captures Worker* by value so the per-v3 D rule is satisfied (never capture
 	// flecs::world& by reference — outer stack frame is gone by lambda execution).
 	const uint64 SnapSeq = Worker->EnqueueSeqCommand(
-		[Writer, Worker]() mutable
+		[Writer, Worker, WorldNameForSave]() mutable
 		{
 			// Phase 2: writer requires a valid world. If we somehow reached the fence
 			// without the FlecsSubsystem being set, fail loudly — silent zero-entity
@@ -263,7 +313,7 @@ ESaveResult UFlecsSaveSubsystem::RequestSave(int32 SlotIndex, const FString& Dis
 			}
 			checkf(WorldPtr,
 				TEXT("Save: sim-thread lambda has no Flecs world — FlecsSubsystem missing or torn down"));
-			Writer->WalkAndSerialize(WorldPtr);
+			Writer->WalkAndSerialize(WorldPtr, WorldNameForSave);
 		});
 
 	if (!Worker->WaitForSequence(SnapSeq, /*TimeoutSeconds=*/ 2.0))
@@ -411,6 +461,62 @@ ELoadResult UFlecsSaveSubsystem::RequestLoad(int32 SlotIndex)
 	// Heap-shared reader (v2 §5.11 + C2 fix). Owns its payload buffer; safe to capture
 	// by value into a lambda that may outlive this function's stack frame.
 	PendingReader = MakeShared<FFlecsSaveSnapshotReader, ESPMode::ThreadSafe>(MoveTemp(Uncompressed));
+
+	// ── Phase 7 — Sub-B: WorldName gate (Q10 — same-level-only loads) ─────
+	// Peek the payload's WorldName field and compare against the live map name. PIE
+	// prefix is stripped on both sides so saves taken in PIE load fine into PIE (or
+	// standalone) regardless of UEDPIE_N_ instance id. Cross-level loads are NOT
+	// supported by Phase 7 — reject up front with WorldMismatch (no sim-thread work).
+	{
+		FString SavedWorldName;
+		if (!PendingReader->PeekHeader(SavedWorldName))
+		{
+			// Header parse failed — let the apply path surface a more specific reason,
+			// but treat as VersionMismatch here since the most common cause for PeekHeader
+			// failure on a CRC-clean payload is a v1 (pre-Phase-7) blob.
+			PendingReader.Reset();
+			bLoadBusy.store(false);
+			UE_LOG(LogFlecsSave, Error,
+				TEXT("RequestLoad: slot %d ('%s') payload header parse failed (likely pre-Phase-7 save)"),
+				SlotIndex, *SlotName);
+			OnLoadComplete.Broadcast(SlotIndex, SlotName, ELoadResult::VersionMismatch);
+			return ELoadResult::VersionMismatch;
+		}
+
+		UGameInstance* GI = GetGameInstance();
+		UWorld* CurrentWorld = GI ? GI->GetWorld() : nullptr;
+		if (!CurrentWorld)
+		{
+			PendingReader.Reset();
+			bLoadBusy.store(false);
+			UE_LOG(LogFlecsSave, Error,
+				TEXT("RequestLoad: slot %d ('%s') no current world for WorldName check"),
+				SlotIndex, *SlotName);
+			OnLoadComplete.Broadcast(SlotIndex, SlotName, ELoadResult::NoWorld);
+			return ELoadResult::NoWorld;
+		}
+
+		const FString RawMap = CurrentWorld->GetMapName();
+		const FString CurrentMap = UWorld::RemovePIEPrefix(RawMap);
+
+		// Compare case-sensitively — map names are filesystem-rooted FNames; FName
+		// canonicalises case for equality but we use the resolved FString to log
+		// the user-visible names if there's a mismatch.
+		if (!SavedWorldName.Equals(CurrentMap, ESearchCase::IgnoreCase))
+		{
+			PendingReader.Reset();
+			bLoadBusy.store(false);
+			UE_LOG(LogFlecsSave, Warning,
+				TEXT("RequestLoad: slot %d ('%s') WorldName mismatch — saved='%s', current='%s' (cross-level loads not supported)"),
+				SlotIndex, *SlotName, *SavedWorldName, *CurrentMap);
+			OnLoadComplete.Broadcast(SlotIndex, SlotName, ELoadResult::WorldMismatch);
+			return ELoadResult::WorldMismatch;
+		}
+
+		UE_LOG(LogFlecsSave, Verbose,
+			TEXT("RequestLoad: WorldName check OK ('%s')"),
+			*CurrentMap);
+	}
 
 	UE_LOG(LogFlecsSave, Log,
 		TEXT("RequestLoad: slot %d ('%s') decoded; deferring apply to next tick"),
@@ -706,4 +812,157 @@ void UFlecsSaveSubsystem::MarkOverriddenSpawners(FFlecsSaveSnapshotReader& Reade
 	UE_LOG(LogFlecsSave, Log,
 		TEXT("MarkOverriddenSpawners: marked %d spawners from %d saved provenance tuples"),
 		MarkedCount, Overridden.Num());
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PHASE 7 — Sub-C: ORPHAN .tmp CLEANUP
+// ═══════════════════════════════════════════════════════════════
+//
+// Sweep the SaveGames directory for *.tmp files left behind by a crashed save (the
+// atomic-rename in WriteSaveFile opens "<final>.tmp", fsyncs, then renames; if the
+// process crashes between open and rename the .tmp file lingers indefinitely).
+// Game-thread only; trivially fast (a single non-recursive directory iteration).
+
+void UFlecsSaveSubsystem::CleanupOrphanTempFiles()
+{
+	check(IsInGameThread());
+
+	const FString SaveDir = FPaths::ProjectSavedDir() / TEXT("SaveGames");
+	IPlatformFile& PF = FPlatformFileManager::Get().GetPlatformFile();
+
+	if (!PF.DirectoryExists(*SaveDir))
+	{
+		// No save dir yet — nothing to clean. Not an error; users with a fresh install
+		// will land here on first launch before any save is written.
+		UE_LOG(LogFlecsSave, Verbose,
+			TEXT("CleanupOrphanTempFiles: save directory '%s' does not exist yet"),
+			*SaveDir);
+		return;
+	}
+
+	int32 DeletedCount = 0;
+
+	// Per-directory enumeration via lambda visitor. We deliberately collect paths first
+	// (rather than deleting in the visitor) because mutating the directory while iterating
+	// is filesystem-defined behaviour on some platforms.
+	TArray<FString> ToDelete;
+	PF.IterateDirectory(*SaveDir,
+		[&ToDelete](const TCHAR* FilenameOrDirectory, bool bIsDirectory) -> bool
+		{
+			if (bIsDirectory) return true;  // skip subdirs
+			const FString Filename(FilenameOrDirectory);
+			if (Filename.EndsWith(TEXT(".tmp"), ESearchCase::IgnoreCase))
+			{
+				ToDelete.Add(Filename);
+			}
+			return true;  // keep iterating
+		});
+
+	for (const FString& Path : ToDelete)
+	{
+		if (PF.DeleteFile(*Path))
+		{
+			UE_LOG(LogFlecsSave, Display,
+				TEXT("CleanupOrphanTempFiles: deleted orphan '%s' (crash recovery)"),
+				*Path);
+			++DeletedCount;
+		}
+		else
+		{
+			UE_LOG(LogFlecsSave, Warning,
+				TEXT("CleanupOrphanTempFiles: failed to delete '%s'"), *Path);
+		}
+	}
+
+	if (DeletedCount == 0)
+	{
+		UE_LOG(LogFlecsSave, Verbose,
+			TEXT("CleanupOrphanTempFiles: no orphan .tmp files found in '%s'"),
+			*SaveDir);
+	}
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PHASE 7 — Sub-A: AUTOLOAD ON STARTUP
+// ═══════════════════════════════════════════════════════════════
+//
+// First GameWorld initialization of the session: arm a 1-second ticker that calls
+// RequestLoad(kLastSessionSlot) ONCE. The 1-second delay is deliberate — spawners,
+// characters, the artillery subsystem, and any sublevels must finish initializing
+// BEFORE we wipe + reapply. Without the delay, the wipe would race the placement
+// pass and leave us in a broken state.
+//
+// bAutoloadAttempted is set IMMEDIATELY (not when the ticker fires) so re-entry from
+// a second world init (PIE restart, seamless travel) cannot re-arm.
+
+void UFlecsSaveSubsystem::HandlePostWorldInit(UWorld* World, const UWorld::InitializationValues IVS)
+{
+	check(IsInGameThread());
+
+	if (bAutoloadAttempted) return;
+	if (!bAutoloadLastSessionOnStart) return;
+	if (!World) return;
+
+	// Only GameWorlds — skip preview/editor/inactive worlds. The subsystem's own
+	// GameInstance world is the only one we care about.
+	if (!World->IsGameWorld()) return;
+
+	// Cross-check the world belongs to OUR game instance. FWorldDelegates fires for
+	// every world creation; filter to the one we live in to avoid autoloading into
+	// another PIE session that happens to share the engine.
+	if (GetGameInstance() != World->GetGameInstance()) return;
+
+	// Only arm if a LastSession file actually exists. Avoids logging "FileMissing"
+	// at startup for users who never created one.
+	const FString SlotName = GetSlotNameForIndex(kLastSessionSlot);
+	const FString FilePath = FlecsSaveIO::GetSlotFilePath(SlotName, /*BackupGen=*/ 0);
+	if (!IFileManager::Get().FileExists(*FilePath))
+	{
+		UE_LOG(LogFlecsSave, Log,
+			TEXT("HandlePostWorldInit: autoload enabled but no '%s' file — skipping"),
+			*FilePath);
+		bAutoloadAttempted = true;
+		return;
+	}
+
+	// Mark BEFORE scheduling so a second world init can't queue a duplicate ticker.
+	bAutoloadAttempted = true;
+
+	UE_LOG(LogFlecsSave, Display,
+		TEXT("HandlePostWorldInit: scheduling autoload of LastSession (slot %d) in 1.0s"),
+		kLastSessionSlot);
+
+	// Cancel any pre-existing autoload ticker (shouldn't exist given the guard, but
+	// defensive — the ticker handle is reset after fire below).
+	if (AutoloadDeferredHandle.IsValid())
+	{
+		FTSTicker::RemoveTicker(AutoloadDeferredHandle);
+		AutoloadDeferredHandle.Reset();
+	}
+
+	TWeakObjectPtr<UFlecsSaveSubsystem> WeakThis(this);
+	AutoloadDeferredHandle = FTSTicker::GetCoreTicker().AddTicker(
+		FTickerDelegate::CreateLambda(
+			[WeakThis](float /*DeltaT*/) -> bool
+			{
+				UFlecsSaveSubsystem* Self = WeakThis.Get();
+				if (!Self)
+				{
+					// Subsystem GC'd before delay elapsed — nothing to do.
+					return false;
+				}
+				Self->AutoloadDeferredHandle.Reset();
+				UE_LOG(LogFlecsSave, Display,
+					TEXT("Autoload: firing RequestLoad(%d) now"),
+					kLastSessionSlot);
+				const ELoadResult Result = Self->RequestLoad(kLastSessionSlot);
+				if (Result != ELoadResult::Pending)
+				{
+					UE_LOG(LogFlecsSave, Warning,
+						TEXT("Autoload: RequestLoad returned %d (not Pending) — autoload aborted"),
+						(int32)Result);
+				}
+				return false;  // single-shot
+			}),
+		/*Delay=*/ 1.0f);
 }

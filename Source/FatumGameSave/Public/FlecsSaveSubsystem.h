@@ -35,6 +35,7 @@
 #include "CoreMinimal.h"
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "Containers/Ticker.h"
+#include "Engine/World.h"            // UWorld::InitializationValues nested type (Phase 7 — world-init hook)
 #include "FlecsSaveTypes.h"
 #include <atomic>
 #include "FlecsSaveSubsystem.generated.h"
@@ -47,7 +48,7 @@ class FFlecsSaveSnapshotReader;
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FOnSaveComplete, int32, SlotIndex, FString, SlotName, ESaveResult, Result);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FOnLoadComplete, int32, SlotIndex, FString, SlotName, ELoadResult, Result);
 
-UCLASS()
+UCLASS(Config = Game, DefaultConfig)
 class FATUMGAMESAVE_API UFlecsSaveSubsystem : public UGameInstanceSubsystem
 {
 	GENERATED_BODY()
@@ -69,6 +70,26 @@ public:
 
 	UPROPERTY(BlueprintAssignable, Category = "Save")
 	FOnLoadComplete OnLoadComplete;
+
+	// ═══════════════════════════════════════════════════════════════
+	// PHASE 7 — AUTOLOAD CONFIG
+	// ═══════════════════════════════════════════════════════════════
+	//
+	// When true, the subsystem hooks FWorldDelegates::OnPostWorldInitialization once
+	// per session: the first world init where Slot_11.sav (LastSession) exists triggers
+	// a deferred (1-second) RequestLoad(11). Default OFF so users opt in explicitly.
+
+	UPROPERTY(EditAnywhere, Config, Category = "Save")
+	bool bAutoloadLastSessionOnStart = false;
+
+	/** Toggle the autoload flag at runtime. Does NOT save to disk — caller writes the
+	 *  Config flag via UObject::SaveConfig() if persistence is desired. */
+	UFUNCTION(BlueprintCallable, Category = "Save")
+	void SetAutoloadEnabled(bool bEnabled) { bAutoloadLastSessionOnStart = bEnabled; }
+
+	/** Read the current autoload flag. */
+	UFUNCTION(BlueprintPure, Category = "Save")
+	bool IsAutoloadEnabled() const { return bAutoloadLastSessionOnStart; }
 
 	// ═══════════════════════════════════════════════════════════════
 	// PUBLIC API (Blueprint-callable)
@@ -158,6 +179,19 @@ private:
 	void MarkOverriddenSpawners(class FFlecsSaveSnapshotReader& Reader);
 
 	// ═══════════════════════════════════════════════════════════════
+	// PHASE 7 — AUTOLOAD + STARTUP HOOKS
+	// ═══════════════════════════════════════════════════════════════
+
+	/** FWorldDelegates::OnPostWorldInitialization handler. Filters to the first GameWorld
+	 *  init per session (PIE or runtime), arms the deferred autoload ticker if the
+	 *  Slot_11.sav file exists AND bAutoloadLastSessionOnStart is true. */
+	void HandlePostWorldInit(UWorld* World, const UWorld::InitializationValues IVS);
+
+	/** Cleanup orphaned <slot>.sav.tmp files in <SavedDir>/SaveGames/ left over from
+	 *  crashed saves. Called once from Initialize. Safe if directory doesn't exist. */
+	void CleanupOrphanTempFiles();
+
+	// ═══════════════════════════════════════════════════════════════
 	// STATE (game thread)
 	// ═══════════════════════════════════════════════════════════════
 
@@ -169,4 +203,15 @@ private:
 
 	/** Ticker handle for the deferred-load tick. */
 	FTSTicker::FDelegateHandle DeferredLoadHandle;
+
+	/** Phase 7 — guards single-fire of autoload per session (subsystem lifetime).
+	 *  Multiple PIE world inits or seamless travels MUST NOT retrigger autoload. */
+	bool bAutoloadAttempted = false;
+
+	/** Phase 7 — handle for the deferred autoload ticker (1-second delay after world init). */
+	FTSTicker::FDelegateHandle AutoloadDeferredHandle;
+
+	/** Phase 7 — delegate handle for FWorldDelegates::OnPostWorldInitialization so we can
+	 *  unbind in Deinitialize. */
+	FDelegateHandle PostWorldInitHandle;
 };

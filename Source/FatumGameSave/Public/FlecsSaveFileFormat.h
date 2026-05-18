@@ -33,8 +33,18 @@ namespace FatumSave
 	inline constexpr uint32 kFooterMagic  = 0x44455446u;
 
 	/** Current payload version (independent of file format version). Bump when entity
-	 *  table framing changes globally. Per-component encoders carry their own version. */
-	inline constexpr uint32 kPayloadVersion = 1u;
+	 *  table framing changes globally. Per-component encoders carry their own version.
+	 *
+	 *  Version 2 (Phase 7): payload header is followed by a length-prefixed WorldName
+	 *  string (uint32 ByteLen + UTF-8 bytes + pad-to-4) used for same-level-only load
+	 *  enforcement per Q10. Old v1 saves cannot be migrated and are rejected with
+	 *  ELoadResult::VersionMismatch — kMinSupportedPayloadVersion bumped accordingly. */
+	inline constexpr uint32 kPayloadVersion              = 2u;
+
+	/** Minimum payload version the reader will accept. Phase 7 raised this to 2 with
+	 *  the WorldName field; pre-Phase-7 saves have no WorldName and are not supported.
+	 *  No migration tool — pre-shipping codebase. */
+	inline constexpr uint32 kMinSupportedPayloadVersion  = 2u;
 }
 
 // ═══════════════════════════════════════════════════════════════

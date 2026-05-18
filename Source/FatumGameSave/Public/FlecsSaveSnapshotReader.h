@@ -38,8 +38,24 @@ public:
 	 *  @param World Flecs world to populate.
 	 *  @return true on success (header valid, all entities decoded — individual entity
 	 *          skips for missing prefab assets are logged but don't fail the whole load).
+	 *
+	 *  WorldName mismatch is checked by the caller via PeekHeader (game-thread, before
+	 *  the sim-thread dispatch) — this method assumes the world-name gate has already
+	 *  passed, but it still consumes the WorldName bytes from the payload to advance
+	 *  the reader cursor to the path table.
 	 */
 	bool ApplyToFlecsWorld(flecs::world* World);
+
+	/** Phase 7 — game-thread peek of the payload header + WorldName WITHOUT applying
+	 *  anything to the world. Used by the save subsystem to enforce same-level-only
+	 *  loads per Q10: if the saved WorldName doesn't match the currently loaded map,
+	 *  the load is rejected with ELoadResult::WorldMismatch BEFORE any sim-thread
+	 *  work begins.
+	 *
+	 *  @param OutWorldName  Filled with the saved world's map name on success.
+	 *  @return true if the header parsed cleanly (magic, version, world-name string);
+	 *          false on any framing error (the apply path will surface a clearer reason). */
+	bool PeekHeader(FString& OutWorldName);
 
 	/** Total entities in the payload (set after ApplyToFlecsWorld parses the header). */
 	uint32 GetEntityCount() const { return EntityCountInPayload; }

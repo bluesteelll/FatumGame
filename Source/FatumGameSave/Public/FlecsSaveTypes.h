@@ -73,6 +73,9 @@ enum class ELoadResult : uint8
 	/** Decompression of the validated blob failed. */
 	DecompressFail,
 
+	/** Main file was corrupt AND no backup files existed to recover from (Phase 7). */
+	AllBackupsFailed,
+
 	/** Save was for a different level than the currently loaded level (cross-level out of scope per Q10). */
 	WorldMismatch,
 

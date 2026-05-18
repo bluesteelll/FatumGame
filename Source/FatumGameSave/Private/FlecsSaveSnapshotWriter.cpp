@@ -108,7 +108,7 @@ FFlecsSaveSnapshotWriter::FFlecsSaveSnapshotWriter()
 
 FFlecsSaveSnapshotWriter::~FFlecsSaveSnapshotWriter() = default;
 
-void FFlecsSaveSnapshotWriter::WalkAndSerialize(flecs::world* World)
+void FFlecsSaveSnapshotWriter::WalkAndSerialize(flecs::world* World, const FString& WorldName)
 {
 	checkf(World, TEXT("FFlecsSaveSnapshotWriter::WalkAndSerialize: null world"));
 
@@ -171,6 +171,29 @@ void FFlecsSaveSnapshotWriter::WalkAndSerialize(flecs::world* World)
 	Header.SpawnerDedupCount = 0;  // Phase 5
 	Writer.Serialize(&Header, sizeof(FFlecsSavePayloadHeader));
 
+	// Phase 7 — WorldName (length-prefixed UTF-8 + pad-to-4) immediately after the
+	// payload header. Reader compares this against the loading world's map name and
+	// returns ELoadResult::WorldMismatch on mismatch (cross-level loads out of scope
+	// per Q10). Same length-prefix + UTF-8 + pad format as FFlecsSaveAssetPathTable
+	// entries for symmetry and 4-byte alignment of subsequent uint32 reads.
+	{
+		const FTCHARToUTF8 Utf8(*WorldName);
+		uint32 ByteLen = static_cast<uint32>(Utf8.Length());
+		Writer << ByteLen;
+		if (ByteLen > 0)
+		{
+			Writer.Serialize(
+				const_cast<ANSICHAR*>(reinterpret_cast<const ANSICHAR*>(Utf8.Get())),
+				ByteLen);
+		}
+		const uint32 Pad = (4u - (ByteLen & 3u)) & 3u;
+		for (uint32 i = 0; i < Pad; ++i)
+		{
+			uint8 Zero = 0;
+			Writer << Zero;
+		}
+	}
+
 	// Asset path table — MUST come before entity records so the reader can resolve
 	// PathTableIndex during entity creation in Pass 0.
 	PathTable.Serialize(Writer);
@@ -188,8 +211,8 @@ void FFlecsSaveSnapshotWriter::WalkAndSerialize(flecs::world* World)
 	Writer.Serialize(&Footer, sizeof(FFlecsSavePayloadFooter));
 
 	UE_LOG(LogFlecsSave, Log,
-		TEXT("SnapshotWriter: wrote %d bytes (entities=%u, paths=%d)"),
-		SerializedBytes.Num(), EntityCountWritten, PathTable.Num());
+		TEXT("SnapshotWriter: wrote %d bytes (entities=%u, paths=%d, world='%s')"),
+		SerializedBytes.Num(), EntityCountWritten, PathTable.Num(), *WorldName);
 
 	// Discard records — only the byte buffer is consumed by the caller.
 	EntityRecords.Reset();

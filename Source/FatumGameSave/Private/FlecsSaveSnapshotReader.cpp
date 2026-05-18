@@ -21,6 +21,47 @@
 
 namespace
 {
+	/** Phase 7 — read the length-prefixed UTF-8 WorldName written by the snapshot writer
+	 *  immediately after the payload header (kPayloadVersion >= 2). Mirrors the writer's
+	 *  format exactly: uint32 ByteLen + UTF-8 bytes + pad-to-4. Caller seeks past the
+	 *  WorldName even if they don't need the string (set OutString=nullptr to skip).
+	 *  Returns false on byte-length sanity failure. Same 4096-byte cap as the path table. */
+	bool ReadPayloadWorldName(FMemoryReader& Reader, FString* OutString)
+	{
+		uint32 ByteLen = 0;
+		Reader << ByteLen;
+		constexpr uint32 kMaxWorldNameBytes = 4096u;
+		if (ByteLen > kMaxWorldNameBytes)
+		{
+			UE_LOG(LogFlecsSave, Error,
+				TEXT("ReadPayloadWorldName: byte length %u exceeds cap %u — corrupted payload"),
+				ByteLen, kMaxWorldNameBytes);
+			return false;
+		}
+
+		if (ByteLen == 0)
+		{
+			if (OutString) OutString->Reset();
+		}
+		else
+		{
+			TArray<ANSICHAR> Buffer;
+			Buffer.SetNumUninitialized(static_cast<int32>(ByteLen) + 1);
+			Reader.Serialize(Buffer.GetData(), ByteLen);
+			Buffer[static_cast<int32>(ByteLen)] = '\0';
+			if (OutString) *OutString = UTF8_TO_TCHAR(Buffer.GetData());
+		}
+
+		// Pad-to-4 (mirrors writer).
+		const uint32 Pad = (4u - (ByteLen & 3u)) & 3u;
+		for (uint32 i = 0; i < Pad; ++i)
+		{
+			uint8 Zero = 0;
+			Reader << Zero;
+		}
+		return true;
+	}
+
 	/** Per-record offset table — built during Pass 0 so Pass 1 can re-seek to read
 	 *  tags + components after the entity is created. */
 	struct FRecordOffset
@@ -95,6 +136,46 @@ FFlecsSaveSnapshotReader::FFlecsSaveSnapshotReader(TArray<uint8> InPayloadBytes)
 
 FFlecsSaveSnapshotReader::~FFlecsSaveSnapshotReader() = default;
 
+bool FFlecsSaveSnapshotReader::PeekHeader(FString& OutWorldName)
+{
+	OutWorldName.Reset();
+
+	constexpr int32 kMinPayloadBytes = sizeof(FFlecsSavePayloadHeader) + sizeof(FFlecsSavePayloadFooter);
+	if (PayloadBytes.Num() < kMinPayloadBytes)
+	{
+		UE_LOG(LogFlecsSave, Error,
+			TEXT("PeekHeader: payload too small (%d bytes; need >= %d)"),
+			PayloadBytes.Num(), kMinPayloadBytes);
+		return false;
+	}
+
+	FMemoryReader Reader(PayloadBytes, /*bIsPersistent=*/ true);
+	Reader.SetIsSaving(false);
+	Reader.SetIsLoading(true);
+
+	FFlecsSavePayloadHeader Header{};
+	Reader.Serialize(&Header, sizeof(FFlecsSavePayloadHeader));
+
+	if (Header.PayloadMagic != FatumSave::kPayloadMagic)
+	{
+		UE_LOG(LogFlecsSave, Error,
+			TEXT("PeekHeader: payload magic mismatch (got 0x%08X, expected 0x%08X)"),
+			Header.PayloadMagic, FatumSave::kPayloadMagic);
+		return false;
+	}
+	if (Header.PayloadVersion < FatumSave::kMinSupportedPayloadVersion ||
+	    Header.PayloadVersion > FatumSave::kPayloadVersion)
+	{
+		UE_LOG(LogFlecsSave, Error,
+			TEXT("PeekHeader: unsupported payload version %u (allowed [%u, %u])"),
+			Header.PayloadVersion,
+			FatumSave::kMinSupportedPayloadVersion, FatumSave::kPayloadVersion);
+		return false;
+	}
+
+	return ReadPayloadWorldName(Reader, &OutWorldName);
+}
+
 bool FFlecsSaveSnapshotReader::CollectSavedSpawnerProvenance(TSet<TPair<FName, FName>>& OutTuples)
 {
 	OutTuples.Reset();
@@ -113,7 +194,16 @@ bool FFlecsSaveSnapshotReader::CollectSavedSpawnerProvenance(TSet<TPair<FName, F
 	FFlecsSavePayloadHeader Header{};
 	Reader.Serialize(&Header, sizeof(FFlecsSavePayloadHeader));
 	if (Header.PayloadMagic != FatumSave::kPayloadMagic) return false;
-	if (Header.PayloadVersion < 1 || Header.PayloadVersion > FatumSave::kPayloadVersion) return false;
+	if (Header.PayloadVersion < FatumSave::kMinSupportedPayloadVersion ||
+	    Header.PayloadVersion > FatumSave::kPayloadVersion) return false;
+
+	// Phase 7 — skip past the WorldName (immediately after payload header). We don't
+	// need the string value here; the WorldName gate is enforced by PeekHeader / the
+	// subsystem before the sim-thread dispatch.
+	if (!ReadPayloadWorldName(Reader, nullptr))
+	{
+		return false;
+	}
 
 	// Asset path table (we don't actually use the resolved definitions here, but the
 	// reader's reader-side state needs to advance past the table for record offsets to
@@ -214,11 +304,13 @@ bool FFlecsSaveSnapshotReader::ApplyToFlecsWorld(flecs::world* World)
 			Header.PayloadMagic, FatumSave::kPayloadMagic);
 		return false;
 	}
-	if (Header.PayloadVersion < 1 || Header.PayloadVersion > FatumSave::kPayloadVersion)
+	if (Header.PayloadVersion < FatumSave::kMinSupportedPayloadVersion ||
+	    Header.PayloadVersion > FatumSave::kPayloadVersion)
 	{
 		UE_LOG(LogFlecsSave, Error,
-			TEXT("SnapshotReader: unsupported payload version %u (max %u)"),
-			Header.PayloadVersion, FatumSave::kPayloadVersion);
+			TEXT("SnapshotReader: unsupported payload version %u (allowed [%u, %u])"),
+			Header.PayloadVersion,
+			FatumSave::kMinSupportedPayloadVersion, FatumSave::kPayloadVersion);
 		return false;
 	}
 	if (Header.SpawnerDedupCount != 0)
@@ -235,7 +327,16 @@ bool FFlecsSaveSnapshotReader::ApplyToFlecsWorld(flecs::world* World)
 	RemapTable.Reset();
 	RemapTable.Reserve(static_cast<int32>(EntityCountInPayload));
 
-	// ── ASSET PATH TABLE (immediately after payload header). ────────────────
+	// Phase 7 — skip past the WorldName field. The WorldName gate is already enforced
+	// upstream by PeekHeader; here we just advance the reader cursor.
+	if (!ReadPayloadWorldName(Reader, nullptr))
+	{
+		UE_LOG(LogFlecsSave, Error,
+			TEXT("SnapshotReader: failed to parse WorldName section after payload header"));
+		return false;
+	}
+
+	// ── ASSET PATH TABLE (immediately after payload header + WorldName). ────
 	PathTable.Deserialize(Reader);
 
 	// ── PASS 0: enumerate entity records, create entities, fill remap table. ──
