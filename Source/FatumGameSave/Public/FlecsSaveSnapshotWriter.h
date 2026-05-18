@@ -7,9 +7,10 @@
 
 #include "CoreMinimal.h"
 #include "Containers/Array.h"
+#include "Containers/Map.h"
 
 #include "FlecsSaveAssetPathTable.h"
-#include "FlecsSaveEntityWalker.h"
+#include "FlecsSaveEntityWalker.h"  // brings in flecs::entity_t typedef
 
 namespace flecs { struct world; }
 
@@ -52,6 +53,14 @@ private:
 
 	/** Walker output — held briefly between walk and serialize. */
 	TArray<FEntityRecord> EntityRecords;
+
+	/** Reverse map (entity_t → SaveIndex). Pointed at by FlecsSaveRemap::GReverseMap
+	 *  during the entire walk-and-encode operation so encoders can resolve cross-
+	 *  entity refs. Populated by the pre-walk in WalkAndSerialize. Member (not stack
+	 *  local) so it remains alive across the encoder loop AND across the WriteEntityRecord
+	 *  loop in case encoders mutate it (they don't, but keeping the storage longer-lived
+	 *  is cheap). flecs::entity_t is forward-declared as uint64 by FlecsSaveEntityWalker.h. */
+	TMap<flecs::entity_t, uint32> ReverseMapStorage;
 
 	/** Number of entity records written. */
 	uint32 EntityCountWritten = 0;

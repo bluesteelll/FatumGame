@@ -206,6 +206,13 @@ bool FFlecsSaveSnapshotReader::ApplyToFlecsWorld(flecs::world* World)
 	FlecsSaveRemap::GRemapTable = &RemapTable;
 	ON_SCOPE_EXIT { FlecsSaveRemap::GRemapTable = nullptr; };
 
+	// Decoders may need to resolve UFlecsEntityDefinition* references through the
+	// path table (e.g. Decode_SmelterInstance rebuilds the ConsumedLedger entries).
+	// Same TLS pattern as the writer side; checkNoEntry'd in encoder helpers below.
+	FFlecsSaveAssetPathTable* PrevPathTable = FlecsSaveRemap::GPathTable;
+	FlecsSaveRemap::GPathTable = &PathTable;
+	ON_SCOPE_EXIT { FlecsSaveRemap::GPathTable = PrevPathTable; };
+
 	int32 SuccessfulDecodes = 0;
 
 	for (const FRecordOffset& Offset : RecordOffsets)

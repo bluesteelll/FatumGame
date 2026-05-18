@@ -48,21 +48,12 @@ void FFlecsSaveEntityWalker::EnsureTagNameTable(flecs::world& /*World*/)
 
 // ─── Walker entry point ───────────────────────────────────────────────────────
 
-void FFlecsSaveEntityWalker::Walk(
-	flecs::world& World,
-	FFlecsSaveAssetPathTable& PathTable,
-	TArray<FEntityRecord>& OutRecords)
+// Internal helper — the candidate collect + sort used by both PreWalkCollectIds
+// and Walk. Pure read-only; no encoder dispatch, no path table.
+static void CollectCandidateIdsSorted(flecs::world& World, TArray<flecs::entity_t>& OutIds)
 {
-	OutRecords.Reset();
-	SkippedMissingDefRefCount = 0;
-	EnsureTagNameTable(World);
-
-	// ─────────────────────────────────────────────────────────────────────────
-	// PASS A: collect candidate entity ids (no encoding yet — keep iteration
-	// pure so we can sort for determinism before touching any components).
-	// ─────────────────────────────────────────────────────────────────────────
-	TArray<flecs::entity_t> CandidateIds;
-	CandidateIds.Reserve(1024);
+	OutIds.Reset();
+	OutIds.Reserve(1024);
 
 	auto CandidateQuery = World.query_builder<const FEntityDefinitionRef>()
 		.with(flecs::Prefab).oper(flecs::Not)
@@ -80,10 +71,40 @@ void FFlecsSaveEntityWalker::Walk(
 		.without<FTagCollisionPenetration>()
 		.build();
 
-	CandidateQuery.each([&CandidateIds](flecs::entity Entity, const FEntityDefinitionRef& /*Ref*/)
+	CandidateQuery.each([&OutIds](flecs::entity Entity, const FEntityDefinitionRef& /*Ref*/)
 	{
-		CandidateIds.Add(Entity.id());
+		OutIds.Add(Entity.id());
 	});
+
+	// Sort by entity id ascending for determinism (Jolt body add-order). The reverse
+	// map built from this list MUST agree with what Walk() produces — sorting both
+	// sides identically is the contract.
+	OutIds.Sort();
+}
+
+void FFlecsSaveEntityWalker::PreWalkCollectIds(flecs::world& World, TArray<flecs::entity_t>& OutSortedIds)
+{
+	// Pure pre-walk: identical filter rules as Walk(), no encoder dispatch.
+	// SkippedMissingDefRefCount is NOT updated here — Walk()'s audit query is
+	// authoritative (deferred to the main walk to avoid duplicate Error spam).
+	CollectCandidateIdsSorted(World, OutSortedIds);
+}
+
+void FFlecsSaveEntityWalker::Walk(
+	flecs::world& World,
+	FFlecsSaveAssetPathTable& PathTable,
+	TArray<FEntityRecord>& OutRecords)
+{
+	OutRecords.Reset();
+	SkippedMissingDefRefCount = 0;
+	EnsureTagNameTable(World);
+
+	// ─────────────────────────────────────────────────────────────────────────
+	// PASS A: collect candidate entity ids (no encoding yet — keep iteration
+	// pure so we can sort for determinism before touching any components).
+	// ─────────────────────────────────────────────────────────────────────────
+	TArray<flecs::entity_t> CandidateIds;
+	CollectCandidateIdsSorted(World, CandidateIds);
 
 	// ─── Audit (v2 §M3): catch save-worthy entities missing FEntityDefinitionRef.
 	// Any entity with a physics body that's not in the excluded set MUST carry the ref.
@@ -123,9 +144,6 @@ void FFlecsSaveEntityWalker::Walk(
 			SkippedMissingDefRefCount);
 #endif
 	}
-
-	// ─── Sort by entity id ascending for determinism (Jolt body add-order). ──
-	CandidateIds.Sort();
 
 	// ─────────────────────────────────────────────────────────────────────────
 	// PASS B: encode each entity in stable order. SaveIndex == position.

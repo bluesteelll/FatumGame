@@ -107,9 +107,47 @@ void FFlecsSaveSnapshotWriter::WalkAndSerialize(flecs::world* World)
 	EntityRecords.Reset();
 	EntityCountWritten = 0;
 
-	// ── PASS 1: walk entities (no archive yet — path table populates during this). ──
+	// Set the active path-table TLS pointer for the duration of this save operation
+	// so encoders (e.g. Encode_SmelterInstance) can register ingredient asset paths
+	// via GPathTable->RegisterPath. Cleared on scope exit — every TLS-using API
+	// (RegisterPath / ResolveDefinition) checkNoEntry if accessed outside this window.
+	FFlecsSaveAssetPathTable* PrevPathTable = FlecsSaveRemap::GPathTable;
+	FlecsSaveRemap::GPathTable = &PathTable;
+	ON_SCOPE_EXIT { FlecsSaveRemap::GPathTable = PrevPathTable; };
+
+	// ── PASS 0: pre-walk to collect candidate entity ids (sorted entity_t ascending)
+	// and build the reverse map BEFORE encoders run. Encoders called during Walk()
+	// may reference cross-entity ids via FlecsSaveRemap::EntityToSaveIndex; without
+	// GReverseMap pre-populated, every such call would hit checkNoEntry().
+	//
+	// PreWalkCollectIds is read-only (no encoder dispatch, no path-table registration).
+	// SaveIndex == position in the sorted id array — Walker.Walk() uses identical sort
+	// rules and asserts the count agrees post-encode.
+	{
+		TArray<flecs::entity_t> SortedIds;
+		Walker.PreWalkCollectIds(*World, SortedIds);
+		ReverseMapStorage.Reset();
+		ReverseMapStorage.Reserve(SortedIds.Num());
+		for (int32 i = 0; i < SortedIds.Num(); ++i)
+		{
+			ReverseMapStorage.Add(SortedIds[i], static_cast<uint32>(i));
+		}
+	}
+	const TMap<flecs::entity_t, uint32>* PrevReverseMap = FlecsSaveRemap::GReverseMap;
+	FlecsSaveRemap::GReverseMap = &ReverseMapStorage;
+	ON_SCOPE_EXIT { FlecsSaveRemap::GReverseMap = PrevReverseMap; };
+
+	// ── PASS 1: walk entities (path table populates during this; encoders may now
+	//            call EntityToSaveIndex since GReverseMap is set above). ──
 	Walker.Walk(*World, PathTable, EntityRecords);
 	EntityCountWritten = static_cast<uint32>(EntityRecords.Num());
+
+	// Sanity-check: the walker's SaveIndex assignments must match the pre-walk's.
+	// If they diverge the world mutated between passes (snapshot fence violated).
+	checkf(EntityCountWritten == static_cast<uint32>(ReverseMapStorage.Num()),
+		TEXT("SnapshotWriter: pre-walk produced %d ids but main walk produced %u — "
+		     "world mutated between passes (snapshot guard violated)"),
+		ReverseMapStorage.Num(), EntityCountWritten);
 
 	// ── PASS 2: serialize into the byte buffer. ────────────────────────────────────
 	FMemoryWriter Writer(SerializedBytes, /*bIsPersistent=*/ true);
@@ -127,20 +165,6 @@ void FFlecsSaveSnapshotWriter::WalkAndSerialize(flecs::world* World)
 	// Asset path table — MUST come before entity records so the reader can resolve
 	// PathTableIndex during entity creation in Pass 0.
 	PathTable.Serialize(Writer);
-
-	// Build reverse map (entity_t → SaveIndex) and set thread_local pointer so any
-	// encoder that references cross-entity ids can resolve via FlecsSaveRemap::
-	// EntityToSaveIndex. Sites that don't reference other entities are unaffected.
-	// Without this, Phase 3+ encoders calling EntityToSaveIndex would hit checkNoEntry().
-	TMap<flecs::entity_t, uint32> ReverseMap;
-	ReverseMap.Reserve(EntityRecords.Num());
-	for (const FEntityRecord& Record : EntityRecords)
-	{
-		ReverseMap.Add(Record.OriginalId, Record.SaveIndex);
-	}
-	const TMap<flecs::entity_t, uint32>* PrevReverseMap = FlecsSaveRemap::GReverseMap;
-	FlecsSaveRemap::GReverseMap = &ReverseMap;
-	ON_SCOPE_EXIT { FlecsSaveRemap::GReverseMap = PrevReverseMap; };
 
 	// Entity records (sorted by entity id ascending in Walker).
 	for (const FEntityRecord& Record : EntityRecords)

@@ -84,6 +84,19 @@ public:
 	 */
 	void Walk(flecs::world& World, FFlecsSaveAssetPathTable& PathTable, TArray<FEntityRecord>& OutRecords);
 
+	/** Sim-thread pre-walk: enumerate candidate entity ids (sorted ascending) WITHOUT
+	 *  encoding. Used by the snapshot writer to populate FlecsSaveRemap::GReverseMap
+	 *  BEFORE the main Walk dispatches encoders that may reference cross-entity ids.
+	 *
+	 *  Filter rules match Walk() exactly, but no encoder dispatch / no path-table
+	 *  registration happens. OutSortedIds[i] is the entity assigned SaveIndex==i.
+	 *
+	 *  Idempotent: callable multiple times, deterministic output given an unmodified
+	 *  world. Snapshot fence guarantees the world is stable between this call and
+	 *  the subsequent Walk(); a sanity-check in WalkAndSerialize asserts the count
+	 *  matches. */
+	void PreWalkCollectIds(flecs::world& World, TArray<flecs::entity_t>& OutSortedIds);
+
 	/** Diagnostic: how many entities were skipped due to missing FEntityDefinitionRef.
 	 *  Editor builds checkf if this is non-zero AND the offending entities lack the
 	 *  exclusion tags above (programming error to forget the ref). */

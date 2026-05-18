@@ -71,3 +71,25 @@ private:
 	TArray<TSoftObjectPtr<UFlecsEntityDefinition>> SoftPointers;
 	TArray<TObjectPtr<UFlecsEntityDefinition>> ResolvedCache;
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Thread-local active-table pointer for encoders (Phase 4+).
+//
+// Mirrors the FlecsSaveRemap::GRemapTable / GReverseMap pattern: encoders that
+// need asset-path resolution (e.g. FSmelterInstance::ConsumedLedger entries
+// reference UFlecsEntityDefinition* which can't go through the entity remap)
+// read/write paths through this active table.
+//
+// Writer sets this BEFORE calling Walker.Walk (so Encode_* can call
+// GPathTable->RegisterPath); Reader sets this BEFORE the Pass-1 component-decode
+// loop (so Decode_* can call GPathTable->ResolveDefinition). Both clear it via
+// ON_SCOPE_EXIT to satisfy the contract that GPathTable is only non-null inside
+// an active save/load operation on the sim thread.
+//
+// inline thread_local (C++17) — every TU shares the same per-thread instance,
+// and avoids the MSVC C2492 (thread_local + dllexport) restriction. Same
+// rationale as FlecsSaveRemap::GRemapTable.
+namespace FlecsSaveRemap
+{
+	inline thread_local FFlecsSaveAssetPathTable* GPathTable = nullptr;
+}
