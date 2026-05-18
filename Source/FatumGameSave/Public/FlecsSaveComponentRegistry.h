@@ -65,12 +65,29 @@ public:
 	/** O(1) TypeId lookup. Returns nullptr for unknown ids (forward-compat skipping). */
 	const FlecsSave::FComponentDesc* FindByTypeId(uint16 TypeId) const;
 
+	/** O(1) name lookup. Used by the walker to dispatch on Flecs `entity.each(flecs::id)`
+	 *  where the only available handle is the component's debug name string. Returns
+	 *  nullptr for non-save-aware components (skip silently). */
+	const FlecsSave::FComponentDesc* FindByDebugName(FName DebugName) const;
+
+	/** Iterate every registered descriptor. Used by diagnostics and any future
+	 *  registry-walk tooling. Order is unspecified. */
+	template <typename Func>
+	void ForEachDesc(Func&& Fn) const
+	{
+		for (const auto& Pair : DescsByTypeId)
+		{
+			Fn(Pair.Value);
+		}
+	}
+
 	/** Total number of registered descriptors (components + tags). */
 	int32 Num() const { return DescsByTypeId.Num(); }
 
 private:
 	FFlecsSaveComponentRegistry() = default;
 	TMap<uint16, FlecsSave::FComponentDesc> DescsByTypeId;
+	TMap<FName, uint16> DescsByName;
 };
 
 // ═══════════════════════════════════════════════════════════════

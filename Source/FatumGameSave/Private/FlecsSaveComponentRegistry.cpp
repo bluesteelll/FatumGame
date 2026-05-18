@@ -38,9 +38,19 @@ void FFlecsSaveComponentRegistry::Register(const FlecsSave::FComponentDesc& Desc
 	}
 
 	DescsByTypeId.Add(Desc.TypeId, Desc);
+	DescsByName.Add(FName(Desc.DebugName), Desc.TypeId);
 }
 
 const FlecsSave::FComponentDesc* FFlecsSaveComponentRegistry::FindByTypeId(uint16 TypeId) const
 {
 	return DescsByTypeId.Find(TypeId);
+}
+
+const FlecsSave::FComponentDesc* FFlecsSaveComponentRegistry::FindByDebugName(FName DebugName) const
+{
+	if (const uint16* TypeId = DescsByName.Find(DebugName))
+	{
+		return DescsByTypeId.Find(*TypeId);
+	}
+	return nullptr;
 }

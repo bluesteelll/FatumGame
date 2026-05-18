@@ -311,7 +311,7 @@ public:
 	 * @param EntityDefinition The entity definition.
 	 * @return Flecs prefab entity with static components, or invalid if null.
 	 */
-	flecs::entity GetOrCreateEntityPrefab(class UFlecsEntityDefinition* EntityDefinition);
+	FATUMGAME_API flecs::entity GetOrCreateEntityPrefab(class UFlecsEntityDefinition* EntityDefinition);
 
 	/**
 	 * Get or create a prefab for an item type (specialized for items).

@@ -133,12 +133,16 @@ ESaveResult UFlecsSaveSubsystem::RequestSave(int32 SlotIndex, const FString& Dis
 	const uint64 SnapSeq = Worker->EnqueueSeqCommand(
 		[Writer, Worker]() mutable
 		{
-			// Phase 1: World pointer is accepted but not read by the stub.
+			// Phase 2: writer requires a valid world. If we somehow reached the fence
+			// without the FlecsSubsystem being set, fail loudly — silent zero-entity
+			// snapshots would erase the player's progress.
 			flecs::world* WorldPtr = nullptr;
 			if (Worker && Worker->FlecsSubsystem)
 			{
 				WorldPtr = Worker->FlecsSubsystem->GetFlecsWorld();
 			}
+			checkf(WorldPtr,
+				TEXT("Save: sim-thread lambda has no Flecs world — FlecsSubsystem missing or torn down"));
 			Writer->WalkAndSerialize(WorldPtr);
 		});
 
@@ -375,6 +379,13 @@ void UFlecsSaveSubsystem::DeferredLoadTick(int32 SlotIndex)
 			if (Worker && Worker->FlecsSubsystem)
 			{
 				WorldPtr = Worker->FlecsSubsystem->GetFlecsWorld();
+			}
+			if (!WorldPtr)
+			{
+				UE_LOG(LogFlecsSave, Error,
+					TEXT("Load: sim-thread lambda has no Flecs world — FlecsSubsystem missing or torn down"));
+				DecodeAccepted->store(false, std::memory_order_release);
+				return;
 			}
 			const bool bOk = Reader->ApplyToFlecsWorld(WorldPtr);
 			DecodeAccepted->store(bOk, std::memory_order_release);

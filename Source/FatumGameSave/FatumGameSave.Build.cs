@@ -11,17 +11,25 @@ public class FatumGameSave : ModuleRules
 	{
 		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 
+		// Phase 2 — encoder folder must be reachable from public headers via "Encoders/...".
+		PublicIncludePaths.AddRange(new string[]
+		{
+			"FatumGameSave/Public",
+			"FatumGameSave/Public/Encoders",
+		});
+
 		PublicDependencyModuleNames.AddRange(new string[]
 		{
 			"Core",
 			"CoreUObject",
 			"Engine",
 
-			// Game module — for FSimulationWorker, UFlecsArtillerySubsystem.
+			// Game module — for FSimulationWorker, UFlecsArtillerySubsystem, all
+			// component headers we encode/decode (Health, Movement, Interaction, etc.)
 			"FatumGame",
 
-			// Physics + ECS — needed by encoders in later phases. Phase 1 doesn't touch ECS
-			// directly but the subsystem talks to FSimulationWorker which depends on these.
+			// Physics + ECS — encoders include FlecsBarrageComponents.h (FBarrageBody,
+			// FTagCollision*) and Flecs entity iteration.
 			"Barrage",
 			"SkeletonKey",
 			"FlecsLibrary",

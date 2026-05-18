@@ -1,15 +1,15 @@
 // FlecsSaveSnapshotWriter — sim-thread walker that produces an uncompressed payload buffer.
 //
-// PHASE 1: stub writer. Emits payload header + zero entities + payload footer (smoke-test
-// the pipeline end-to-end). Real entity walking + per-component encoding land in Phase 2.
-//
-// Lifetime: heap-allocated via TSharedPtr (per v2 §5.11). Captured by sim-thread lambda;
-// destructed on the game thread after WaitForSequence returns.
+// PHASE 2: real walker. Per-operation AssetPathTable owned as member (per v2 §M11).
+// Writes payload as: header → asset-path table → entity records → footer.
 
 #pragma once
 
 #include "CoreMinimal.h"
 #include "Containers/Array.h"
+
+#include "FlecsSaveAssetPathTable.h"
+#include "FlecsSaveEntityWalker.h"
 
 namespace flecs { struct world; }
 
@@ -22,13 +22,14 @@ public:
 
 	/** Sim-thread entry point.
 	 *
-	 *  Walks the world (Phase 2+), serializes all save-worthy entities into SerializedBytes.
+	 *  Walks the world, serializes all save-worthy entities into SerializedBytes.
+	 *  Layout per v1 §"Payload framing":
+	 *    [PayloadHeader 16B]
+	 *    [Asset path table — uint32 count + per-entry { uint32 len, UTF-8 bytes, pad }]
+	 *    [Entity records — header + tags + components per entity]
+	 *    [PayloadFooter 8B]
 	 *
-	 *  PHASE 1: writes only payload header (16B) + footer (8B) with EntityCount=0.
-	 *  No interaction with the Flecs world is performed. The world pointer is accepted to
-	 *  lock in the API surface that Phase 2 will use.
-	 *
-	 *  @param World Flecs world to snapshot (Phase 1: not read).
+	 *  @param World Flecs world to snapshot.
 	 */
 	void WalkAndSerialize(flecs::world* World);
 
@@ -36,13 +37,22 @@ public:
 	 *  Safe to call only AFTER WaitForSequence has confirmed the sim-thread walk completed. */
 	const TArray<uint8>& GetSerializedBytes() const { return SerializedBytes; }
 
-	/** Number of entity records in the payload. PHASE 1: always 0. */
+	/** Number of entity records in the payload. */
 	uint32 GetEntityCount() const { return EntityCountWritten; }
 
 private:
 	/** Backing storage for the serialized payload (pre-compression). */
 	TArray<uint8> SerializedBytes;
 
-	/** Number of entity records written. Phase 1 stub: always 0. */
+	/** Per-operation prefab path table. NOT a singleton (v2 §M11). */
+	FFlecsSaveAssetPathTable PathTable;
+
+	/** Walker — populates EntityRecords during WalkAndSerialize. */
+	FFlecsSaveEntityWalker Walker;
+
+	/** Walker output — held briefly between walk and serialize. */
+	TArray<FEntityRecord> EntityRecords;
+
+	/** Number of entity records written. */
 	uint32 EntityCountWritten = 0;
 };

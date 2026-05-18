@@ -1,8 +1,10 @@
 // FlecsSaveSnapshotReader — applies a decoded payload blob to the live Flecs world.
 //
-// PHASE 1: stub reader. Validates payload header + footer + EntityCount=0. Phase 2 will
-// implement entity reconstruction (create entities via IsA(prefab), decode components,
-// build OldIndex→NewEntity remap, restore Barrage bodies, etc.).
+// PHASE 2: real reader. Two-pass decode:
+//   Pass 0: parse asset table; per record create new entity via IsA(prefab); fill
+//           OldSaveIndex → NewEntity remap table (thread_local).
+//   Pass 1: per record, dispatch tag adds + component decoders (decoders read refs
+//           via FlecsSaveRemap::ResolveSaveIndex which the table set in Pass 0).
 //
 // Lifetime: heap-allocated via TSharedPtr (per v2 §5.11 + C2 fix). Captured by sim-thread
 // lambda via TSharedPtr value-copy. Destructed on whichever thread releases the last ref.
@@ -11,8 +13,15 @@
 
 #include "CoreMinimal.h"
 #include "Containers/Array.h"
+#include "Containers/Map.h"
 
-namespace flecs { struct world; }
+#include "FlecsSaveAssetPathTable.h"
+
+namespace flecs
+{
+	using entity_t = uint64;
+	struct world;
+}
 
 /** Per-load snapshot reader. One instance per load request. */
 class FATUMGAMESAVE_API FFlecsSaveSnapshotReader
@@ -26,21 +35,31 @@ public:
 
 	/** Sim-thread entry point — apply the payload to the world.
 	 *
-	 *  PHASE 1: parses and validates the payload header + footer only. EntityCount MUST
-	 *  be 0 (anything else triggers an ensure in Phase 1 because we have no decoders yet).
-	 *
-	 *  @param World Flecs world to populate (Phase 1: not mutated).
-	 *  @return true on success, false on malformed payload.
+	 *  @param World Flecs world to populate.
+	 *  @return true on success (header valid, all entities decoded — individual entity
+	 *          skips for missing prefab assets are logged but don't fail the whole load).
 	 */
 	bool ApplyToFlecsWorld(flecs::world* World);
 
-	/** Total entities in the payload. PHASE 1 always 0. */
+	/** Total entities in the payload (set after ApplyToFlecsWorld parses the header). */
 	uint32 GetEntityCount() const { return EntityCountInPayload; }
+
+	/** Diagnostic: how many entities were skipped due to missing prefab asset on load. */
+	int32 GetSkippedMissingPrefabCount() const { return SkippedMissingPrefabCount; }
 
 private:
 	/** Defensive copy of the payload bytes. */
 	TArray<uint8> PayloadBytes;
 
-	/** Parsed from the payload header on ApplyToFlecsWorld. 0 in Phase 1. */
+	/** Per-operation prefab path table (deserialized from payload). */
+	FFlecsSaveAssetPathTable PathTable;
+
+	/** Pass-0 remap table — populated as entities are created, consumed by Pass-1 decoders. */
+	TMap<uint32, flecs::entity_t> RemapTable;
+
+	/** Parsed from the payload header. */
 	uint32 EntityCountInPayload = 0;
+
+	/** Diagnostic counter for entities skipped due to missing prefab asset. */
+	int32 SkippedMissingPrefabCount = 0;
 };
