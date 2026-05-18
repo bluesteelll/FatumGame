@@ -61,13 +61,6 @@ uint32 FSimulationWorker::Run()
 			FlecsSubsystem->DrainCommandQueue();
 		}
 
-		// Drain the seq-fenced command queue and publish CompletedCommandSeq.
-		// Per v2 §M7, the save fence's quiescent point is "after StepWorld, before
-		// progress()" — but fenced commands themselves are general-purpose, so we
-		// drain them at the same point we drain the legacy command queue (top of tick)
-		// so they share the same "before physics/ECS step" guarantee.
-		DrainSeqCommandQueueOnSimThread();
-
 		if (!bRunning.load(std::memory_order_acquire)) break;
 
 		// Compute acceleration-smoothed locomotion for characters.
@@ -92,6 +85,18 @@ uint32 FSimulationWorker::Run()
 
 			BarrageDispatch->BroadcastContactEvents();
 		}
+
+		if (!bRunning.load(std::memory_order_acquire)) break;
+
+		// Drain the seq-fenced command queue at the v2 §M7 quiescent point:
+		// physics has been stepped (StackUp + StepWorld + BroadcastContactEvents) so
+		// Barrage body positions reflect the new state, but Flecs has NOT yet ticked
+		// (ProgressWorld is below) so no observers / systems are running and no deferred
+		// ops are queued. Any save snapshot walker enqueued here samples a coherent
+		// pre-ECS-tick state — physics-resolved bodies paired with last-tick ECS data.
+		DrainSeqCommandQueueOnSimThread();
+
+		if (!bRunning.load(std::memory_order_acquire)) break;
 
 		if (FlecsSubsystem)
 		{
@@ -153,6 +158,14 @@ void FSimulationWorker::DrainSeqCommandQueueOnSimThread()
 	FSeqCommand Entry;
 	while (SeqCommandQueue.Dequeue(Entry))
 	{
+		// Stop check inside the drain loop: if Stop() was signalled mid-drain, abort
+		// rather than execute lambdas against a teardown-state subsystem. Remaining
+		// entries stay in the MPSC queue and are discarded when the worker tears down.
+		if (!bRunning.load(std::memory_order_acquire))
+		{
+			break;
+		}
+
 		// Execute the queued work. The lambda may capture sim-thread-only state
 		// (Worker* / Subsystem*) — that's the caller's responsibility.
 		if (Entry.Cmd)

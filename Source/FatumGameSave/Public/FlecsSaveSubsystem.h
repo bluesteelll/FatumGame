@@ -152,7 +152,7 @@ private:
 	std::atomic<bool> bSaveBusy { false };
 	std::atomic<bool> bLoadBusy { false };
 
-	/** Pending decoded reader between RequestLoad and DeferredLoadTick. */
+	/** Pending decoded reader between RequestLoad and DeferredLoadTick. Game thread only. */
 	TSharedPtr<FFlecsSaveSnapshotReader, ESPMode::ThreadSafe> PendingReader;
 
 	/** Ticker handle for the deferred-load tick. */

@@ -44,8 +44,9 @@ public:
 	//   const uint64 Seq = Worker->EnqueueSeqCommand([](){ /* sim-thread work */ });
 	//   if (!Worker->WaitForSequence(Seq, 2.0)) { /* timeout */ }
 	//
-	// Backward compat: UFlecsArtillerySubsystem::EnqueueCommand keeps its signature for
-	// non-fenced uses; internally it calls EnqueueSeqCommand and discards the returned seq.
+	// Legacy `UFlecsArtillerySubsystem::EnqueueCommand` continues to drain via its own
+	// `CommandQueue`. Seq queue is independent; the two do not share ordering. Use seq
+	// queue when you need a fence.
 
 	/** Allocate the next sequence number. Monotonic; wraparound at 2^64 is irrelevant. */
 	uint64 AllocateCommandSeq();
@@ -59,9 +60,14 @@ public:
 	bool WaitForSequence(uint64 TargetSeq, double TimeoutSeconds = 2.0);
 
 	/** Sim-thread accessor: drain the seq command queue and update CompletedCommandSeq.
-	 *  Called from the sim worker's run loop BEFORE PrepareCharacterStep (alongside the
-	 *  legacy CommandQueue drain). Public so the loop body can call it directly. */
+	 *  Drains AFTER BroadcastContactEvents and BEFORE ApplyLateSyncBuffers/progress() per
+	 *  v2 §M7 (quiescent: physics applied, Flecs not yet ticked, no deferred ops queued).
+	 *  Public so the loop body can call it directly. */
 	void DrainSeqCommandQueueOnSimThread();
+
+	/** Lock-free read of the sim-thread running flag. Used by drain loops on the sim
+	 *  thread to break out cleanly mid-drain when Stop() has been signalled. */
+	bool IsRunning() const { return bRunning.load(std::memory_order_acquire); }
 
 private:
 	std::atomic<bool> bRunning{false};

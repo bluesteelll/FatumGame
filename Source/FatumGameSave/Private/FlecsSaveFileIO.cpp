@@ -180,10 +180,6 @@ namespace FlecsSaveIO
 			return ESaveResult::IOFailed;
 		}
 
-		// Rotate the chain BEFORE writing the new .sav so the previous main file is
-		// preserved as .bak1, etc. Per v2 §M9 the order is: rotate → write tmp → flush → rename.
-		RotateBackupChain(SlotName);
-
 		const FString FinalPath = GetSlotFilePath(SlotName, 0);
 		const FString TempPath  = FinalPath + TEXT(".tmp");
 
@@ -202,13 +198,12 @@ namespace FlecsSaveIO
 		Header.GameBuildHash    = GetGameBuildHash();
 		Header.CrcOfPayload     = ComputeCrc32(Compressed);
 		Header.UncompressedSize = UncompressedSize;
-		Header.Reserved1        = 0;   // explicit per m2 even though {} value-init already did it
-		Header.Reserved2        = 0;
 
-		// Use IFileHandle directly so we can call Flush(/*bFullFlush=*/true) — FArchive's
-		// Flush() does NOT fsync (v2 §M9). Without this the disk write may sit in the OS
-		// page cache, and a power loss between the Move and the cache flush corrupts the
-		// rotated backup chain.
+		// Order is: write .tmp → fsync → rotate chain → rename .tmp → .sav.
+		// Previous version rotated FIRST, which destroyed the prior main .sav before the
+		// new bytes were proven good. If write/fsync failed after rotation, user lost
+		// their last good save with nothing to fall back to. Now: any failure before the
+		// final rename leaves the previous .sav untouched.
 		IFileHandle* Handle = PF.OpenWrite(*TempPath, /*bAppend=*/ false, /*bAllowRead=*/ false);
 		if (Handle == nullptr)
 		{
@@ -232,10 +227,17 @@ namespace FlecsSaveIO
 		}
 
 		// REAL fsync — pushes the kernel's page cache to disk. Slow on HDDs (~10ms),
-		// negligible on NVMe.
+		// negligible on NVMe. Must complete BEFORE rotation; otherwise a power loss
+		// between rotate and fsync would corrupt the rotated backup chain with a
+		// not-yet-on-disk new file.
 		Handle->Flush(/*bFullFlush=*/ true);
 		delete Handle;
 		Handle = nullptr;
+
+		// New bytes are durably on disk. Now rotate the backup chain — prior main .sav
+		// becomes .bak1, .bak1 becomes .bak2, etc. This is best-effort; failure to rotate
+		// is a warning, not a fatal — the new save still proceeds via the rename below.
+		RotateBackupChain(SlotName);
 
 		// Atomic rename. On Windows IFileManager::Move uses MoveFileEx with REPLACE_EXISTING
 		// which is atomic for files on the same volume — exactly what we want for the

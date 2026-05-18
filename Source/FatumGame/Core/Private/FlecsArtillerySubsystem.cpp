@@ -35,6 +35,13 @@ void UFlecsArtillerySubsystem::DrainCommandQueue()
 	TFunction<void()> Command;
 	while (CommandQueue.Dequeue(Command))
 	{
+		// Stop check inside the drain loop: if Stop() was signalled mid-drain, abort
+		// rather than execute lambdas against a teardown-state subsystem. Remaining
+		// entries stay in the MPSC queue and are discarded when the worker tears down.
+		if (!SimWorker.IsRunning())
+		{
+			break;
+		}
 		Command();
 	}
 }
