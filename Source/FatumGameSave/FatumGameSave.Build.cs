@@ -39,6 +39,13 @@ public class FatumGameSave : ModuleRules
 
 			// Gameplay tags — referenced from saved component payloads (FDamageType etc.) in later phases.
 			"GameplayTags",
+
+			// Phase 6 — UMG for USaveSlotListWidget (BlueprintCallable data layer for UI panels).
+			"UMG",
+			"SlateCore",
+
+			// Phase 6 — InputCore for EKeys::F5/F9 + FInputChord (UFlecsSaveInputBindings).
+			"InputCore",
 		});
 
 		PrivateDependencyModuleNames.AddRange(new string[]

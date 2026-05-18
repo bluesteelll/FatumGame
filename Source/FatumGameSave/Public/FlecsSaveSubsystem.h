@@ -92,6 +92,12 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Save")
 	ELoadResult RequestQuickload();
 
+	/** Delete a slot's files from disk (main .sav + all rolling backups .bak1..bak3).
+	 *  Refuses while a save/load is in progress to avoid racing the I/O code. Returns
+	 *  true if anything was deleted; false if the slot was already empty / refused. */
+	UFUNCTION(BlueprintCallable, Category = "Save")
+	bool DeleteSlot(int32 SlotIndex);
+
 	/** True if a save is currently in flight (snapshot walking / compressing / writing). */
 	UFUNCTION(BlueprintPure, Category = "Save")
 	bool IsSaveInProgress() const { return bSaveBusy.load(); }

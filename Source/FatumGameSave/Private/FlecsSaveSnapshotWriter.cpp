@@ -10,18 +10,14 @@
 #include "Misc/ScopeExit.h"
 #include "Serialization/MemoryWriter.h"
 
+#include "Encoders/FlecsSaveEncoderHelpers.h"   // SaveValue template — moved out of anonymous ns to fix unity-build collision
+
 #include "flecs.h"
+
+using FlecsSaveEnc::SaveValue;
 
 namespace
 {
-	// Helper: serialize a const value through the archive without `const_cast` UB.
-	template <typename T>
-	FORCEINLINE void SaveValue(FArchive& Ar, T Value)
-	{
-		T Tmp = Value;
-		Ar << Tmp;
-	}
-
 	/** Per-entity header layout per v1 §2 line 138-180. EntityRecordSize is back-patched
 	 *  after the record body is written so callers can skip-forward over unknown entities. */
 	void WriteEntityRecord(

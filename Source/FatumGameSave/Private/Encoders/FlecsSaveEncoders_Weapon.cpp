@@ -23,18 +23,11 @@
 #include "Serialization/MemoryReader.h"
 #include "Serialization/MemoryWriter.h"
 
+#include "Encoders/FlecsSaveEncoderHelpers.h"   // SaveValue template — moved out of anonymous ns to fix unity-build collision
+
 #include "flecs.h"
 
-// ─── Internal helper: write-side const-safe shim (per v2 §M2). ────────────────
-namespace
-{
-	template <typename T>
-	FORCEINLINE void SaveValue(FArchive& Ar, T Value)
-	{
-		T Tmp = Value;
-		Ar << Tmp;
-	}
-}
+using FlecsSaveEnc::SaveValue;
 
 // ═══════════════════════════════════════════════════════════════
 // FWeaponInstance  (TypeId 0x0300, Version 1)

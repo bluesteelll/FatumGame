@@ -29,6 +29,7 @@
 #include "Engine/GameInstance.h"
 #include "Engine/Level.h"
 #include "Engine/World.h"
+#include "HAL/FileManager.h"               // IFileManager (Phase 6 — DeleteSlot)
 #include "UObject/WeakObjectPtr.h"
 
 #include "flecs.h"
@@ -439,6 +440,64 @@ ELoadResult UFlecsSaveSubsystem::RequestLoad(int32 SlotIndex)
 ELoadResult UFlecsSaveSubsystem::RequestQuickload()
 {
 	return RequestLoad(kQuicksaveSlot);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// SLOT MAINTENANCE — DeleteSlot (Phase 6)
+// ═══════════════════════════════════════════════════════════════
+//
+// Removes the main .sav and every backup generation for a slot. Refuses while a
+// save or load is in flight: deleting the file the I/O code path is reading or
+// the rotation chain it is writing into would be unrecoverable. Game-thread only;
+// IFileManager calls are synchronous and small (~4 file ops).
+
+bool UFlecsSaveSubsystem::DeleteSlot(int32 SlotIndex)
+{
+	check(IsInGameThread());
+
+	if (SlotIndex < 0 || SlotIndex >= kTotalSlots)
+	{
+		UE_LOG(LogFlecsSave, Error,
+			TEXT("DeleteSlot: slot %d out of range [0, %d)"),
+			SlotIndex, kTotalSlots);
+		return false;
+	}
+
+	if (bSaveBusy.load() || bLoadBusy.load())
+	{
+		UE_LOG(LogFlecsSave, Warning,
+			TEXT("DeleteSlot: refused — save=%d load=%d in progress"),
+			(int32)bSaveBusy.load(), (int32)bLoadBusy.load());
+		return false;
+	}
+
+	const FString SlotName = GetSlotNameForIndex(SlotIndex);
+	IFileManager& FM = IFileManager::Get();
+
+	int32 DeletedCount = 0;
+	// Gen 0 = main .sav, Gen 1..kBackupChainDepth = .bak1..bak3 (FlecsSaveIO::kBackupChainDepth).
+	for (int32 Gen = 0; Gen <= FlecsSaveIO::kBackupChainDepth; ++Gen)
+	{
+		const FString Path = FlecsSaveIO::GetSlotFilePath(SlotName, Gen);
+		if (!FM.FileExists(*Path))
+		{
+			continue;
+		}
+		if (FM.Delete(*Path, /*RequireExists=*/ false, /*EvenIfReadOnly=*/ false, /*Quiet=*/ true))
+		{
+			++DeletedCount;
+		}
+		else
+		{
+			UE_LOG(LogFlecsSave, Warning,
+				TEXT("DeleteSlot: failed to delete '%s'"), *Path);
+		}
+	}
+
+	UE_LOG(LogFlecsSave, Log,
+		TEXT("DeleteSlot: slot %d ('%s') deleted %d file(s)"),
+		SlotIndex, *SlotName, DeletedCount);
+	return DeletedCount > 0;
 }
 
 void UFlecsSaveSubsystem::DeferredLoadTick(int32 SlotIndex)

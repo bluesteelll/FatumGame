@@ -16,18 +16,14 @@
 #include "Serialization/MemoryReader.h"
 #include "Serialization/MemoryWriter.h"
 
+#include "Encoders/FlecsSaveEncoderHelpers.h"   // SaveValue template — moved out of anonymous ns to fix unity-build collision
+
 #include "flecs.h"
 
-// ─── Internal helper: write-side const-safe shim (per v2 §M2). ────────────────
+using FlecsSaveEnc::SaveValue;
+
 namespace
 {
-	template <typename T>
-	FORCEINLINE void SaveValue(FArchive& Ar, T Value)
-	{
-		T Tmp = Value;
-		Ar << Tmp;
-	}
-
 	// Fixed array lengths from the component definitions — pinned by sizeof asserts in
 	// the headers. If a contributor changes ChildSlots[N] / PortOccupants[N] capacity
 	// they must bump the encoder version.

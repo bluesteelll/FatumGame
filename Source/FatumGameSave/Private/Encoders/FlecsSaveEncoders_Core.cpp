@@ -18,21 +18,13 @@
 #include "Serialization/MemoryReader.h"
 #include "Serialization/MemoryWriter.h"
 
+#include "Encoders/FlecsSaveEncoderHelpers.h"   // SaveValue template — moved out of anonymous ns to fix unity-build collision
+
 #include "flecs.h"
 
-// ─── Internal helper: write-side const-safe shim (per v2 §M2). ────────────────
-// FArchive::operator<< takes non-const refs because UObject reflection paths may
-// need to mutate during serialize. For POD writes the assignment is one-way;
-// using `const_cast<T&>(constexpr X)` is UB. This helper takes a local copy.
-namespace
-{
-	template <typename T>
-	FORCEINLINE void SaveValue(FArchive& Ar, T Value)
-	{
-		T Tmp = Value;
-		Ar << Tmp;
-	}
-}
+// Pull SaveValue<T> into the file scope so the per-encoder bodies below stay terse —
+// see FlecsSaveEncoderHelpers.h for why the template lives in a named namespace.
+using FlecsSaveEnc::SaveValue;
 
 // ═══════════════════════════════════════════════════════════════
 // FFocusCameraOverride  (TypeId 0x0101, Version 1)
