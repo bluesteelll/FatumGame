@@ -44,7 +44,7 @@ public:
 	 *  passed, but it still consumes the WorldName bytes from the payload to advance
 	 *  the reader cursor to the path table.
 	 */
-	bool ApplyToFlecsWorld(flecs::world* World);
+	bool ApplyToFlecsWorld(flecs::world* World, class UFlecsArtillerySubsystem* Artillery);
 
 	/** Phase 7 — game-thread peek of the payload header + WorldName WITHOUT applying
 	 *  anything to the world. Used by the save subsystem to enforce same-level-only

@@ -699,7 +699,7 @@ void UFlecsSaveSubsystem::DeferredLoadTick(int32 SlotIndex)
 			WipeOrphanBarrageBodies(Artillery, W);
 
 			// ── Phase B: DECODE (creates entities, populates components, restores bodies) ──
-			const bool bOk = Reader->ApplyToFlecsWorld(WorldPtr);
+			const bool bOk = Reader->ApplyToFlecsWorld(WorldPtr, Artillery);
 			if (!bOk)
 			{
 				DecodeAccepted->store(false, std::memory_order_release);

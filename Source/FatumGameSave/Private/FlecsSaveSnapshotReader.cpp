@@ -276,9 +276,10 @@ bool FFlecsSaveSnapshotReader::CollectSavedSpawnerProvenance(TSet<TPair<FName, F
 	return true;
 }
 
-bool FFlecsSaveSnapshotReader::ApplyToFlecsWorld(flecs::world* World)
+bool FFlecsSaveSnapshotReader::ApplyToFlecsWorld(flecs::world* World, UFlecsArtillerySubsystem* InArtillery)
 {
 	checkf(World, TEXT("FFlecsSaveSnapshotReader::ApplyToFlecsWorld: null world"));
+	checkf(InArtillery, TEXT("FFlecsSaveSnapshotReader::ApplyToFlecsWorld: null artillery — required for prefab resolution"));
 
 	constexpr int32 kMinPayloadBytes = sizeof(FFlecsSavePayloadHeader) + sizeof(FFlecsSavePayloadFooter);
 	if (PayloadBytes.Num() < kMinPayloadBytes)
@@ -343,13 +344,11 @@ bool FFlecsSaveSnapshotReader::ApplyToFlecsWorld(flecs::world* World)
 	TArray<FRecordOffset> RecordOffsets;
 	RecordOffsets.Reserve(static_cast<int32>(EntityCountInPayload));
 
-	UFlecsArtillerySubsystem* Artillery = UFlecsArtillerySubsystem::SelfPtr;
-	if (!Artillery)
-	{
-		UE_LOG(LogFlecsSave, Error,
-			TEXT("SnapshotReader: UFlecsArtillerySubsystem::SelfPtr is null — cannot resolve prefabs"));
-		return false;
-	}
+	// Use the artillery passed by the caller (game-thread route). SelfPtr was unreliable
+	// in headless `-game -unattended` launches because OnWorldBeginPlay sometimes fires
+	// for the throwaway Untitled_0 world (which sets+nulls SelfPtr) before the real
+	// gameplay world's artillery comes up.
+	UFlecsArtillerySubsystem* Artillery = InArtillery;
 
 	for (uint32 i = 0; i < EntityCountInPayload; ++i)
 	{
