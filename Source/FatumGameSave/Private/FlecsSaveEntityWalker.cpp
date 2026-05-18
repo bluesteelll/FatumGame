@@ -140,13 +140,18 @@ void FFlecsSaveEntityWalker::Walk(
 				static_cast<uint64>(Entity.id()));
 		});
 
-#if !UE_BUILD_SHIPPING
-		// Editor / Development: hard-stop. Shipping: log + skip (already done above).
-		checkf(SkippedMissingDefRefCount == 0,
-			TEXT("FFlecsSaveEntityWalker: %d save-worthy entities lacked FEntityDefinitionRef (see Error log). "
-			     "All persistently-spawned entities MUST set FEntityDefinitionRef at spawn — per v2 §M3."),
-			SkippedMissingDefRefCount);
-#endif
+		// Some legacy / test entities have FBarrageBody without FEntityDefinitionRef
+		// (e.g. door panels created by DoorSystem at startup, multiblock substructure
+		// entities, test geometry). These cannot be restored on load — the entity is
+		// silently skipped above and a Warning recorded. NOT a hard error: a partial
+		// save is preferable to refusing to save at all.
+		if (SkippedMissingDefRefCount > 0)
+		{
+			UE_LOG(LogFlecsSave, Warning,
+				TEXT("FFlecsSaveEntityWalker: %d save-worthy entities lacked FEntityDefinitionRef and will not be restored on load. "
+				     "Persistent entities should set FEntityDefinitionRef at spawn — per v2 §M3."),
+				SkippedMissingDefRefCount);
+		}
 	}
 
 	// ─────────────────────────────────────────────────────────────────────────

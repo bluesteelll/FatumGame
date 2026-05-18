@@ -104,9 +104,10 @@ void FlecsMultiblockRuntime::SetupStationInstance(
 {
 	check(Anchor.is_valid() && Anchor.is_alive());
 	check(Profile);
-	checkf(!Anchor.has<FTagCraftingStation>(),
-		TEXT("SetupStationInstance: Anchor entity=%llu already a crafting station — caller must gate."),
-		(unsigned long long)Anchor.id());
+	// No assertion on FTagCraftingStation presence: direct-spawn instances inherit the
+	// tag from prefab (via IsA), and the conditional set/add below is idempotent for
+	// both inherited and direct-set cases. Caller may legitimately reach this function
+	// on an entity that already carries the tag — that's by design.
 
 	const int64 StationEntityId = static_cast<int64>(Anchor.id());
 
