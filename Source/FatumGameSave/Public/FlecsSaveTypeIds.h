@@ -60,9 +60,102 @@ namespace FlecsSaveTypeIds
 	inline constexpr uint16 kTypeId_StealthInstance        = 0x0108;
 
 	// ═══════════════════════════════════════════════════════════════
+	// 0x02xx — ITEM / CONTAINER / MAGAZINE (Phase 3)
+	// ═══════════════════════════════════════════════════════════════
+
+	/** FItemInstance — stack count. */
+	inline constexpr uint16 kTypeId_ItemInstance           = 0x0200;
+
+	/** FItemUniqueData — unique item state (durability, enchantments, custom stats). */
+	inline constexpr uint16 kTypeId_ItemUniqueData         = 0x0201;
+
+	/** FItemTags — gameplay tag container for slot/inventory filtering. */
+	inline constexpr uint16 kTypeId_ItemTags               = 0x0202;
+
+	/** FContainerInstance — weight / count / OwnerEntityId (REMAP). */
+	inline constexpr uint16 kTypeId_ContainerInstance      = 0x0203;
+
+	/** FContainerGridInstance — occupancy bitmask for 2D grid containers. */
+	inline constexpr uint16 kTypeId_ContainerGridInstance  = 0x0204;
+
+	/** FContainerSlotsInstance — TMap<SlotId, ItemEntityId> (each value REMAP). */
+	inline constexpr uint16 kTypeId_ContainerSlotsInstance = 0x0205;
+
+	/** FWorldItemInstance — despawn / pickup-grace timers + DroppedByEntityId (REMAP). */
+	inline constexpr uint16 kTypeId_WorldItemInstance      = 0x0206;
+
+	/** FContainedIn — ContainerEntityId (REMAP) + grid/slot position. */
+	inline constexpr uint16 kTypeId_ContainedIn            = 0x0207;
+
+	/** FMagazineInstance — variable-length LIFO ammo stack. */
+	inline constexpr uint16 kTypeId_MagazineInstance       = 0x0208;
+
+	/** FAmmoTypeRef — ammo type index on loose-ammo items. */
+	inline constexpr uint16 kTypeId_AmmoTypeRef            = 0x0209;
+
+	// ═══════════════════════════════════════════════════════════════
+	// 0x03xx — WEAPON / PROJECTILE / PENETRATION (Phase 3 covers WEAPON)
+	// ═══════════════════════════════════════════════════════════════
+
+	/** FWeaponInstance — magazine/reload/bloom/cycle/quickload state. CHARGE STATE ZEROED on load (v2 §5.5). */
+	inline constexpr uint16 kTypeId_WeaponInstance         = 0x0300;
+
+	/** FEquippedBy — CharacterEntityId (REMAP) + SlotId. */
+	inline constexpr uint16 kTypeId_EquippedBy             = 0x0301;
+
+	/** FWeaponSlotState — active slot, equip phase, WeaponSlotContainerId (REMAP). */
+	inline constexpr uint16 kTypeId_WeaponSlotState        = 0x0302;
+
+	// ═══════════════════════════════════════════════════════════════
+	// 0x04xx — MELEE (Phase 3)
+	// ═══════════════════════════════════════════════════════════════
+
+	/** FMeleeWeaponInstance — phase / charge / hits / sweep / block. ALL CHARGE+SWING STATE ZEROED, BladeBuffer=nullptr (v2 §5.5+§5.6). */
+	inline constexpr uint16 kTypeId_MeleeWeaponInstance    = 0x0400;
+
+	/** FMeleeAttackDirectionBuffer — integrated mouse delta. Reset on load. */
+	inline constexpr uint16 kTypeId_MeleeAttackDirectionBuffer = 0x0401;
+
+	/** FBladeSocketSync — blade socket snapshot. FrameStamp reset to 0 on load. */
+	inline constexpr uint16 kTypeId_BladeSocketSync        = 0x0402;
+
+	// ═══════════════════════════════════════════════════════════════
 	// 0x10xx — CORE TAGS
 	// ═══════════════════════════════════════════════════════════════
 
 	/** FTagInteractable — entity can be E-pressed by player. */
 	inline constexpr uint16 kTypeId_TagInteractable        = 0x1000;
+
+	// ═══════════════════════════════════════════════════════════════
+	// 0x12xx — ITEM TAGS (Phase 3)
+	// ═══════════════════════════════════════════════════════════════
+
+	/** FTagItem — entity is a world item. */
+	inline constexpr uint16 kTypeId_TagItem                = 0x1200;
+
+	/** FTagPickupable — entity can be picked up by players. */
+	inline constexpr uint16 kTypeId_TagPickupable          = 0x1201;
+
+	/** FTagContainer — entity is a container. */
+	inline constexpr uint16 kTypeId_TagContainer           = 0x1202;
+
+	/** FTagMagazine — entity is a magazine. */
+	inline constexpr uint16 kTypeId_TagMagazine            = 0x1203;
+
+	/** FTagQuickLoadDevice — entity is a stripper clip / speedloader. */
+	inline constexpr uint16 kTypeId_TagQuickLoadDevice     = 0x1204;
+
+	// ═══════════════════════════════════════════════════════════════
+	// 0x13xx — WEAPON TAGS (Phase 3)
+	// ═══════════════════════════════════════════════════════════════
+
+	/** FTagWeapon — entity is a weapon. */
+	inline constexpr uint16 kTypeId_TagWeapon              = 0x1300;
+
+	// ═══════════════════════════════════════════════════════════════
+	// 0x14xx — MELEE TAGS (Phase 3)
+	// ═══════════════════════════════════════════════════════════════
+
+	/** FTagMeleeWeapon — entity is a melee weapon. */
+	inline constexpr uint16 kTypeId_TagMeleeWeapon         = 0x1400;
 }
