@@ -5,7 +5,9 @@
 #include "FlecsSaveComponentRegistry.h"
 #include "FlecsSaveFileFormat.h"
 #include "FlecsSaveLog.h"
+#include "FlecsSaveRemap.h"
 
+#include "Misc/ScopeExit.h"
 #include "Serialization/MemoryWriter.h"
 
 #include "flecs.h"
@@ -125,6 +127,20 @@ void FFlecsSaveSnapshotWriter::WalkAndSerialize(flecs::world* World)
 	// Asset path table — MUST come before entity records so the reader can resolve
 	// PathTableIndex during entity creation in Pass 0.
 	PathTable.Serialize(Writer);
+
+	// Build reverse map (entity_t → SaveIndex) and set thread_local pointer so any
+	// encoder that references cross-entity ids can resolve via FlecsSaveRemap::
+	// EntityToSaveIndex. Sites that don't reference other entities are unaffected.
+	// Without this, Phase 3+ encoders calling EntityToSaveIndex would hit checkNoEntry().
+	TMap<flecs::entity_t, uint32> ReverseMap;
+	ReverseMap.Reserve(EntityRecords.Num());
+	for (const FEntityRecord& Record : EntityRecords)
+	{
+		ReverseMap.Add(Record.OriginalId, Record.SaveIndex);
+	}
+	const TMap<flecs::entity_t, uint32>* PrevReverseMap = FlecsSaveRemap::GReverseMap;
+	FlecsSaveRemap::GReverseMap = &ReverseMap;
+	ON_SCOPE_EXIT { FlecsSaveRemap::GReverseMap = PrevReverseMap; };
 
 	// Entity records (sorted by entity id ascending in Walker).
 	for (const FEntityRecord& Record : EntityRecords)
