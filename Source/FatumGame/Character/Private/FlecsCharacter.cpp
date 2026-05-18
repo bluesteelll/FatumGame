@@ -50,6 +50,7 @@
 #include "FlecsWeaponProfile.h"
 #include "FlecsVitalsComponents.h"
 #include "FlecsVitalsProfile.h"
+#include "FlecsSaveTags.h"  // Phase 5 — FTagPlayerCharacter (identifies the 1P player entity)
 #include "Engine/Canvas.h"
 #include "CanvasItem.h"
 #include "Debug/DebugDrawService.h"
@@ -258,7 +259,8 @@ void AFlecsCharacter::InitECSRegistration()
 
 		flecs::entity Entity = FlecsWorld->entity()
 			.is_a(Prefab)
-			.add<FTagCharacter>();
+			.add<FTagCharacter>()
+			.add<FTagPlayerCharacter>();   // Phase 5 save: marks the unique 1P player entity for actor re-bind.
 
 		FlecsSubsystem->BindEntityToBarrage(Entity, Key);
 
@@ -378,6 +380,27 @@ void AFlecsCharacter::UnregisterFromECS()
 			Entity.destruct();
 		}
 	});
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SAVE / LOAD REBIND (Phase 5 stub)
+// ═══════════════════════════════════════════════════════════════════════════
+
+bool AFlecsCharacter::BindToRestoredEntity(uint64 SavedEntityId)
+{
+	check(IsInGameThread());
+
+	// Phase 5 ships the entry point + registration of FTagPlayerCharacter so the loader
+	// can locate the saved player entity. The actual bridge re-registration + BladeBuffer
+	// realloc + game-thread cache rewiring is the responsibility of Phase 6/7 (per v3 §C
+	// the full path needs to go through EnqueueSeqCommand + WaitForSequence with proper
+	// error handling). For Phase 5 the load path simply logs a warning when this would
+	// fire — entity decode + Barrage body restore are the focus of this phase.
+	UE_LOG(LogTemp, Warning,
+		TEXT("AFlecsCharacter::BindToRestoredEntity: stub (entity %llu) — full rebind wired in Phase 6/7"),
+		SavedEntityId);
+
+	return false;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

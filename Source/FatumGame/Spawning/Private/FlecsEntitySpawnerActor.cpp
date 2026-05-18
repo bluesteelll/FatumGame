@@ -3,8 +3,14 @@
 #include "FlecsEntitySpawner.h"
 #include "FlecsEntityDefinition.h"
 #include "FlecsRenderProfile.h"
+#include "FlecsSpawnerComponents.h"     // FSpawnerProvenance (Phase 5)
+#include "FlecsArtillerySubsystem.h"    // EnqueueCommand + GetEntityForBarrageKey
+#include "FlecsBarrageComponents.h"     // FBarrageBody for sanity
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
+#include "Engine/Level.h"
+#include "Engine/World.h"
+#include "flecs.h"
 
 AFlecsEntitySpawner::AFlecsEntitySpawner()
 {
@@ -31,6 +37,21 @@ void AFlecsEntitySpawner::BeginPlay()
 	if (PreviewMeshComponent)
 	{
 		PreviewMeshComponent->SetVisibility(false);
+	}
+
+	// Phase 5 save-system dedup (v2 §5.3 + v3 §A): UFlecsSaveSubsystem::DeferredLoadTick
+	// scans the loaded snapshot for FSpawnerProvenance tuples and marks matching spawners
+	// with bSavedEntityOverridesMe BEFORE their BeginPlay runs. When set, skip the spawn
+	// and self-destroy if configured to — the loaded entity is the sole authority.
+	if (bSavedEntityOverridesMe)
+	{
+		UE_LOG(LogTemp, Verbose, TEXT("AFlecsEntitySpawner [%s]: saved entity overrides — skipping BeginPlay spawn"),
+			*GetName());
+		if (bDestroyAfterSpawn)
+		{
+			Destroy();
+		}
+		return;
 	}
 
 	// Spawn entity if configured to do so
@@ -100,6 +121,46 @@ FSkeletonKey AFlecsEntitySpawner::SpawnEntity()
 	{
 		UE_LOG(LogTemp, Log, TEXT("AFlecsEntitySpawner [%s]: Spawned entity Key=%llu at %s"),
 			*GetName(), static_cast<uint64>(SpawnedEntityKey), *GetActorLocation().ToString());
+
+		// Phase 5 — stamp FSpawnerProvenance on the new entity so the save walker can
+		// later identify which spawner produced it. SpawnEntity enqueues entity creation
+		// onto the sim thread; we enqueue this stamp command immediately AFTER, which
+		// guarantees FIFO order (MPSC queue drains in submission order on the sim thread).
+		//
+		// Per v3 §D — never capture flecs::world& by reference into a sim-thread lambda;
+		// the outer stack frame is gone by lambda execution. Resolve the world via the
+		// captured FlecsSubsystem at lambda execution time.
+		UWorld* World = GetWorld();
+		UFlecsArtillerySubsystem* FlecsSubsystem = World ? World->GetSubsystem<UFlecsArtillerySubsystem>() : nullptr;
+		if (FlecsSubsystem)
+		{
+			// Capture level path with PIE prefix stripped so save-in-PIE / load-in-PIE
+			// with a different instance id still match (per v2 §5.3).
+			const FString RawLevelPath = GetLevel() ? GetLevel()->GetPathName() : FString();
+			const FString LevelPath = UWorld::RemovePIEPrefix(RawLevelPath);
+			const FName LevelPathName(*LevelPath);
+			const FName ActorName = GetFName();
+			const FSkeletonKey CapturedKey = SpawnedEntityKey;
+
+			FlecsSubsystem->EnqueueCommand([FlecsSubsystem, CapturedKey, LevelPathName, ActorName]()
+			{
+				flecs::entity E = FlecsSubsystem->GetEntityForBarrageKey(CapturedKey);
+				if (!E.is_valid() || !E.is_alive())
+				{
+					// SpawnEntity may have failed for non-physics paths; that's fine —
+					// non-world entities (containers, etc.) are out of scope for the spawner
+					// dedup pass since they have no level placement.
+					UE_LOG(LogTemp, Verbose,
+						TEXT("AFlecsEntitySpawner provenance: entity for Key=%llu not alive — skipping provenance stamp"),
+						static_cast<uint64>(CapturedKey));
+					return;
+				}
+				FSpawnerProvenance P;
+				P.SpawnerLevelPath = LevelPathName;
+				P.SpawnerActorName = ActorName;
+				E.set<FSpawnerProvenance>(P);
+			});
+		}
 	}
 	else
 	{

@@ -18,6 +18,8 @@
 #include "Containers/Array.h"
 #include "Containers/Map.h"
 
+#include "FlecsSaveBarrageRestore.h"  // FBarrageBodyState (per-record Phase 5 block)
+
 class UFlecsEntityDefinition;
 class FFlecsSaveAssetPathTable;
 
@@ -49,9 +51,16 @@ struct FATUMGAMESAVE_API FEntityRecord
 	 *  the per-entity header. */
 	uint32 PathTableIndex = 0xFFFFFFFFu;
 
-	// ─── Phase 5 placeholders ─────────────────────────────────────────────
-	// bHasBarrageBody / SpawnerGuid / FBarrageBodyState are wired in Phase 5.
-	// In Phase 2 the writer always emits Flags=0 for these bits.
+	// ─── Phase 5: Barrage body block (bit 0 of Flags) ─────────────────────
+	// Set during Walk for entities that carry FBarrageBody and whose primitive is
+	// alive at snapshot time. SpawnerGuid (bit 1) was dropped in v2 §C9 in favor of
+	// FSpawnerProvenance — that's a regular component now, not a header block.
+
+	/** True if this entity carried a live FBarrageBody at snapshot time. */
+	bool bHasBarrageBody = false;
+
+	/** 88-byte body snapshot. Only valid when bHasBarrageBody == true. */
+	FBarrageBodyState BarrageBody;
 
 	/** Registered tag TypeIds present on this entity, in registration order. */
 	TArray<uint16> TagIds;

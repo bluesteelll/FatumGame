@@ -1,7 +1,8 @@
-// UFlecsSaveSubsystem — central save/load orchestration. Phase 1: pipeline plumbing
-// + smoke-test path. Real entity walking lands in Phase 2.
+// UFlecsSaveSubsystem — central save/load orchestration. Phase 5: real wipe +
+// Barrage body restore + spawner dedup + BladeBuffer realloc.
 
 #include "FlecsSaveSubsystem.h"
+#include "FlecsSaveBarrageRestore.h"
 #include "FlecsSaveFileFormat.h"
 #include "FlecsSaveFileIO.h"
 #include "FlecsSaveLog.h"
@@ -10,11 +11,27 @@
 
 #include "FSimulationWorker.h"
 #include "FlecsArtillerySubsystem.h"
+#include "FlecsBarrageComponents.h"        // FBarrageBody for orphan sweep
+#include "FlecsGameTags.h"                  // FTagProjectile / FTagItem / FTagContainer / etc.
+#include "FlecsMeleeComponents.h"           // FTagMeleeAttacking / FTagMeleeCharging / FMeleeWeaponInstance
+#include "FlecsWeaponComponents.h"          // FTagChargingWeapon
+#include "FlecsCraftingComponents.h"        // FTagCraftingStation
+#include "FlecsDoorComponents.h"            // FTagDoor (declared but actually in FlecsGameTags.h — both kept for safety)
+#include "FlecsSpawnerComponents.h"         // FSpawnerProvenance
+#include "FlecsSaveTags.h"                  // FTagPlayerCharacter
+
+#include "FlecsEntitySpawnerActor.h"        // AFlecsEntitySpawner + bSavedEntityOverridesMe
+
+#include "Library/FlecsMeleeEquipHelpers.h" // AllocateBladeBufferForMeleeEntity (post-decode pass)
 
 #include "Async/Async.h"
+#include "EngineUtils.h"                   // TActorIterator
 #include "Engine/GameInstance.h"
+#include "Engine/Level.h"
 #include "Engine/World.h"
 #include "UObject/WeakObjectPtr.h"
+
+#include "flecs.h"
 
 // ═══════════════════════════════════════════════════════════════
 // SLOT NAMING (v2 §m3 — Slot_NN, zero-padded, capital S)
@@ -87,6 +104,108 @@ FSimulationWorker* UFlecsSaveSubsystem::GetWorker() const
 	UFlecsArtillerySubsystem* Artillery = GetArtillery();
 	return Artillery ? &Artillery->GetSimWorker() : nullptr;
 }
+
+// ═══════════════════════════════════════════════════════════════
+// PHASE 5 — PREFAB-PROTECTING WIPE (v3 §A)
+// ═══════════════════════════════════════════════════════════════
+//
+// WipeEntitiesByTag — collects non-prefab entities matching a tag id (uses
+// .with(flecs::Prefab).oper(flecs::Not) per v3 §A so prefabs survive), unbinds
+// FBarrageBody primitives via DEBRIS layer + tombstone, then destructs each entity.
+//
+// Order of invocations matters: combat state -> pair entities -> gameplay. The
+// 13-tag invocation list (per v3 §A.3) sits inside DeferredLoadTick.
+//
+// Sim-thread only.
+
+namespace
+{
+	void WipeEntitiesByTag(
+		UFlecsArtillerySubsystem* Artillery,
+		flecs::world& World,
+		flecs::entity_t TagId,
+		const TCHAR* TagDebugName)
+	{
+		check(Artillery);
+
+		TArray<flecs::entity_t> ToDelete;
+		ToDelete.Reserve(256);
+
+		World.query_builder<>()
+			.with(TagId)
+			.with(flecs::Prefab).oper(flecs::Not)
+			.build()
+			.each([&ToDelete](flecs::entity E)
+			{
+				ToDelete.Add(E.id());
+			});
+
+		int32 DestructedCount = 0;
+		for (flecs::entity_t Id : ToDelete)
+		{
+			flecs::entity E(World, Id);
+			if (!E.is_alive()) continue;
+			if (E.has(flecs::Prefab))
+			{
+				ensureMsgf(false,
+					TEXT("WipeEntitiesByTag(%s): prefab id %llu slipped through filter"),
+					TagDebugName, static_cast<uint64>(Id));
+				continue;
+			}
+			if (const FBarrageBody* Body = E.try_get<FBarrageBody>())
+			{
+				FlecsSaveBarrage::UnbindAndTombstoneBarrageBody(Artillery, *Body);
+			}
+			E.destruct();
+			++DestructedCount;
+		}
+
+		UE_LOG(LogFlecsSave, Verbose,
+			TEXT("WipeEntitiesByTag(%s): destructed %d entities"),
+			TagDebugName, DestructedCount);
+	}
+
+	void WipeOrphanBarrageBodies(
+		UFlecsArtillerySubsystem* Artillery,
+		flecs::world& World)
+	{
+		check(Artillery);
+
+		TArray<flecs::entity_t> Orphans;
+		World.query_builder<>()
+			.with<FBarrageBody>()
+			.with(flecs::Prefab).oper(flecs::Not)
+			.build()
+			.each([&Orphans](flecs::entity E)
+			{
+				Orphans.Add(E.id());
+			});
+
+		int32 DestructedCount = 0;
+		for (flecs::entity_t Id : Orphans)
+		{
+			flecs::entity E(World, Id);
+			if (!E.is_alive() || E.has(flecs::Prefab)) continue;
+			if (const FBarrageBody* Body = E.try_get<FBarrageBody>())
+			{
+				FlecsSaveBarrage::UnbindAndTombstoneBarrageBody(Artillery, *Body);
+			}
+			E.destruct();
+			++DestructedCount;
+		}
+
+		if (DestructedCount > 0)
+		{
+			UE_LOG(LogFlecsSave, Warning,
+				TEXT("WipeOrphanBarrageBodies: %d entities with FBarrageBody escaped tag-based wipe"),
+				DestructedCount);
+		}
+	}
+}
+
+// Number of tag-driven wipe invocations. If you add a new tag, bump this count AND
+// add the call in DoFullWipe. Mirrors v3 §A.4 defense.
+constexpr int32 kSaveWipeTagDomainCount = 13;
 
 // ═══════════════════════════════════════════════════════════════
 // SAVE PATH
@@ -356,24 +475,27 @@ void UFlecsSaveSubsystem::DeferredLoadTick(int32 SlotIndex)
 		return;
 	}
 
-	// ── PHASE 1 STUB WIPE ──────────────────────────────────────────────────
-	// Real wipe lives in Phase 5 (per v3 §A — WipeEntitiesByTag with prefab protection).
-	// Phase 1 doesn't actually wipe anything — we just log that we would.
-	UE_LOG(LogFlecsSave, Log, TEXT("DeferredLoadTick (Phase 1 stub): would wipe live entities here"));
+	// ─── STEP 1 — Pre-wipe spawner mark pass (game thread) ─────────────────────
+	// Walk the loaded snapshot for FSpawnerProvenance tuples and mark matching
+	// AFlecsEntitySpawner actors with bSavedEntityOverridesMe. This MUST happen BEFORE
+	// the wipe (in case the actors are about to fire their BeginPlay) AND before the
+	// decode (so freshly-loaded entities are the sole authority). Per v3 §A.3 second half.
+	MarkOverriddenSpawners(*Reader);
 
-	// ── PHASE 1 STUB DECODE ────────────────────────────────────────────────
-	// Reader is captured by value (TSharedPtr) — kept alive across the sim-thread sync.
-	// Per v3 D.1: capture Worker by value, never capture flecs::world& by reference.
+	// ─── STEP 2 — Sim-thread wipe + decode + post-decode rebind ─────────────────
+	// Three logical phases inside a single sim-thread lambda. Per v3 §D the lambda
+	// captures `Worker` by value and resolves the Flecs world via Worker->GetFlecsWorld()
+	// at execution time — never captures the world reference directly (outer stack frame
+	// is gone by lambda execution).
 	//
-	// Result flag is heap-shared (TSharedPtr<std::atomic<bool>>) so the lambda can
-	// publish the decode outcome without depending on this stack frame's lifetime.
-	// The acquire/release ordering on CompletedCommandSeq ensures the atomic write is
-	// visible to the game thread after WaitForSequence returns true.
+	// Decode result is published through a heap-shared std::atomic so the game thread
+	// can read it after WaitForSequence returns. Acquire/release ordering on
+	// CompletedCommandSeq ensures visibility.
 	TSharedPtr<std::atomic<bool>, ESPMode::ThreadSafe> DecodeAccepted =
 		MakeShared<std::atomic<bool>, ESPMode::ThreadSafe>(false);
 
 	const uint64 DecodeSeq = Worker->EnqueueSeqCommand(
-		[Reader, Worker, DecodeAccepted]() mutable
+		[Reader, Worker, DecodeAccepted, Artillery]() mutable
 		{
 			flecs::world* WorldPtr = nullptr;
 			if (Worker && Worker->FlecsSubsystem)
@@ -387,8 +509,62 @@ void UFlecsSaveSubsystem::DeferredLoadTick(int32 SlotIndex)
 				DecodeAccepted->store(false, std::memory_order_release);
 				return;
 			}
+
+			// ── Phase A: WIPE (v3 §A.3 13 invocations + orphan sweep) ───────
+			// Order matters: kill aggressors before victims to avoid spurious contact
+			// events during destruction. Prefabs are protected by the helper's
+			// .with(flecs::Prefab).oper(flecs::Not) filter.
+			flecs::world& W = *WorldPtr;
+			WipeEntitiesByTag(Artillery, W, W.component<FTagProjectile>(),         TEXT("FTagProjectile"));
+			WipeEntitiesByTag(Artillery, W, W.component<FTagDebrisFragment>(),     TEXT("FTagDebrisFragment"));
+			WipeEntitiesByTag(Artillery, W, W.component<FTagMeleeAttacking>(),     TEXT("FTagMeleeAttacking"));
+			WipeEntitiesByTag(Artillery, W, W.component<FTagMeleeCharging>(),      TEXT("FTagMeleeCharging"));
+			WipeEntitiesByTag(Artillery, W, W.component<FTagChargingWeapon>(),     TEXT("FTagChargingWeapon"));
+			WipeEntitiesByTag(Artillery, W, W.component<FCollisionPair>(),         TEXT("FCollisionPair"));
+			WipeEntitiesByTag(Artillery, W, W.component<FTagItem>(),               TEXT("FTagItem"));
+			WipeEntitiesByTag(Artillery, W, W.component<FTagContainer>(),          TEXT("FTagContainer"));
+			WipeEntitiesByTag(Artillery, W, W.component<FTagDoor>(),               TEXT("FTagDoor"));
+			WipeEntitiesByTag(Artillery, W, W.component<FTagInteractable>(),       TEXT("FTagInteractable"));
+			WipeEntitiesByTag(Artillery, W, W.component<FTagCraftingStation>(),    TEXT("FTagCraftingStation"));
+			WipeEntitiesByTag(Artillery, W, W.component<FTagDestructible>(),       TEXT("FTagDestructible"));
+			WipeEntitiesByTag(Artillery, W, W.component<FTagCharacter>(),          TEXT("FTagCharacter"));
+
+			// Defensive orphan sweep — any non-prefab entity that still carries
+			// FBarrageBody but escaped the tag-based wipe (logged as Warning).
+			WipeOrphanBarrageBodies(Artillery, W);
+
+			// ── Phase B: DECODE (creates entities, populates components, restores bodies) ──
 			const bool bOk = Reader->ApplyToFlecsWorld(WorldPtr);
-			DecodeAccepted->store(bOk, std::memory_order_release);
+			if (!bOk)
+			{
+				DecodeAccepted->store(false, std::memory_order_release);
+				return;
+			}
+
+			// ── Phase C: Post-decode rebind passes ──────────────────────────
+			// BladeBuffer realloc for every loaded FMeleeWeaponInstance entity.
+			// The encoder skipped the pointer; the decoder zeroed it; the buffer
+			// itself must be re-allocated on the sim thread (raw new/delete).
+			{
+				int32 RebuildCount = 0;
+				W.query_builder<FMeleeWeaponInstance>()
+					.with(flecs::Prefab).oper(flecs::Not)
+					.build()
+					.each([&RebuildCount](flecs::entity E, FMeleeWeaponInstance&)
+					{
+						FlecsMeleeEquip::AllocateBladeBufferForMeleeEntity(E);
+						++RebuildCount;
+					});
+				UE_LOG(LogFlecsSave, Log,
+					TEXT("DeferredLoadTick: re-allocated %d melee blade buffers post-decode"),
+					RebuildCount);
+			}
+
+			// TODO(Phase 6/7): post-load DoorSystem will regenerate ConstraintKey for
+			// every FDoorInstance whose ConstraintKey == 0 on first tick. Reuses the
+			// existing constraint-creation code path in FlecsArtillerySubsystem_DoorSystems.
+
+			DecodeAccepted->store(true, std::memory_order_release);
 		});
 
 	// Wait under fence — propagate timeout to the broadcast.
@@ -404,9 +580,71 @@ void UFlecsSaveSubsystem::DeferredLoadTick(int32 SlotIndex)
 		? ELoadResult::Success
 		: ELoadResult::UnknownError;
 
+	// TODO(Phase 6/7): Step 3 — RebindPlayerActorToLoadedEntity per v3 §C.2 (find unique
+	// FTagPlayerCharacter holder + bridge re-registration via EnqueueSeqCommand). Phase 5
+	// ships the registration hook (AFlecsCharacter::BindToRestoredEntity) as a stub.
+
 	bLoadBusy.store(false);
 	UE_LOG(LogFlecsSave, Log,
 		TEXT("DeferredLoadTick: slot %d ('%s') result=%d"),
 		SlotIndex, *SlotName, (int32)Result);
 	OnLoadComplete.Broadcast(SlotIndex, SlotName, Result);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PHASE 5 — PRE-LOAD SPAWNER MARK PASS (v2 §5.3 + v3 §A.3)
+// ═══════════════════════════════════════════════════════════════
+
+void UFlecsSaveSubsystem::MarkOverriddenSpawners(FFlecsSaveSnapshotReader& Reader)
+{
+	check(IsInGameThread());
+
+	// Collect the (LevelPath, ActorName) tuples for every FSpawnerProvenance saved.
+	TSet<TPair<FName, FName>> Overridden;
+	if (!Reader.CollectSavedSpawnerProvenance(Overridden))
+	{
+		UE_LOG(LogFlecsSave, Warning,
+			TEXT("MarkOverriddenSpawners: failed to collect provenance from snapshot — skipping mark pass"));
+		return;
+	}
+
+	if (Overridden.Num() == 0)
+	{
+		UE_LOG(LogFlecsSave, Verbose,
+			TEXT("MarkOverriddenSpawners: snapshot has no spawner-derived entities — nothing to mark"));
+		return;
+	}
+
+	UGameInstance* GI = GetGameInstance();
+	UWorld* World = GI ? GI->GetWorld() : nullptr;
+	if (!World)
+	{
+		UE_LOG(LogFlecsSave, Warning,
+			TEXT("MarkOverriddenSpawners: no World — skipping mark pass (spawner dedup will misfire)"));
+		return;
+	}
+
+	int32 MarkedCount = 0;
+	for (TActorIterator<AFlecsEntitySpawner> It(World); It; ++It)
+	{
+		AFlecsEntitySpawner* Spawner = *It;
+		if (!Spawner) continue;
+
+		// Strip PIE prefix from the live spawner's level path so saves taken in PIE
+		// match loads in PIE regardless of the UEDPIE_N_ instance id.
+		const FString RawLevelPath = Spawner->GetLevel() ? Spawner->GetLevel()->GetPathName() : FString();
+		const FString LevelPath = UWorld::RemovePIEPrefix(RawLevelPath);
+		const FName LevelPathName(*LevelPath);
+		const FName ActorName = Spawner->GetFName();
+
+		if (Overridden.Contains({LevelPathName, ActorName}))
+		{
+			Spawner->bSavedEntityOverridesMe = true;
+			++MarkedCount;
+		}
+	}
+
+	UE_LOG(LogFlecsSave, Log,
+		TEXT("MarkOverriddenSpawners: marked %d spawners from %d saved provenance tuples"),
+		MarkedCount, Overridden.Num());
 }

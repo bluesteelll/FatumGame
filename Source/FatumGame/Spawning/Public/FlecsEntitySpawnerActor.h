@@ -109,6 +109,14 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flecs Entity|Spawner")
 	bool bSpawnOnBeginPlay = true;
 
+	/** TRANSIENT — set by UFlecsSaveSubsystem::DeferredLoadTick BEFORE this actor's BeginPlay
+	 *  fires, when a saved snapshot already contains an entity with FSpawnerProvenance
+	 *  pointing at this spawner (matched by level path + actor name, PIE prefix stripped).
+	 *  Per v2 §5.3: BeginPlay returns early without spawning so the loaded entity is the
+	 *  sole authority. Not editor-visible — pure runtime flag. */
+	UPROPERTY(Transient)
+	bool bSavedEntityOverridesMe = false;
+
 	// ═══════════════════════════════════════════════════════════════
 	// PREVIEW (editor only)
 	// ═══════════════════════════════════════════════════════════════

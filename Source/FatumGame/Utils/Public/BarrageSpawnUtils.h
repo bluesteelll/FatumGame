@@ -74,7 +74,7 @@ public:
 	 *
 	 * @param KeyType The SFIX nibble type (default: SFIX_BAR_PRIM for physics entities)
 	 */
-	static FSkeletonKey GenerateUniqueKey(uint64 KeyType = 0x4000000000000000ULL);
+	static FATUMGAME_API FSkeletonKey GenerateUniqueKey(uint64 KeyType = 0x4000000000000000ULL);
 
 	/**
 	 * Spawn a physics entity with the given parameters.

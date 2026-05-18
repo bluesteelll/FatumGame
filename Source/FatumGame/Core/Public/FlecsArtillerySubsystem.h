@@ -232,7 +232,7 @@ public:
 	 * @param Entity The Flecs entity to bind.
 	 * @param BarrageKey The SkeletonKey of the Barrage body.
 	 */
-	void BindEntityToBarrage(flecs::entity Entity, FSkeletonKey BarrageKey);
+	FATUMGAME_API void BindEntityToBarrage(flecs::entity Entity, FSkeletonKey BarrageKey);
 
 	/**
 	 * Unbind a Flecs entity from its Barrage physics body.
@@ -246,7 +246,7 @@ public:
 	 * @param BarrageKey The SkeletonKey to look up.
 	 * @return Flecs entity (check is_valid()) or invalid entity if not bound.
 	 */
-	flecs::entity GetEntityForBarrageKey(FSkeletonKey BarrageKey) const;
+	FATUMGAME_API flecs::entity GetEntityForBarrageKey(FSkeletonKey BarrageKey) const;
 
 	/**
 	 * Get BarrageKey for a Flecs entity. O(1) via Flecs sparse set.

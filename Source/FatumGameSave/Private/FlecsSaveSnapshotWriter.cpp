@@ -40,9 +40,13 @@ namespace
 		SaveValue<uint64>(Writer, static_cast<uint64>(Record.OriginalId));
 
 		// Flags + counts + pad + prefab path hash.
-		//   bit0 = bHasBarrageBody (Phase 5; always 0 in Phase 2)
-		//   bit1 = bHasSpawnerGuid (Phase 5; always 0 in Phase 2)
-		const uint8 Flags = 0;
+		//   bit 0 = bHasBarrageBody  (Phase 5 — emits 88-byte body block after tag block)
+		//   bit 1 = bHasSpawnerGuid  (RETIRED v2 §C9 — never set; reserved for future use)
+		uint8 Flags = 0;
+		if (Record.bHasBarrageBody)
+		{
+			Flags |= 0x01;
+		}
 		SaveValue<uint8>(Writer, Flags);
 
 		const int32 NumComponents = Record.Components.Num();
@@ -62,13 +66,22 @@ namespace
 		// reader looks up the asset via FFlecsSaveAssetPathTable::ResolveDefinition.
 		SaveValue<uint32>(Writer, Record.PathTableIndex);
 
-		// (Phase 2: no spawner GUID block, no Barrage body block.)
-
-		// Tag IDs.
+		// Tag IDs (always BEFORE the Barrage body block — reader matches this order).
 		for (uint16 TagId : Record.TagIds)
 		{
 			uint16 Tmp = TagId;
 			Writer << Tmp;
+		}
+
+		// Phase 5 — Barrage body block (88 bytes). Emitted between tag block and
+		// component block when bit 0 of Flags is set. Reader's offset table skips this
+		// block by the same amount when the bit is clear.
+		if (Record.bHasBarrageBody)
+		{
+			static_assert(sizeof(FBarrageBodyState) == 88,
+				"WriteEntityRecord assumes 88-byte FBarrageBodyState");
+			Writer.Serialize(const_cast<FBarrageBodyState*>(&Record.BarrageBody),
+				sizeof(FBarrageBodyState));
 		}
 
 		// Component blocks.

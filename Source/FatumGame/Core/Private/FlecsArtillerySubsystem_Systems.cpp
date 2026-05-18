@@ -54,6 +54,8 @@
 #include "Components/FlecsMultiblockComponents.h"
 #include "Components/FlecsTransportComponents.h"  // Phase 5a — connector + station ports
 #include "Library/FlecsMultiblockRuntime.h"  // Phase 4 — DeconstructStation, RecomputeEffectiveLayout
+#include "FlecsSpawnerComponents.h"  // Phase 5 save — FSpawnerProvenance
+#include "FlecsSaveTags.h"           // Phase 5 save — FTagSpawnedByLevelSpawner, FTagPlayerCharacter
 
 // ═══════════════════════════════════════════════════════════════
 // COMPONENT REGISTRATION
@@ -332,6 +334,18 @@ void UFlecsArtillerySubsystem::RegisterFlecsComponents()
 	World.component<FPendingConnectorPlace>();
 	World.component<FTagConnectorSegment>();
 	World.component<FTagConnectorPlaced>();
+
+	// ─────────────────────────────────────────────────────────
+	// SAVE SYSTEM (Phase 5)
+	// FSpawnerProvenance — set at spawn time by AFlecsEntitySpawner, encoded by the
+	// save walker, consulted on load to skip duplicate spawns from level-placed spawners.
+	// FTagPlayerCharacter — identifies the unique 1P player entity for actor re-bind.
+	// FTagSpawnedByLevelSpawner — transient diagnostic marker (not strictly required
+	// for save round-trip but registered so add<> is safe).
+	// ─────────────────────────────────────────────────────────
+	World.component<FSpawnerProvenance>();
+	World.component<FTagPlayerCharacter>();
+	World.component<FTagSpawnedByLevelSpawner>();
 }
 
 // ═══════════════════════════════════════════════════════════════

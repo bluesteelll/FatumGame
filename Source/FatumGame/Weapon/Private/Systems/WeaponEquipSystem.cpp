@@ -12,6 +12,7 @@
 #include "FlecsMessageSubsystem.h"
 #include "FlecsUIMessages.h"
 #include "FSimStateCache.h"
+#include "Library/FlecsMeleeEquipHelpers.h"  // AllocateBladeBufferForMeleeEntity (Phase 5 extract)
 
 void UFlecsArtillerySubsystem::SetupWeaponEquipSystem()
 {
@@ -226,25 +227,11 @@ void UFlecsArtillerySubsystem::SetupWeaponEquipSystem()
 					// (AFlecsCharacter::Tick). Reader: MeleeSweepSystem. Freed by the
 					// on_remove hook registered in RegisterFlecsComponents (N-C2).
 					//
-					// Use the set<>+get_mut<> pattern (option b in the Phase 3 plan) —
-					// Flecs may memcpy the instance on set<>, so we allocate AFTER the
-					// struct is stored to avoid pointer-ownership confusion.
-					FMeleeWeaponInstance* MWI = NewWeapon.try_get_mut<FMeleeWeaponInstance>();
-					checkf(MWI, TEXT("Melee weapon entity %lld missing FMeleeWeaponInstance at equip"),
-						NewWeaponId);
-
-					// Defensive: free any lingering buffer from a prior equip cycle. Double-
-					// allocation would leak the previous pointer past the on_remove hook.
-					if (MWI->BladeBuffer)
-					{
-						delete MWI->BladeBuffer;
-						MWI->BladeBuffer = nullptr;
-					}
-
-					// TODO(Phase 8): branch for simple-AI weapons — null BladeBuffer +
-					// FBladeSocketSync component on the weapon instead of triple buffer.
-					FMeleeWeaponInstance::FBladeSocketData DefaultSample;
-					MWI->BladeBuffer = new FBladeSocketTripleBuffer(DefaultSample);
+					// Extracted into FlecsMeleeEquip::AllocateBladeBufferForMeleeEntity per
+					// v3 §B so the save system's post-decode rebind pass can re-allocate
+					// buffers for every loaded FMeleeWeaponInstance entity (the encoder
+					// skips the BladeBuffer pointer; the decoder zeros it).
+					FlecsMeleeEquip::AllocateBladeBufferForMeleeEntity(NewWeapon);
 
 					// Ensure character carries the per-character direction-sample buffer.
 					if (!CharEntity.has<FMeleeAttackDirectionBuffer>())

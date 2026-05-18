@@ -145,6 +145,12 @@ private:
 	/** Wrapper that follows the same null-guard chain to reach the sim worker. */
 	FSimulationWorker* GetWorker() const;
 
+	/** Phase 5 — pre-load spawner mark pass. Scans saved entities for FSpawnerProvenance
+	 *  tuples and marks matching AFlecsEntitySpawner actors with bSavedEntityOverridesMe
+	 *  so they skip BeginPlay spawn. Game thread, runs BEFORE the wipe + decode passes.
+	 *  Sim-thread guarded via try_get accessed on the cached snapshot — no Flecs ops here. */
+	void MarkOverriddenSpawners(class FFlecsSaveSnapshotReader& Reader);
+
 	// ═══════════════════════════════════════════════════════════════
 	// STATE (game thread)
 	// ═══════════════════════════════════════════════════════════════

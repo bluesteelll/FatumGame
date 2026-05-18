@@ -3,6 +3,7 @@
 #include "FlecsSaveEntityWalker.h"
 
 #include "FlecsSaveAssetPathTable.h"
+#include "FlecsSaveBarrageRestore.h"    // EncodeBarrageBodyState
 #include "FlecsSaveComponentRegistry.h"
 #include "FlecsSaveLog.h"
 #include "FlecsSaveTypeIds.h"
@@ -14,6 +15,8 @@
 #include "FlecsMeleeComponents.h"       // FTagMeleeAttacking
 #include "FlecsExplosionComponents.h"   // FTagDetonate
 #include "FlecsBarrageComponents.h"     // FBarrageBody, FTagCollision*, FTagCollisionPenetration
+#include "FlecsArtillerySubsystem.h"    // SelfPtr → BarrageDispatch for body state encode
+#include "BarrageDispatch.h"            // UBarrageDispatch typed pointer for the encode call
 
 #include "flecs.h"
 
@@ -55,10 +58,11 @@ static void CollectCandidateIdsSorted(flecs::world& World, TArray<flecs::entity_
 	OutIds.Reset();
 	OutIds.Reserve(1024);
 
+	// Phase 5 (user Q5): projectiles in flight at save time ARE saved — removed the
+	// FTagProjectile exclusion. Combat state mid-air must round-trip.
 	auto CandidateQuery = World.query_builder<const FEntityDefinitionRef>()
 		.with(flecs::Prefab).oper(flecs::Not)
 		.without<FTagDead>()
-		.without<FTagProjectile>()
 		.without<FTagMeleeAttacking>()
 		.without<FTagDetonate>()
 		.without<FTagCollisionDamage>()
@@ -109,12 +113,12 @@ void FFlecsSaveEntityWalker::Walk(
 	// ─── Audit (v2 §M3): catch save-worthy entities missing FEntityDefinitionRef.
 	// Any entity with a physics body that's not in the excluded set MUST carry the ref.
 	{
+		// Phase 5: FTagProjectile no longer excluded from save (user Q5). Mirror that here.
 		auto MissingRefQuery = World.query_builder<>()
 			.with<FBarrageBody>()
 			.without<FEntityDefinitionRef>()
 			.with(flecs::Prefab).oper(flecs::Not)
 			.without<FTagDead>()
-			.without<FTagProjectile>()
 			.without<FTagMeleeAttacking>()
 			.without<FTagDetonate>()
 			.without<FTagCollisionDamage>()
@@ -187,6 +191,21 @@ void FFlecsSaveEntityWalker::EncodeOneEntity(
 		static_cast<uint64>(Entity.id()));
 	Out.Definition = DefRef->Definition;
 	Out.PathTableIndex = PathTable.RegisterPath(DefRef->Definition);
+
+	// Phase 5: Barrage body block — encode pos/rot/linvel/angvel into the per-record
+	// 88-byte block when the entity has a live primitive. The snapshot writer's
+	// WriteEntityRecord checks bHasBarrageBody to decide whether to set Flags bit 0
+	// and emit the block.
+	if (UFlecsArtillerySubsystem* Artillery = UFlecsArtillerySubsystem::SelfPtr)
+	{
+		if (UBarrageDispatch* Barrage = Artillery->GetBarrageDispatch())
+		{
+			if (FlecsSaveBarrage::EncodeBarrageBodyState(Entity, Barrage, Out.BarrageBody))
+			{
+				Out.bHasBarrageBody = true;
+			}
+		}
+	}
 
 	const FFlecsSaveComponentRegistry& Registry = FFlecsSaveComponentRegistry::Get();
 

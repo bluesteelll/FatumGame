@@ -490,6 +490,22 @@ public:
 	TSharedPtr<FBarragePrimitive> GetCachedBarrageBody() const { return CachedBarrageBody; }
 
 	// ═══════════════════════════════════════════════════════════════
+	// SAVE / LOAD REBIND (Phase 5 stub — full path lives in Phase 6/7)
+	// ═══════════════════════════════════════════════════════════════
+	//
+	// Per v3 §C: RegisterCharacterBridge is sim-thread-only. The save subsystem
+	// must route bridge re-registration through EnqueueSeqCommand. This entry
+	// point gives the save subsystem (or future actor migration code) a single,
+	// documented hook that handles game-thread-side cache wiring AND queues the
+	// sim-thread bridge registration. Phase 5 currently logs + returns false; the
+	// full rebind path is wired in a later phase.
+	//
+	// @param SavedEntityId The flecs::entity_t (stored as uint64) of the loaded
+	//        player entity, identified by the unique FTagPlayerCharacter holder.
+	// @return true if the rebind succeeded, false on any failure (logged at Warning).
+	bool BindToRestoredEntity(uint64 SavedEntityId);
+
+	// ═══════════════════════════════════════════════════════════════
 	// EVENTS
 	// ═══════════════════════════════════════════════════════════════
 

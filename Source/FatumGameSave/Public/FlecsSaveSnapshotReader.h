@@ -47,6 +47,13 @@ public:
 	/** Diagnostic: how many entities were skipped due to missing prefab asset on load. */
 	int32 GetSkippedMissingPrefabCount() const { return SkippedMissingPrefabCount; }
 
+	/** Phase 5 spawner-dedup helper. Walks the payload (without applying anything to the
+	 *  Flecs world) and collects every FSpawnerProvenance tuple in the saved entities.
+	 *  Game-thread safe; called BEFORE ApplyToFlecsWorld so the save subsystem can mark
+	 *  matching AFlecsEntitySpawner actors with bSavedEntityOverridesMe pre-BeginPlay.
+	 *  @return true on success (header parsed); false if payload is malformed. */
+	bool CollectSavedSpawnerProvenance(TSet<TPair<FName, FName>>& OutTuples);
+
 private:
 	/** Defensive copy of the payload bytes. */
 	TArray<uint8> PayloadBytes;
